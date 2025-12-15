@@ -2,7 +2,7 @@ from typing import List, Optional, Literal, Dict, Callable
 from pydantic import BaseModel
 
 # from pydantic_graph import GraphNode  # Uncomment when ready to use Pydantic Graph
-from pydantic_ai import AIModel  # Stub for PydanticAI
+from pydantic_ai.agent import Agent  # Stub for PydanticAI
 
 # ---------------------------
 # Core State Models (Graph-Ready)
@@ -86,7 +86,7 @@ class ToolRegistry:
 
 class DeepAgent:
     def __init__(
-        self, name: str, ai_model: AIModel, tools: Optional[ToolRegistry] = None
+        self, name: str, ai_model: Agent, tools: Optional[ToolRegistry] = None
     ):
         self.name = name
         self.ai_model = ai_model
@@ -155,7 +155,7 @@ def dummy_search(query: str) -> dict:
 # ---------------------------
 
 if __name__ == "__main__":
-    ai_model = AIModel(model_name="gpt-5")  # PydanticAI stub
+    ai_model = Agent(model="gpt-5")  # PydanticAI stub
     tools = ToolRegistry()
     tools.register("search", dummy_search)
 
