@@ -171,22 +171,22 @@ class SynthesisStep(Step):
         self.agent = Agent(
             model="gpt-4.1-mini",
             output_type=SynthesisOutput,
-            system_prompt="You are the synthesis step. Produce the final answer based on knowledge and reasoning.",
+            system_prompt="You are a synthesis step in a deep agent. Produce the final answer based on knowledge and reasoning collected.",
         )
 
     async def run(self, state: AgentState) -> StepResult:
         prompt = f"""
-GOAL:
-{state.goal}
+                GOAL:
+                {state.goal}
 
-KNOWN FACTS:
-{state.knowledge}
+                KNOWN FACTS:
+                {state.knowledge}
 
-REASONING TRACE:
-{state.reasoning}
+                REASONING TRACE:
+                {state.reasoning}
 
-Produce a final, concise answer.
-"""
+                Produce a final, concise answer.
+                """
         run_result = await self.agent.run(prompt)
         output: SynthesisOutput = run_result.output
 
@@ -211,23 +211,32 @@ class PlannerStep(Step):
         self.agent = Agent(
             model="gpt-4.1-mini",
             output_type=PlannerOutput,
-            system_prompt="You are a planner. Decide the next step for the agent based on state. If you think you have enough information to answer the goal, choose 'synthesize'. If you have already synthesized or there are no new facts, choose 'stop'.",
+            system_prompt="""
+            You are an expert task planning agent. 
+            You must plan and keep track of TODOs you come up with to perform a task based on state of work and available tools. 
+            
+            If you think you have enough information to answer the given task, choose 'synthesize'. 
+            If you have already synthesized or there are no new facts, choose 'stop'. 
+            If you see repeated steps without progress, choose 'stop'.
+            If you do not have a way to answer the question, choose 'stop'.
+            Produce structured output only.
+            """,
         )
 
     async def run(self, state: AgentState) -> StepResult:
         prompt = f"""
-GOAL:
-{state.goal}
+            GOAL:
+            {state.goal}
 
-KNOWN FACTS:
-{state.knowledge}
+            KNOWN FACTS:
+            {state.knowledge}
 
-REASONING TRACE:
-{state.reasoning}
+            REASONING TRACE:
+            {state.reasoning}
 
-Available steps: {self.available_steps + ['stop']}
+            Available steps: {self.available_steps + ['stop']}
 
-Decide what to do next.
+            Decide what to do next.
 """
         run_result = await self.agent.run(prompt)
         output: PlannerOutput = run_result.output
@@ -244,30 +253,50 @@ Decide what to do next.
 
 
 class DeepAgent:
-    def __init__(self, steps: Dict[str, Step], max_depth: int = 15):
+    def __init__(self, steps: Dict[str, Step], tools, max_depth: int = 15):
         self.steps = steps
+        self.tools = tools  # TODO: integrate tools into steps / agents
         self.max_depth = max_depth
 
     async def run(self, goal: str) -> AgentState:
         state = AgentState(goal=goal)
-        current_step = "planner"
 
+        print(f"\n--- Executing step: Planning ---")
         for _ in range(self.max_depth):
-            print(f"\n--- Executing step: {current_step} ---")
-            step = self.steps[current_step]
+
+            # 1. Planner ALWAYS runs
+            planner = self.steps["planner"]
+            plan = await planner.run(state)
+
+            if plan.reasoning_step:
+                state.reasoning.append(f"[planner] {plan.reasoning_step}")
+
+            next_action = plan.artifacts.get("next_action")
+            print(f"\n--- Next Action: {next_action} ---")
+
+            if next_action in ("stop", None):
+                break
+
+            if next_action not in self.steps:
+                raise ValueError(f"Unknown step: {next_action}")
+
+            # 2. Execute the chosen step
+            step = self.steps[next_action]
             result = await step.run(state)
+            print(result)
 
             state.knowledge.extend(result.new_knowledge)
             if result.reasoning_step:
                 state.reasoning.append(f"[{step.name}] {result.reasoning_step}")
-            state.artifacts.update(result.artifacts)
+
             if result.final_answer:
                 state.final_answer = result.final_answer
                 break
 
-            next_action = state.artifacts.get("next_action")
             if not next_action or next_action == "stop":
+                print("STOPPING")
                 break
+
             if next_action not in self.steps:
                 print(f"Warning: unknown next_action '{next_action}', stopping.")
                 break
@@ -276,12 +305,49 @@ class DeepAgent:
         return state
 
 
+@tool
+def todo_write(tasks: List[str]) -> str:
+    """Tool to write a todo list from given tasks."""
+    formatted_tasks = "\n".join([f"- {task}" for task in tasks])
+    return f"Todo list created:\n{formatted_tasks}"
+
+
+@tool
+def think_tool(reflection: str) -> str:
+    """Tool for strategic reflection on research progress and decision-making.
+
+    Use this tool after each search to analyze results and plan next steps systematically.
+    This creates a deliberate pause in the research workflow for quality decision-making.
+
+    When to use:
+    - After receiving search results: What key information did I find?
+    - Before deciding next steps: Do I have enough to answer comprehensively?
+    - When assessing research gaps: What specific information am I still missing?
+    - Before concluding research: Can I provide a complete answer now?
+
+    Reflection should address:
+    1. Analysis of current findings - What concrete information have I gathered?
+    2. Gap assessment - What crucial information is still missing?
+    3. Quality evaluation - Do I have sufficient evidence/examples for a good answer?
+    4. Strategic decision - Should I continue searching or provide my answer?
+
+    Args:
+        reflection: Your detailed reflection on research progress, findings, gaps, and next steps
+
+    Returns:
+        Confirmation that reflection was recorded for decision-making
+    """
+    return f"Reflection recorded: {reflection}"
+
+
 # ============================================================
 # Example Run
 # ============================================================
 
 
 async def main():
+
+    # TODO: find a way to allow folks to not have to worry about all these other pieces. maybe build it into the DeepAgent constructor?
     steps = {
         "planner": PlannerStep(available_steps=["research", "tool", "synthesize"]),
         "research": ResearchStep(),
@@ -290,7 +356,9 @@ async def main():
     }
 
     agent = DeepAgent(steps=steps, max_depth=15)
-    state = await agent.run("Explain transformers at a high level")
+    state = await agent.run(
+        "Explain the significance of the Higgs boson in particle physics."
+    )
 
     print("\nFINAL STATE")
     print("=" * 40)
