@@ -126,7 +126,6 @@ class ToolStep(Step):
             model="gpt-4.1-mini",
             output_type=ToolOutput,
             system_prompt="You are a tool-using step. Decide if a tool call is useful.",
-            instrument=True,
         )
         for fn in collect_tools(self).values():
             self.agent.tool(fn)
@@ -177,7 +176,6 @@ class SynthesisStep(Step):
             model="gpt-4.1-mini",
             output_type=SynthesisOutput,
             system_prompt="You are a synthesis step in a deep agent. Produce the final answer based on knowledge and reasoning collected.",
-            instrument=True,
         )
 
     async def run(self, state: AgentState) -> StepResult:
@@ -229,7 +227,6 @@ class PlannerStep(Step):
             
             Produce structured output only.
             """,
-            instrument=True,
         )
 
     async def run(self, state: AgentState) -> StepResult:
