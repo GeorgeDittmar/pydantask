@@ -13,6 +13,9 @@ from pydantic_ai import Agent, RunContext
 # Core Agent State
 # ============================================================
 
+# Initialize Pydantic AI instrumentation
+Agent.instrument_all()
+
 
 class AgentState(BaseModel):
     goal: str
@@ -80,6 +83,7 @@ class ResearchStep(Step):
             model="gpt-4.1-mini",
             output_type=ResearchOutput,
             system_prompt="You are a research step in a deep agent. Produce structured output only.",
+            instrument=True,
         )
 
     async def run(self, state: AgentState) -> StepResult:
@@ -122,6 +126,7 @@ class ToolStep(Step):
             model="gpt-4.1-mini",
             output_type=ToolOutput,
             system_prompt="You are a tool-using step. Decide if a tool call is useful.",
+            instrument=True,
         )
         for fn in collect_tools(self).values():
             self.agent.tool(fn)
@@ -172,6 +177,7 @@ class SynthesisStep(Step):
             model="gpt-4.1-mini",
             output_type=SynthesisOutput,
             system_prompt="You are a synthesis step in a deep agent. Produce the final answer based on knowledge and reasoning collected.",
+            instrument=True,
         )
 
     async def run(self, state: AgentState) -> StepResult:
@@ -214,13 +220,16 @@ class PlannerStep(Step):
             system_prompt="""
             You are an expert task planning agent. 
             You must plan and keep track of TODOs you come up with to perform a task based on state of work and available tools. 
+            You are not to provide an answer yet, only plan the next step.
             
             If you think you have enough information to answer the given task, choose 'synthesize'. 
             If you have already synthesized or there are no new facts, choose 'stop'. 
             If you see repeated steps without progress, choose 'stop'.
-            If you do not have a way to answer the question, choose 'stop'.
+            If you do not have a way to solve the given task, choose 'stop'.
+            
             Produce structured output only.
             """,
+            instrument=True,
         )
 
     async def run(self, state: AgentState) -> StepResult:
@@ -253,7 +262,7 @@ class PlannerStep(Step):
 
 
 class DeepAgent:
-    def __init__(self, steps: Dict[str, Step], tools, max_depth: int = 15):
+    def __init__(self, steps: Dict[str, Step], tools=None, max_depth: int = 15):
         self.steps = steps
         self.tools = tools  # TODO: integrate tools into steps / agents
         self.max_depth = max_depth
@@ -283,7 +292,6 @@ class DeepAgent:
             # 2. Execute the chosen step
             step = self.steps[next_action]
             result = await step.run(state)
-            print(result)
 
             state.knowledge.extend(result.new_knowledge)
             if result.reasoning_step:
@@ -369,4 +377,14 @@ if __name__ == "__main__":
     from dotenv import load_dotenv
 
     load_dotenv()
+    from langfuse import get_client
+
+    langfuse = get_client()
+
+    # Verify connection
+    if langfuse.auth_check():
+        print("Langfuse client is authenticated and ready!")
+    else:
+        print("Authentication failed. Please check your credentials and host.")
+
     asyncio.run(main())
