@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from json import load
 from typing import Any, Dict, List, Optional, Callable
 
+from annotated_types import T
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext
 
@@ -21,7 +22,10 @@ class AgentState(BaseModel):
     goal: str
     knowledge: List[str] = Field(default_factory=list)
     reasoning: List[str] = Field(default_factory=list)
-    artifacts: Dict[str, Any] = Field(default_factory=dict)
+    artifacts: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Arbitrary artifacts collected during the agent's execution such as Todo Lists, reasoning steps etc.",
+    )
     final_answer: Optional[str] = None
 
 
@@ -206,9 +210,16 @@ class SynthesisStep(Step):
 # ============================================================
 
 
-class ToDoOutput(BaseModel):
+class ToDo(BaseModel()):
+    task: str
+    status: str = Field(description="e.g., 'not_done', 'in_progress', 'completed")
+
+
+class ToDoList(BaseModel):
     reasoning: str
-    tasks_list: str
+    tasks_list: list[ToDo] = Field(
+        description="A list of todo tasks with their status."
+    )
 
 
 class ToDoStep(Step):
@@ -217,7 +228,7 @@ class ToDoStep(Step):
     def __init__(self):
         self.agent = Agent(
             model="gpt-4.1-mini",
-            output_type=ToDoOutput,
+            output_type=ToDoList,
             system_prompt="You are an expert todo list creator for a deep agent system. Create a concise todo list of steps to solve a goal or task. Use the current knowledge and reasoning to inform your todo list.",
         )
 
@@ -299,7 +310,7 @@ class PlannerStep(Step):
             
             You must choose one of the available steps to take next from the list provided under 'Available steps'.
             
-            You have the following default options:
+            You have the following default step options:
                 
                 - If you think you have enough information to complete the task, choose 'synthesize'. 
                 - If you have already synthesized or there are no new facts, choose 'stop'. 
@@ -331,6 +342,18 @@ class PlannerStep(Step):
                 "todo": output.todo,
             },  # might be overwriting dictionary entries we dont want that
         )
+
+    async def write_todo(self, ctx: RunContext[AgentState], todos: ToDoList]) -> str:
+
+        ctx.state.artifacts["todos"] = todos
+        return "Todo list created."
+
+    async def think_tool(self, ctx: RunContext[AgentState], reflection: str) -> str:
+        ctx.state.artifacts.setdefault("reflections", []).append(reflection)
+        return "Reflection recorded for decision-making."
+
+    async def read_todo(self, ctx: RunContext[AgentState]) -> str:
+        return ctx.state.artifacts.get("todos", "No todo list found.")
 
 
 # ============================================================
