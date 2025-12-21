@@ -100,7 +100,6 @@ Produce:
 """
         run_result = await self.agent.run(prompt)
         output: ResearchOutput = run_result.output
-
         return StepResult(
             new_knowledge=output.facts,
             reasoning_step=output.reasoning,
@@ -219,8 +218,12 @@ class ToDoStep(Step):
         self.agent = Agent(
             model="gpt-4.1-mini",
             output_type=ToDoOutput,
-            system_prompt="You are a ToDo step in a deep agent. Create a concise todo list based on the current knowledge and the task given. Produce structured output only.",
+            system_prompt="You are an expert todo list creator for a deep agent system. Create a concise todo list of steps to solve a goal or task. Use the current knowledge and reasoning to inform your todo list.",
         )
+
+        # regsiter tools this agent can use
+        # self.agent.tool(self.store_todos)
+        # self.agent.tool(self.update_todo)
 
     async def run(self, state: AgentState) -> StepResult:
         prompt = f"""
@@ -231,7 +234,7 @@ class ToDoStep(Step):
                 {state.knowledge}
                 
                 TODO LIST:
-                {state.artifacts.todos if 'todos' in state.artifacts else 'None'}
+                {state.artifacts['todos'] if 'todos' in state.artifacts else '{}'}
 
                 Create a concise todo list of tasks to achieve the goal.
                 """
@@ -240,10 +243,9 @@ class ToDoStep(Step):
 
         return StepResult(
             reasoning_step=output.reasoning,
-            artifacts={"ToDo": output.tasks_list},
+            artifacts={"todo": output.tasks_list},
         )
 
-    @tool
     async def update_todo(
         self, ctx: RunContext[AgentState], todo: str, status: str
     ) -> str:
@@ -254,15 +256,17 @@ class ToDoStep(Step):
                 return "Todo updated successfully."
         return "Todo not found."
 
-    @tool
     async def store_todos(self, ctx: RunContext[AgentState], todos: List[str]) -> str:
         ctx.state.artifacts.setdefault("todos", []).extend(todos)
         return "Todos stored successfully."
 
 
 class PlannerOutput(BaseModel):
-    reasoning: str
-    next_action: str  # must match a step name or "stop"
+    reasoning: str = Field(description="The reasoning behind the chosen next action.")
+    next_action: str = Field(
+        description="The next action to take, must match a step name or 'stop'."
+    )
+    todo: str = Field(description="TODO list to accomplish the goal.", default="")
 
 
 class PlannerStep(Step):
@@ -274,36 +278,48 @@ class PlannerStep(Step):
             model="gpt-4.1-mini",
             output_type=PlannerOutput,
             system_prompt="""
-            You are an expert task planning agent. 
-            You must plan and keep track of ToDos needed to perform a task. 
-            You are not to provide an answer yet, only plan the next step given the current state of todos needing to be done.
+            You are an expert task planner for a deep agent system.
+            You are not to provide an answer yet, only plan the next step given the current state of things needing to be done.
+
+            Your goal is to decide the next best action to take to progress towards the overall goal.
+        
+
+            Create a concise reasoning trace explaining why you chose the next action.
+            Additionally, create or update a TODO list to help keep track of tasks needed to accomplish the goal.
+            Have the TODO list reflect the current state of knowledge and reasoning.
+            Have the TODO list be actionable and specific.
+            Have the TODO list help guide future steps towards completing the goal.
+            Do not use vague or generic tasks in the TODO list.
             
-            If you think you have enough information to answer the given task, choose 'synthesize'. 
-            If you have already synthesized or there are no new facts, choose 'stop'. 
-            If you see repeated steps without progress, choose 'stop'.
-            If you do not have a way to solve the given task, choose 'stop'.
+            The todo list should be in simple text format, with one task per line.
+            Each line should start with a dash (-) followed by the task description and if it is done or not.
+            ex. 
+                - Research the history of the topic - done
+                - Find relevant examples - not done
             
-            Produce structured output only.
+            You must choose one of the available steps to take next from the list provided under 'Available steps'.
+            
+            You have the following default options:
+                
+                - If you think you have enough information to complete the task, choose 'synthesize'. 
+                - If you have already synthesized or there are no new facts, choose 'stop'. 
+                - If you see repeated steps without progress, choose 'stop'.
+                - If you do not have a way to solve the given task, choose 'stop'.
             """,
         )
 
     async def run(self, state: AgentState) -> StepResult:
         prompt = f"""
-            GOAL:
+            AGENT GOAL:
             {state.goal}
             
-            TODOS:
-            {state.artifacts.get('todos', [])}
-
             KNOWN FACTS:
             {state.knowledge}
 
             REASONING TRACE:
             {state.reasoning}
 
-            Available steps: {self.available_steps + ['stop']}
-
-            Decide what to do next.
+            Available steps to take: {self.available_steps + ['stop']}
 """
         run_result = await self.agent.run(prompt)
         output: PlannerOutput = run_result.output
@@ -311,7 +327,8 @@ class PlannerStep(Step):
         return StepResult(
             reasoning_step=output.reasoning,
             artifacts={
-                "next_action": output.next_action
+                "next_action": output.next_action,
+                "todo": output.todo,
             },  # might be overwriting dictionary entries we dont want that
         )
 
@@ -330,23 +347,22 @@ class DeepAgent:
     async def run(self, goal: str) -> AgentState:
         state = AgentState(goal=goal)
 
-        # Create todo list at the start
-        todo_step = ToDoStep()
-        todo_result = await todo_step.run(state)
-        state.reasoning.append(f"[{todo_step.name}] {todo_result.reasoning_step}")
+        # Create todo list at the start for the agent to work from
+        # todo_step = ToDoStep()
+        # todo_result = await todo_step.run(state)
+        # state.reasoning.append(f"[{todo_step.name}] {todo_result.reasoning_step}")
 
-        todo_list = todo_result.artifacts.get("ToDo")
-        print(state)
-        if todo_list:
-            state.artifacts["todos"] = todo_list
-            print(f"\n--- Initial ToDo List ---\n{todo_list}")
+        # todo_list = todo_result.artifacts.get("ToDo")
+        # print(state)
+        # if todo_list:
+        #     state.artifacts["todos"] = todo_list
+        #     print(f"\n--- Initial ToDo List ---\n{todo_list}")
 
         for _ in range(self.max_depth):
-
+            print("\n==============================")
             # 1. Planner ALWAYS runs
             planner = self.steps["planner"]
             plan = await planner.run(state)
-            print(plan)
 
             if plan.reasoning_step:
                 state.reasoning.append(f"[planner] {plan.reasoning_step}")
@@ -379,7 +395,6 @@ class DeepAgent:
             if next_action not in self.steps:
                 print(f"Warning: unknown next_action '{next_action}', stopping.")
                 break
-            current_step = next_action
 
         return state
 
