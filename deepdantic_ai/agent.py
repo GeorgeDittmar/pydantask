@@ -125,7 +125,7 @@ class ToolStep(Step):
         self.agent = Agent(
             model="gpt-4.1-mini",
             output_type=ToolOutput,
-            system_prompt="You are a tool-using step. Decide if a tool call is useful.",
+            system_prompt="You are a tool-using step. Decide if a tool call is useful for solving.",
         )
         for fn in collect_tools(self).values():
             self.agent.tool(fn)
@@ -156,6 +156,11 @@ Decide if a tool call is useful.
     async def store_fact(self, ctx: RunContext[AgentState], fact: str) -> str:
         ctx.state.artifacts.setdefault("stored_facts", []).append(fact)
         return "Fact stored successfully."
+
+    @tool
+    async def reflect(self, ctx: RunContext[AgentState], reflection: str) -> str:
+        ctx.state.artifacts.setdefault("reflections", []).append(reflection)
+        return "Reflection recorded successfully."
 
 
 # ============================================================
@@ -202,6 +207,59 @@ class SynthesisStep(Step):
 # ============================================================
 
 
+class ToDoOutput(BaseModel):
+    reasoning: str
+    tasks_list: str
+
+
+class ToDoStep(Step):
+    name = "todo"
+
+    def __init__(self):
+        self.agent = Agent(
+            model="gpt-4.1-mini",
+            output_type=ToDoOutput,
+            system_prompt="You are a ToDo step in a deep agent. Create a concise todo list based on the current knowledge and the task given. Produce structured output only.",
+        )
+
+    async def run(self, state: AgentState) -> StepResult:
+        prompt = f"""
+                GOAL:
+                {state.goal}
+
+                KNOWN FACTS:
+                {state.knowledge}
+                
+                TODO LIST:
+                {state.artifacts.todos if 'todos' in state.artifacts else 'None'}
+
+                Create a concise todo list of tasks to achieve the goal.
+                """
+        run_result = await self.agent.run(prompt)
+        output: ToDoOutput = run_result.output
+
+        return StepResult(
+            reasoning_step=output.reasoning,
+            artifacts={"ToDo": output.tasks_list},
+        )
+
+    @tool
+    async def update_todo(
+        self, ctx: RunContext[AgentState], todo: str, status: str
+    ) -> str:
+        todos = ctx.state.artifacts.setdefault("todos", [])
+        for i, t in enumerate(todos):
+            if t.startswith(todo):
+                todos[i] = f"{todo} - {status}"
+                return "Todo updated successfully."
+        return "Todo not found."
+
+    @tool
+    async def store_todos(self, ctx: RunContext[AgentState], todos: List[str]) -> str:
+        ctx.state.artifacts.setdefault("todos", []).extend(todos)
+        return "Todos stored successfully."
+
+
 class PlannerOutput(BaseModel):
     reasoning: str
     next_action: str  # must match a step name or "stop"
@@ -217,8 +275,8 @@ class PlannerStep(Step):
             output_type=PlannerOutput,
             system_prompt="""
             You are an expert task planning agent. 
-            You must plan and keep track of TODOs you come up with to perform a task based on state of work and available tools. 
-            You are not to provide an answer yet, only plan the next step.
+            You must plan and keep track of ToDos needed to perform a task. 
+            You are not to provide an answer yet, only plan the next step given the current state of todos needing to be done.
             
             If you think you have enough information to answer the given task, choose 'synthesize'. 
             If you have already synthesized or there are no new facts, choose 'stop'. 
@@ -233,6 +291,9 @@ class PlannerStep(Step):
         prompt = f"""
             GOAL:
             {state.goal}
+            
+            TODOS:
+            {state.artifacts.get('todos', [])}
 
             KNOWN FACTS:
             {state.knowledge}
@@ -249,7 +310,9 @@ class PlannerStep(Step):
 
         return StepResult(
             reasoning_step=output.reasoning,
-            artifacts={"next_action": output.next_action},
+            artifacts={
+                "next_action": output.next_action
+            },  # might be overwriting dictionary entries we dont want that
         )
 
 
@@ -267,12 +330,23 @@ class DeepAgent:
     async def run(self, goal: str) -> AgentState:
         state = AgentState(goal=goal)
 
-        print(f"\n--- Executing step: Planning ---")
+        # Create todo list at the start
+        todo_step = ToDoStep()
+        todo_result = await todo_step.run(state)
+        state.reasoning.append(f"[{todo_step.name}] {todo_result.reasoning_step}")
+
+        todo_list = todo_result.artifacts.get("ToDo")
+        print(state)
+        if todo_list:
+            state.artifacts["todos"] = todo_list
+            print(f"\n--- Initial ToDo List ---\n{todo_list}")
+
         for _ in range(self.max_depth):
 
             # 1. Planner ALWAYS runs
             planner = self.steps["planner"]
             plan = await planner.run(state)
+            print(plan)
 
             if plan.reasoning_step:
                 state.reasoning.append(f"[planner] {plan.reasoning_step}")
