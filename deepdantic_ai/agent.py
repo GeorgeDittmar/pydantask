@@ -343,7 +343,7 @@ class PlannerStep(Step):
             },  # might be overwriting dictionary entries we dont want that
         )
 
-    async def write_todo(self, ctx: RunContext[AgentState], todos: ToDoList]) -> str:
+    async def write_todos(self, ctx: RunContext[AgentState], todos: ToDoList]) -> str:
 
         ctx.state.artifacts["todos"] = todos
         return "Todo list created."
@@ -352,7 +352,7 @@ class PlannerStep(Step):
         ctx.state.artifacts.setdefault("reflections", []).append(reflection)
         return "Reflection recorded for decision-making."
 
-    async def read_todo(self, ctx: RunContext[AgentState]) -> str:
+    async def read_todos(self, ctx: RunContext[AgentState]) -> str:
         return ctx.state.artifacts.get("todos", "No todo list found.")
 
 
