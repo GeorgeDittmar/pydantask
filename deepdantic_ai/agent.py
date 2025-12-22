@@ -280,22 +280,22 @@ class PlannerOutput(BaseModel):
     next_action: str = Field(
         description="The next action to take, must match a step name or 'stop'."
     )
-    todo: str = Field(description="TODO list to accomplish the goal.", default="")
+    # todo: str = Field(description="TODO list to accomplish the goal.", default="")
 
 
 class PlannerStep(Step):
     name = "planner"
 
     sys_prompt_1 = """ Based upon the user's request:                                                                     
-│  1. Use the write_todos tool to create TODO at the start of a user request, per the tool description.           │
-│  2. After you accomplish a TODO, use the read_todos to read the TODOs in order to remind yourself of the plan.  │
-│  3. Reflect on what you've done and the TODO.                                                                   │
-│  4. Mark you task as completed, and proceed to the next TODO.                                                   │
-│  5. Continue this process until you have completed all TODOs.                                                   │
-│                                                                                                                 │
-│  IMPORTANT: Always create a research plan of TODOs and conduct research following the above guidelines for ANY  │
-│  user request.                                                                                                  │
-│  IMPORTANT: Aim to batch research tasks into a *single TODO* in order to minimize the number of TODOs you have  │
+│  1. Use the write_todos tool to create complete TODO list at the start of a user request, per the tool description.       
+│  2. After you accomplish a TODO, use the read_todos to read the TODOs in order to remind yourself of the plan.  
+│  3. Reflect on what you've done and the TODO.                                                                   
+│  4. Mark you task as completed, and proceed to the next TODO.                                                   
+│  5. Continue this process until you have completed all TODOs.                                                   
+│                                                                                                                 
+│  IMPORTANT: Always create a research plan of TODOs and conduct research following the above guidelines for ANY  
+│  user request.                                                                                                  
+│  IMPORTANT: Aim to batch research tasks into a *single TODO* in order to minimize the number of TODOs you have  
 │  to keep track of."""
 
     sys_prompt_2 = """
@@ -357,12 +357,12 @@ class PlannerStep(Step):
             reasoning_step=output.reasoning,
             artifacts={
                 "next_action": output.next_action,
-                "todo": output.todo,
             },  # might be overwriting dictionary entries we dont want that
         )
 
     async def write_todos(self, ctx: RunContext[AgentState], todos: ToDoList) -> str:
         """Writes a todo list to the AgentState."""
+        # print(todos)
         ctx.deps.artifacts["todos"] = todos
         return "Todo list created."
 
@@ -374,6 +374,7 @@ class PlannerStep(Step):
 
     async def read_todos(self, ctx: RunContext[AgentState]) -> str:
         """Reads the current todo list from the agent's state."""
+        print(ctx.deps.artifacts.get("todos", "No todo list found."))
         return ctx.deps.artifacts.get("todos", "No todo list found.")
 
 
