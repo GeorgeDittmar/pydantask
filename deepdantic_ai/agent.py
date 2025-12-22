@@ -4,6 +4,7 @@ import asyncio
 import inspect
 from abc import ABC, abstractmethod
 from json import load
+import sys
 from typing import Any, Dict, List, Optional, Callable
 
 from annotated_types import T
@@ -210,7 +211,7 @@ class SynthesisStep(Step):
 # ============================================================
 
 
-class ToDo(BaseModel()):
+class ToDo(BaseModel):
     task: str
     status: str = Field(description="e.g., 'not_done', 'in_progress', 'completed")
 
@@ -229,6 +230,8 @@ class ToDoStep(Step):
         self.agent = Agent(
             model="gpt-4.1-mini",
             output_type=ToDoList,
+            tools=[self.store_todos, self.update_todo],
+            deps_type=AgentState,
             system_prompt="You are an expert todo list creator for a deep agent system. Create a concise todo list of steps to solve a goal or task. Use the current knowledge and reasoning to inform your todo list.",
         )
 
@@ -260,7 +263,7 @@ class ToDoStep(Step):
     async def update_todo(
         self, ctx: RunContext[AgentState], todo: str, status: str
     ) -> str:
-        todos = ctx.state.artifacts.setdefault("todos", [])
+        todos = ctx.sartifacts.setdefault("todos", [])
         for i, t in enumerate(todos):
             if t.startswith(todo):
                 todos[i] = f"{todo} - {status}"
@@ -283,12 +286,19 @@ class PlannerOutput(BaseModel):
 class PlannerStep(Step):
     name = "planner"
 
-    def __init__(self, available_steps: List[str]):
-        self.available_steps = available_steps
-        self.agent = Agent(
-            model="gpt-4.1-mini",
-            output_type=PlannerOutput,
-            system_prompt="""
+    sys_prompt_1 = """ Based upon the user's request:                                                                     
+│  1. Use the write_todos tool to create TODO at the start of a user request, per the tool description.           │
+│  2. After you accomplish a TODO, use the read_todos to read the TODOs in order to remind yourself of the plan.  │
+│  3. Reflect on what you've done and the TODO.                                                                   │
+│  4. Mark you task as completed, and proceed to the next TODO.                                                   │
+│  5. Continue this process until you have completed all TODOs.                                                   │
+│                                                                                                                 │
+│  IMPORTANT: Always create a research plan of TODOs and conduct research following the above guidelines for ANY  │
+│  user request.                                                                                                  │
+│  IMPORTANT: Aim to batch research tasks into a *single TODO* in order to minimize the number of TODOs you have  │
+│  to keep track of."""
+
+    sys_prompt_2 = """
             You are an expert task planner for a deep agent system.
             You are not to provide an answer yet, only plan the next step given the current state of things needing to be done.
 
@@ -316,12 +326,20 @@ class PlannerStep(Step):
                 - If you have already synthesized or there are no new facts, choose 'stop'. 
                 - If you see repeated steps without progress, choose 'stop'.
                 - If you do not have a way to solve the given task, choose 'stop'.
-            """,
+            """
+
+    def __init__(self, available_steps: List[str]):
+        self.available_steps = available_steps
+        self.agent = Agent(
+            model="gpt-4.1-mini",
+            output_type=PlannerOutput,
+            system_prompt=PlannerStep.sys_prompt_1,
+            tools=[self.write_todos, self.think_tool, self.read_todos],
         )
 
     async def run(self, state: AgentState) -> StepResult:
         prompt = f"""
-            AGENT GOAL:
+            GOAL:
             {state.goal}
             
             KNOWN FACTS:
@@ -332,7 +350,7 @@ class PlannerStep(Step):
 
             Available steps to take: {self.available_steps + ['stop']}
 """
-        run_result = await self.agent.run(prompt)
+        run_result = await self.agent.run(prompt, deps=state)
         output: PlannerOutput = run_result.output
 
         return StepResult(
@@ -343,22 +361,33 @@ class PlannerStep(Step):
             },  # might be overwriting dictionary entries we dont want that
         )
 
-    async def write_todos(self, ctx: RunContext[AgentState], todos: ToDoList]) -> str:
-
-        ctx.state.artifacts["todos"] = todos
+    async def write_todos(self, ctx: RunContext[AgentState], todos: ToDoList) -> str:
+        """Writes a todo list to the AgentState."""
+        ctx.deps.artifacts["todos"] = todos
         return "Todo list created."
 
     async def think_tool(self, ctx: RunContext[AgentState], reflection: str) -> str:
-        ctx.state.artifacts.setdefault("reflections", []).append(reflection)
+        """Tool for strategic reflection on research progress and decision-making for each todo list item."""
+
+        ctx.deps.artifacts.setdefault("reflections", []).append(reflection)
         return "Reflection recorded for decision-making."
 
     async def read_todos(self, ctx: RunContext[AgentState]) -> str:
-        return ctx.state.artifacts.get("todos", "No todo list found.")
+        """Reads the current todo list from the agent's state."""
+        return ctx.deps.artifacts.get("todos", "No todo list found.")
 
 
 # ============================================================
 # Deep Agent Executor
 # ============================================================
+
+
+def web_search(query: str) -> List[str]:
+    return [
+        f"Worf was chief of security of the enterprise",
+        f"He was a Klingon who was raised by Humans. This put him at odds with both human and klingon culture.",
+        f"He served under Captain Picard. And he had a son named Alexander. Worf was known for his strong sense of honor and duty.",
+    ]
 
 
 class DeepAgent:
