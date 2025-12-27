@@ -1,476 +1,135 @@
-from __future__ import annotations
+from asyncio import tasks
+import json
+import uuid
+from os import system
 
-import asyncio
-import inspect
-from abc import ABC, abstractmethod
-from json import load
-from typing import Any, Dict, List, Optional, Callable
-
+from pydantic_ai import Agent
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent, RunContext
-
-# ============================================================
-# Core Agent State
-# ============================================================
-
-# Initialize Pydantic AI instrumentation
-Agent.instrument_all()
+from typing import List, Optional, Literal
 
 
-class AgentState(BaseModel):
+SUPERVISOR_SYSTEM_PROMPT = """
+You are the supervisor agent in a deep agent system.
+You own todos, delegate tasks to sub-agents, and ensure progress towards the overall goal.
+
+Rules:
+- Only you may create or update todos.
+- You must reason over provided goal, todo_state, and last_event.
+- Decide on next action: create_todo, update_todo, delegate, or complete.
+- When creating a todo, provide a description.
+- When updating a todo, provide the todo_id and new status.
+- When delegating, specify target_agent and payload for said agent.
+- When completing, ensure all todos are done.
+
+Rules for Todo Management:
+- A todo has id, description, status (pending, in_progress, done), and optional agent owner.
+- You may create multiple todos at once if you see fit.
+- You may also add new todos based on progress, but no more than one at a time.
+- You may only update existing todos by id.
+- You must ensure todos are progressing towards the overall goal.
+- You must keep the todo list organized and relevant to the goal.
+- You must make todos actionable and clear.
+- You must prioritize todos that unblock progress towards the goal.
+- You must not create duplicate todos.
+
+Output a valid NextAction object only.
+"""
+
+
+# =========================
+# Runtime state models
+# =========================
+class TodoItem(BaseModel):
+    id: str
+    description: str
+    status: Literal["pending", "in_progress", "done"]
+    owner: Optional[str] = None
+
+
+class TodoState(BaseModel):
+    todos: List[TodoItem] = Field(default_factory=list)
+
+
+class RuntimeState(BaseModel):
     goal: str
-    knowledge: List[str] = Field(default_factory=list)
-    reasoning: List[str] = Field(default_factory=list)
-    artifacts: Dict[str, Any] = Field(default_factory=dict)
-    final_answer: Optional[str] = None
+    todos: TodoState
 
 
-class StepResult(BaseModel):
-    new_knowledge: List[str] = Field(default_factory=list)
-    reasoning_step: Optional[str] = None
-    artifacts: Dict[str, Any] = Field(default_factory=dict)
-    final_answer: Optional[str] = None
+class CreateTodo(BaseModel):
+    description: str
 
 
-# ============================================================
-# Tool Helpers
-# ============================================================
+class UpdateTodo(BaseModel):
+    todo_id: str
+    status: Literal["pending", "in_progress", "done"]
 
 
-def tool(fn: Callable) -> Callable:
-    """Marks a function as a tool, auto-registerable by PydanticAI"""
-    fn.__deepdantic_tool__ = True
-    return fn
+class NextAction(BaseModel):
+    """Next action to be taken by the supervisor agent."""
 
-
-def collect_tools(obj: Any) -> Dict[str, Callable]:
-    """Collect all @tool methods in an object"""
-    return {
-        name: fn
-        for name, fn in inspect.getmembers(obj)
-        if callable(fn) and getattr(fn, "__deepdantic_tool__", False)
-    }
-
-
-# ============================================================
-# Step Abstraction
-# ============================================================
-
-
-class Step(ABC):
-    name: str
-
-    @abstractmethod
-    async def run(self, state: AgentState) -> StepResult:
-        pass
-
-
-# ============================================================
-# Research Step
-# ============================================================
-
-
-class ResearchOutput(BaseModel):
-    reasoning: str
-    facts: List[str]
-
-
-class ResearchStep(Step):
-    name = "research"
-
-    def __init__(self):
-        self.agent = Agent(
-            model="gpt-4.1-mini",
-            output_type=ResearchOutput,
-            system_prompt="You are a research step in a deep agent. Produce structured output only.",
-            instrument=True,
-        )
-
-    async def run(self, state: AgentState) -> StepResult:
-        prompt = f"""
-GOAL:
-{state.goal}
-
-KNOWN FACTS:
-{state.knowledge}
-
-Produce:
-- One concise reasoning step
-- New facts only
-"""
-        run_result = await self.agent.run(prompt)
-        output: ResearchOutput = run_result.output
-        return StepResult(
-            new_knowledge=output.facts,
-            reasoning_step=output.reasoning,
-        )
-
-
-# ============================================================
-# Tool Step
-# ============================================================
-
-
-class ToolOutput(BaseModel):
-    reasoning: str
-    tool_used: Optional[str] = None
-    tool_result: Optional[Any] = None
-
-
-class ToolStep(Step):
-    name = "tool"
-
-    def __init__(self):
-        self.agent = Agent(
-            model="gpt-4.1-mini",
-            output_type=ToolOutput,
-            system_prompt="You are a tool-using step. Decide if a tool call is useful for solving.",
-        )
-        for fn in collect_tools(self).values():
-            self.agent.tool(fn)
-
-    async def run(self, state: AgentState) -> StepResult:
-        prompt = f"""
-GOAL:
-{state.goal}
-
-KNOWN FACTS:
-{state.knowledge}
-
-Decide if a tool call is useful.
-"""
-        run_result = await self.agent.run(prompt)
-        output: ToolOutput = run_result.output
-
-        artifacts = {}
-        if output.tool_used:
-            artifacts[output.tool_used] = output.tool_result
-
-        return StepResult(
-            reasoning_step=output.reasoning,
-            artifacts=artifacts,
-        )
-
-    @tool
-    async def store_fact(self, ctx: RunContext[AgentState], fact: str) -> str:
-        ctx.state.artifacts.setdefault("stored_facts", []).append(fact)
-        return "Fact stored successfully."
-
-    @tool
-    async def reflect(self, ctx: RunContext[AgentState], reflection: str) -> str:
-        ctx.state.artifacts.setdefault("reflections", []).append(reflection)
-        return "Reflection recorded successfully."
-
-
-# ============================================================
-# Synthesis Step (produces final_answer)
-# ============================================================
-
-
-class SynthesisOutput(BaseModel):
-    reasoning: str
-    answer: str
-
-
-class SynthesisStep(Step):
-    name = "synthesize"
-
-    def __init__(self):
-        self.agent = Agent(
-            model="gpt-4.1-mini",
-            output_type=SynthesisOutput,
-            system_prompt="You are a synthesis step in a deep agent. Produce the final answer based on knowledge and reasoning collected.",
-        )
-
-    async def run(self, state: AgentState) -> StepResult:
-        prompt = f"""
-                GOAL:
-                {state.goal}
-
-                KNOWN FACTS:
-                {state.knowledge}
-
-                REASONING TRACE:
-                {state.reasoning}
-
-                Produce a final, concise answer.
-                """
-        run_result = await self.agent.run(prompt)
-        output: SynthesisOutput = run_result.output
-
-        return StepResult(reasoning_step=output.reasoning, final_answer=output.answer)
-
-
-# ============================================================
-# Planner Step (controls flow)
-# ============================================================
-
-
-class ToDoOutput(BaseModel):
-    reasoning: str
-    tasks_list: str
-
-
-class ToDoStep(Step):
-    name = "todo"
-
-    def __init__(self):
-        self.agent = Agent(
-            model="gpt-4.1-mini",
-            output_type=ToDoOutput,
-            system_prompt="You are an expert todo list creator for a deep agent system. Create a concise todo list of steps to solve a goal or task. Use the current knowledge and reasoning to inform your todo list.",
-        )
-
-        # regsiter tools this agent can use
-        # self.agent.tool(self.store_todos)
-        # self.agent.tool(self.update_todo)
-
-    async def run(self, state: AgentState) -> StepResult:
-        prompt = f"""
-                GOAL:
-                {state.goal}
-
-                KNOWN FACTS:
-                {state.knowledge}
-                
-                TODO LIST:
-                {state.artifacts['todos'] if 'todos' in state.artifacts else '{}'}
-
-                Create a concise todo list of tasks to achieve the goal.
-                """
-        run_result = await self.agent.run(prompt)
-        output: ToDoOutput = run_result.output
-
-        return StepResult(
-            reasoning_step=output.reasoning,
-            artifacts={"todo": output.tasks_list},
-        )
-
-    async def update_todo(
-        self, ctx: RunContext[AgentState], todo: str, status: str
-    ) -> str:
-        todos = ctx.state.artifacts.setdefault("todos", [])
-        for i, t in enumerate(todos):
-            if t.startswith(todo):
-                todos[i] = f"{todo} - {status}"
-                return "Todo updated successfully."
-        return "Todo not found."
-
-    async def store_todos(self, ctx: RunContext[AgentState], todos: List[str]) -> str:
-        ctx.state.artifacts.setdefault("todos", []).extend(todos)
-        return "Todos stored successfully."
-
-
-class PlannerOutput(BaseModel):
-    reasoning: str = Field(description="The reasoning behind the chosen next action.")
-    next_action: str = Field(
-        description="The next action to take, must match a step name or 'stop'."
-    )
-    todo: str = Field(description="TODO list to accomplish the goal.", default="")
-
-
-class PlannerStep(Step):
-    name = "planner"
-
-    def __init__(self, available_steps: List[str]):
-        self.available_steps = available_steps
-        self.agent = Agent(
-            model="gpt-4.1-mini",
-            output_type=PlannerOutput,
-            system_prompt="""
-            You are an expert task planner for a deep agent system.
-            You are not to provide an answer yet, only plan the next step given the current state of things needing to be done.
-
-            Your goal is to decide the next best action to take to progress towards the overall goal.
-        
-
-            Create a concise reasoning trace explaining why you chose the next action.
-            Additionally, create or update a TODO list to help keep track of tasks needed to accomplish the goal.
-            Have the TODO list reflect the current state of knowledge and reasoning.
-            Have the TODO list be actionable and specific.
-            Have the TODO list help guide future steps towards completing the goal.
-            Do not use vague or generic tasks in the TODO list.
-            
-            The todo list should be in simple text format, with one task per line.
-            Each line should start with a dash (-) followed by the task description and if it is done or not.
-            ex. 
-                - Research the history of the topic - done
-                - Find relevant examples - not done
-            
-            You must choose one of the available steps to take next from the list provided under 'Available steps'.
-            
-            You have the following default options:
-                
-                - If you think you have enough information to complete the task, choose 'synthesize'. 
-                - If you have already synthesized or there are no new facts, choose 'stop'. 
-                - If you see repeated steps without progress, choose 'stop'.
-                - If you do not have a way to solve the given task, choose 'stop'.
-            """,
-        )
-
-    async def run(self, state: AgentState) -> StepResult:
-        prompt = f"""
-            AGENT GOAL:
-            {state.goal}
-            
-            KNOWN FACTS:
-            {state.knowledge}
-
-            REASONING TRACE:
-            {state.reasoning}
-
-            Available steps to take: {self.available_steps + ['stop']}
-"""
-        run_result = await self.agent.run(prompt)
-        output: PlannerOutput = run_result.output
-
-        return StepResult(
-            reasoning_step=output.reasoning,
-            artifacts={
-                "next_action": output.next_action,
-                "todo": output.todo,
-            },  # might be overwriting dictionary entries we dont want that
-        )
-
-
-# ============================================================
-# Deep Agent Executor
-# ============================================================
+    reasoning_summary: str
+    action_type: Literal["create_todo", "update_todo", "delegate", "complete"]
+    create: Optional[list[CreateTodo]] = None
+    update: Optional[UpdateTodo] = None
+    target_agent: Optional[str] = None
+    payload: Optional[dict] = None
 
 
 class DeepAgent:
-    def __init__(self, steps: Dict[str, Step], tools=None, max_depth: int = 15):
-        self.steps = steps
-        self.tools = tools  # TODO: integrate tools into steps / agents
-        self.max_depth = max_depth
+    """DeepDantic AI Agent that manages sub-agents to achieve complex goals."""
 
-    async def run(self, goal: str) -> AgentState:
-        state = AgentState(goal=goal)
+    def __init__(self, prompt, model):
+        self.model = model
+        self.prompt = prompt  # agent goal prompt
+        self._supervisor_agent = Agent(
+            model=model,
+            system_prompt=SUPERVISOR_SYSTEM_PROMPT,
+            output_type=NextAction,
+            deps_type=RuntimeState,
+        )
 
-        # Create todo list at the start for the agent to work from
-        # todo_step = ToDoStep()
-        # todo_result = await todo_step.run(state)
-        # state.reasoning.append(f"[{todo_step.name}] {todo_result.reasoning_step}")
+    def _apply_action(self, action: NextAction, state: RuntimeState):
+        """Apply the chosen action to the runtime state."""
+        if action.action_type == "create_todo" and action.create:
+            for todo in action.create:
+                new_todo = TodoItem(
+                    id=str(uuid.uuid4()),
+                    description=todo.description,
+                    status="pending",
+                )
+                state.todos.todos.append(new_todo)
 
-        # todo_list = todo_result.artifacts.get("ToDo")
-        # print(state)
-        # if todo_list:
-        #     state.artifacts["todos"] = todo_list
-        #     print(f"\n--- Initial ToDo List ---\n{todo_list}")
+        elif action.action_type == "update_todo" and action.update:
+            for todo in state.todos:
+                if todo.id == action.update.todo_id:
+                    todo.status = action.update.status
+                    break
+        # Additional action types like 'delegate' and 'complete' would be handled here
 
-        for _ in range(self.max_depth):
-            print("\n==============================")
-            # 1. Planner ALWAYS runs
-            planner = self.steps["planner"]
-            plan = await planner.run(state)
+    def _run_supervisor(self):
+        # Logic to run the supervisor agent and manage sub-agents
+        pass
 
-            if plan.reasoning_step:
-                state.reasoning.append(f"[planner] {plan.reasoning_step}")
-
-            next_action = plan.artifacts.get("next_action")
-            print(f"\n--- Next Action: {next_action} ---")
-
-            if next_action in ("stop", None):
-                break
-
-            if next_action not in self.steps:
-                raise ValueError(f"Unknown step: {next_action}")
-
-            # 2. Execute the chosen step
-            step = self.steps[next_action]
-            result = await step.run(state)
-
-            state.knowledge.extend(result.new_knowledge)
-            if result.reasoning_step:
-                state.reasoning.append(f"[{step.name}] {result.reasoning_step}")
-
-            if result.final_answer:
-                state.final_answer = result.final_answer
-                break
-
-            if not next_action or next_action == "stop":
-                print("STOPPING")
-                break
-
-            if next_action not in self.steps:
-                print(f"Warning: unknown next_action '{next_action}', stopping.")
-                break
-
-        return state
+    def run(self):
+        # Start the supervisor agent to manage sub-agents
+        state = RuntimeState(goal=self.prompt, todos=TodoState())
+        supervisor_response = self._supervisor_agent.run_sync(
+            self.prompt, deps=state
+        ).output
+        self._apply_action(supervisor_response, state)
+        print(
+            "Supervisor Response:",
+            state,
+        )
+        # Here you would parse the supervisor response and create/manage sub-agents accordingly
+        # For simplicity, we will just print the response for now
 
 
-@tool
-def todo_write(tasks: List[str]) -> str:
-    """Tool to write a todo list from given tasks."""
-    formatted_tasks = "\n".join([f"- {task}" for task in tasks])
-    return f"Todo list created:\n{formatted_tasks}"
+from dotenv import load_dotenv
 
-
-@tool
-def think_tool(reflection: str) -> str:
-    """Tool for strategic reflection on research progress and decision-making.
-
-    Use this tool after each search to analyze results and plan next steps systematically.
-    This creates a deliberate pause in the research workflow for quality decision-making.
-
-    When to use:
-    - After receiving search results: What key information did I find?
-    - Before deciding next steps: Do I have enough to answer comprehensively?
-    - When assessing research gaps: What specific information am I still missing?
-    - Before concluding research: Can I provide a complete answer now?
-
-    Reflection should address:
-    1. Analysis of current findings - What concrete information have I gathered?
-    2. Gap assessment - What crucial information is still missing?
-    3. Quality evaluation - Do I have sufficient evidence/examples for a good answer?
-    4. Strategic decision - Should I continue searching or provide my answer?
-
-    Args:
-        reflection: Your detailed reflection on research progress, findings, gaps, and next steps
-
-    Returns:
-        Confirmation that reflection was recorded for decision-making
-    """
-    return f"Reflection recorded: {reflection}"
-
-
-# ============================================================
-# Example Run
-# ============================================================
-
-
-async def main():
-
-    # TODO: find a way to allow folks to not have to worry about all these other pieces. maybe build it into the DeepAgent constructor?
-    steps = {
-        "planner": PlannerStep(available_steps=["research", "tool", "synthesize"]),
-        "research": ResearchStep(),
-        "tool": ToolStep(),
-        "synthesize": SynthesisStep(),
-    }
-
-    agent = DeepAgent(steps=steps, max_depth=15)
-    state = await agent.run(
-        "Explain the significance of the Higgs boson in particle physics."
-    )
-
-    print("\nFINAL STATE")
-    print("=" * 40)
-    print(state.model_dump())
-
-
-if __name__ == "__main__":
-    from dotenv import load_dotenv
-
-    load_dotenv()
-    from langfuse import get_client
-
-    langfuse = get_client()
-
-    # Verify connection
-    if langfuse.auth_check():
-        print("Langfuse client is authenticated and ready!")
-    else:
-        print("Authentication failed. Please check your credentials and host.")
-
-    asyncio.run(main())
+load_dotenv()
+agent = DeepAgent(
+    "Help me plan a trip to japan. I want to see cultural sites, tourist sites, and eat good food.",
+    "gpt-4.1-mini",
+)
+agent.run()
