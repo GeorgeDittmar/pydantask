@@ -46,6 +46,14 @@ class TaskItem(BaseModel):
     description: str
     status: Literal["pending", "in_progress", "done"]
     owner: Optional[str] = None
+    capability: Literal[
+        "research",
+        "analysis",
+        "synthesis",
+        "external_interaction",
+        "creative_problem_solving",
+        "collaboration",
+    ] = "research"
 
 
 # =========================
@@ -80,8 +88,8 @@ class NextAction(BaseModel):
 
     reasoning_summary: str
     action_type: Literal["", "delegate", "complete"]
-    create: Optional[list[CreateTodo]] = None
-    update: Optional[UpdateTodo] = None
+    # create: Optional[list[CreateTodo]] = None
+    # update: Optional[UpdateTodo] = None
     target_agent: Optional[str] = None
     payload: Optional[dict] = None
 
@@ -109,6 +117,12 @@ Rules:
 - You must make tasks actionable and clear.
 - Tasks should be concise, ideally under 10 words.
 - When creating multiple tasks, ensure they are distinct and cover different aspects of the goal.
+
+Capabilities:
+- You can create tasks that require 'research', 'analysis', or 'synthesis' of information.
+- You can create tasks that require interaction with external systems or APIs.
+- You can create tasks that require creative problem solving or ideation.
+- You can create tasks that require collaboration with other agents.
 """
 
 
@@ -129,7 +143,7 @@ class DeepAgent:
         self._max_steps = 20  # Max steps to prevent infinite loops
 
         self._planner_agent = Agent(
-            model=model, system_prompt=PLANNER_SYSTEM_PROMPT, output_type=RuntimeState
+            model=model, system_prompt=PLANNER_SYSTEM_PROMPT, output_type=Plan
         )
         self._supervisor_agent = Agent(
             model=model,
@@ -162,12 +176,15 @@ class DeepAgent:
 
     def run(self):
         # Start the supervisor agent to manage sub-agents
-        state = RuntimeState(goal=self.prompt, plan=PlanState())
-        agent_plan = self._planner_agent.run_sync(self.prompt, deps=state).output
+        # state = RuntimeState(goal=self.prompt)
+        agent_plan = self._planner_agent.run_sync(self.prompt).output
 
+        # Run the supervisor to decide next actions from the plan
         # self._apply_action(supervisor_response, state)
-        for todo in agent_plan.plan.todos:
-            print(f"- [{todo.status}] {todo.description} (id: {todo.id})")
+        for todo in agent_plan.tasks:
+            print(
+                f"- [{todo.status}] {todo.description} (id: {todo.id}) capability: {todo.capability})"
+            )
         # print(
         #     "Planner Response:",
         #     agent_plan,
