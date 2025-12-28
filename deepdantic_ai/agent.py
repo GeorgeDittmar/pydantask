@@ -39,48 +39,98 @@ Output a valid NextAction object only.
 # =========================
 # Runtime state models
 # =========================
-class TodoItem(BaseModel):
+
+
+class TaskItem(BaseModel):
     id: str
     description: str
     status: Literal["pending", "in_progress", "done"]
     owner: Optional[str] = None
 
 
-class TodoState(BaseModel):
-    todos: List[TodoItem] = Field(default_factory=list)
+# =========================
+# Planner state models
+# =========================
+class Plan(BaseModel):
+    tasks: List[TaskItem] = Field(default_factory=list)
+
+
+# class RuntimeState(BaseModel):
+#     goal: str
+#     plan: PlanState
+#     last_event: Optional[str] = None
+
+
+class ResearchResult(BaseModel):
+    findings: list[str]
+    sources: list[str]
+    confidence: float
 
 
 class RuntimeState(BaseModel):
-    goal: str
-    todos: TodoState
-
-
-class CreateTodo(BaseModel):
-    description: str
-
-
-class UpdateTodo(BaseModel):
-    todo_id: str
-    status: Literal["pending", "in_progress", "done"]
+    plan: Plan
+    completed_steps: set[int]
+    research_results: dict[int, ResearchResult]
+    iteration: int = 0
+    max_iterations: int = 20
 
 
 class NextAction(BaseModel):
     """Next action to be taken by the supervisor agent."""
 
     reasoning_summary: str
-    action_type: Literal["create_todo", "update_todo", "delegate", "complete"]
+    action_type: Literal["", "delegate", "complete"]
     create: Optional[list[CreateTodo]] = None
     update: Optional[UpdateTodo] = None
     target_agent: Optional[str] = None
     payload: Optional[dict] = None
 
 
+# =========================
+# Supervisor input/output
+# =========================
+class SupervisorDeps(BaseModel):
+    goal: str
+    plan: Plan
+    last_event: Optional[str] = None
+
+
+# =========================
+# planner agent to determine tasks to perform to achieve the goal
+# =========================
+
+PLANNER_SYSTEM_PROMPT = """
+Your job is to break down the goal into manageable discrete tasks that can be delegated to sub agents.
+
+Rules:
+- You must prioritize tasks that unblock progress towards the goal.
+- You must not create duplicate tasks.  
+- Each task should be clear and specific.
+- You must make tasks actionable and clear.
+- Tasks should be concise, ideally under 10 words.
+- When creating multiple tasks, ensure they are distinct and cover different aspects of the goal.
+"""
+
+
 class DeepAgent:
     """DeepDantic AI Agent that manages sub-agents to achieve complex goals."""
 
-    def __init__(self, prompt, model):
+    def __init__(self, prompt, model="gpt-4.1-mini", max_steps=20, token_budget=20000):
+        """
+        DeepAgent constructor.
+
+        :param prompt: The overall goal or prompt for the agent.
+        :param model: The language model to use. default is "gpt-4.1-mini".
+        :param max_steps: Maximum steps to prevent infinite loops. defaults to 20 steps
+        :param token_budget: Token budget for the agent's operations. default is 20000 tokens.
+        """
         self.model = model
-        self.prompt = prompt  # agent goal prompt
+        self.prompt = prompt  # Goal Prompt
+        self._max_steps = 20  # Max steps to prevent infinite loops
+
+        self._planner_agent = Agent(
+            model=model, system_prompt=PLANNER_SYSTEM_PROMPT, output_type=RuntimeState
+        )
         self._supervisor_agent = Agent(
             model=model,
             system_prompt=SUPERVISOR_SYSTEM_PROMPT,
@@ -112,15 +162,23 @@ class DeepAgent:
 
     def run(self):
         # Start the supervisor agent to manage sub-agents
-        state = RuntimeState(goal=self.prompt, todos=TodoState())
-        supervisor_response = self._supervisor_agent.run_sync(
-            self.prompt, deps=state
-        ).output
-        self._apply_action(supervisor_response, state)
-        print(
-            "Supervisor Response:",
-            state,
-        )
+        state = RuntimeState(goal=self.prompt, plan=PlanState())
+        agent_plan = self._planner_agent.run_sync(self.prompt, deps=state).output
+
+        # self._apply_action(supervisor_response, state)
+        for todo in agent_plan.plan.todos:
+            print(f"- [{todo.status}] {todo.description} (id: {todo.id})")
+        # print(
+        #     "Planner Response:",
+        #     agent_plan,
+        # )
+
+        # for _step in range(self._max_iterations):  # Limit to 5 steps for demo purposes
+        #     print(f"\n--- Supervisor Step {step + 1} ---")
+        #     supervisor_response = self._supervisor_agent.run_sync(
+        #         "Decide the next action.", deps=agent_plan
+        #     ).output
+        #     print("Supervisor Response:", supervisor_response)
         # Here you would parse the supervisor response and create/manage sub-agents accordingly
         # For simplicity, we will just print the response for now
 
