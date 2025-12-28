@@ -54,6 +54,7 @@ class TaskItem(BaseModel):
         "creative_problem_solving",
         "collaboration",
     ] = "research"
+    task_dependencies: Optional[List[int]] = Field(default_factory=list)
 
 
 # =========================
@@ -76,9 +77,9 @@ class ResearchResult(BaseModel):
 
 
 class RuntimeState(BaseModel):
-    plan: Plan
-    completed_steps: set[int]
-    research_results: dict[int, ResearchResult]
+    plan: Plan = Field(default_factory=Plan)
+    completed_steps: set[int] = Field(default_factory=set)
+    research_results: dict[int, ResearchResult] = Field(default_factory=dict)
     iteration: int = 0
     max_iterations: int = 20
 
@@ -117,9 +118,13 @@ Rules:
 - You must make tasks actionable and clear.
 - Tasks should be concise, ideally under 10 words.
 - When creating multiple tasks, ensure they are distinct and cover different aspects of the goal.
+- If the goal is complex, break it down into at least 5 distinct tasks.
+- If any task depends on another, specify the dependency using task_dependencies using the task ids.
+- Tasks should be ordered in a way that respects dependencies.
+- Be sure that the synthesis of all tasks leads to achieving the overall goal and is the final task.
 
 Capabilities:
-- You can create tasks that require 'research', 'analysis', or 'synthesis' of information.
+- You can create tasks that require 'research' or 'synthesis' of information.
 - You can create tasks that require interaction with external systems or APIs.
 - You can create tasks that require creative problem solving or ideation.
 - You can create tasks that require collaboration with other agents.
@@ -174,6 +179,10 @@ class DeepAgent:
         # Logic to run the supervisor agent and manage sub-agents
         pass
 
+    def _initialize_runtime_state(self, plan: Plan, goal: str) -> RuntimeState:
+        # Logic to initialize and manage the runtime state
+        return RuntimeState(plan=plan, goal=goal)
+
     def run(self):
         # Start the supervisor agent to manage sub-agents
         # state = RuntimeState(goal=self.prompt)
@@ -183,8 +192,13 @@ class DeepAgent:
         # self._apply_action(supervisor_response, state)
         for todo in agent_plan.tasks:
             print(
-                f"- [{todo.status}] {todo.description} (id: {todo.id}) capability: {todo.capability})"
+                f"- [{todo.status}] {todo.description} (id: {todo.id}) capability: {todo.capability}) owner: {todo.owner} dependencies: {todo.task_dependencies}"
             )
+
+        # now save the plan to the agent state
+        runtime_state = self._initialize_runtime_state(
+            plan=agent_plan, goal=self.prompt
+        )
         # print(
         #     "Planner Response:",
         #     agent_plan,
