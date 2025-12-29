@@ -188,28 +188,52 @@ class WebSearchAgent:
         step_id = f"step_{self.step_counter}"
 
 
-GOAL_REWRITER_SYSTEM_PROMPT = """
-You are a goal rewriter agent in a deep agent system.
-Your job is to rewrite and clarify the overall goal to ensure it is specific, actionable, and clear.
-You will be provided with the original goal.        
-Based on this information, you must output a rewritten version of the goal.
+GENERIC_SUB_AGENT_SYSTEM_PROMPT = """
+You are a sub-agent in a deep agent system.
+Your job is to complete the task assigned to you by the supervisor agent.
+You will be provided with the task description and any necessary context.
+You must complete the task to the best of your ability and report your findings back to the supervisor agent.
+
 ###Rules:
-- You must ensure the rewritten goal is specific and actionable.
-- You must avoid ambiguity in the rewritten goal.
-- You must only output the rewritten goal as a single string.
-- Do not include any additional text or explanation.
-- Do not output anything other than the rewritten goal string.
+- You must always consider the overall goal when completing your task.
+- You must use your capabilities to complete the task effectively.
+- You must report your findings or results back to the supervisor agent.
+- You must ensure that your work aligns with the overall goal.
+- If you encounter any challenges, think creatively to overcome them.
+- You must only output the results of your task in a clear and concise manner.
 """
 
 
-def __goal_rewriter_tool(goal: str) -> str:
-    """Rewrite and clarify the overall goal to ensure it is specific, actionable, and clear.
+def __sub_agent_task_writer_system_prompt():
+    return SUB_AGENT_TASK_WRITER_SYSTEM_PROMPT
 
-    :param goal: The original goal string.
-    :return: The rewritten goal string.
+
+def __subagent_instruction_writer_tool(goal: str, task_description: str) -> str:
+    """Write instructions for the sub-agent that explains its task in detail and how it acheives the overall goal.
+    return str: Instructions for the sub-agent.
     """
-    # This function would be implemented to rewrite the goal using the goal_rewriter_tool
-    pass
+    subagent_task_instructions = f"""
+    You are a sub-agent task writer in a deep agent system.
+    You take the goal and the task description you have been given by the supervisor agent 
+    and use your capabilities to write clear instructions that the supervisor can give to a sub-agent to complete the task.
+
+    The overall goal is: {goal}
+    The specific task is: {task_description}   
+    
+    To achieve this task, you should:
+    1. Understand the overall goal and how your task contributes to it.
+    2. Use your capabilities to complete the task effectively.
+    3. Report your findings or results back to the supervisor agent.
+    4. Ensure that your work aligns with the overall goal.
+    5. If you encounter any challenges, think creatively to overcome them.
+    Good luck!"""
+
+    __subagent_writer_agent = Agent(
+        model="gpt-4.1-mini",
+        system_prompt=GENERIC_SUB_AGENT_SYSTEM_PROMPT,
+    )
+
+    return __subagent_writer_agent.run_sync(
 
 
 class DeepAgent:
