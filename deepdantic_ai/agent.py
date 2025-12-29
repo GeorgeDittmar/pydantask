@@ -7,6 +7,8 @@ from pydantic_ai import Agent
 from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
 
+from transformers import RobertaForQuestionAnswering
+
 from deepdantic_ai.agents import AgentState
 
 
@@ -204,11 +206,14 @@ You must complete the task to the best of your ability and report your findings 
 """
 
 
-def __sub_agent_task_writer_system_prompt():
-    return SUB_AGENT_TASK_WRITER_SYSTEM_PROMPT
+class SubAgentInstruction(BaseModel):
+    reasoning: Optional[str] = None
+    instructions: str
 
 
-def __subagent_instruction_writer_tool(goal: str, task_description: str) -> str:
+def __subagent_instruction_writer_tool(
+    goal: str, task_description: str
+) -> SubAgentInstruction:
     """Write instructions for the sub-agent that explains its task in detail and how it acheives the overall goal.
     return str: Instructions for the sub-agent.
     """
@@ -231,9 +236,10 @@ def __subagent_instruction_writer_tool(goal: str, task_description: str) -> str:
     __subagent_writer_agent = Agent(
         model="gpt-4.1-mini",
         system_prompt=GENERIC_SUB_AGENT_SYSTEM_PROMPT,
+        output_type=SubAgentInstruction,
     )
 
-    return __subagent_writer_agent.run_sync(
+    return __subagent_writer_agent.run_sync(subagent_task_instructions).output
 
 
 class DeepAgent:
