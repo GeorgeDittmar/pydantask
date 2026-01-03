@@ -389,6 +389,13 @@ class DeepAgent:
         print(runtime_state)
         supervisor_agent = self._create_supervisor()
 
+        # plan = planner(current_state)
+        # for step in plan:
+        #     result = executor.run(step)
+        #     supervisor.observe(step, result)
+        #     if supervisor.detects_issue(result):
+        #         supervisor.correct(step, current_state)
+
         step = 0
         while step < self._max_steps or runtime_state.tokens_used < self.token_budget:
             print(f"\n--- Supervisor Step {step + 1} ---")
