@@ -16,6 +16,11 @@ from prompts import PLANNER_SYSTEM_PROMPT, SUPERVISOR_SYSTEM_PROMPT
 # =========================
 
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
 class TaskItem(BaseModel):
     id: str
     description: str
@@ -69,11 +74,11 @@ class RuntimeState(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     plan: Plan = Field(default_factory=Plan)
-    agent_registry: Dict[str, Any] = Field(default_factory=Dict, exclude=True)
+    agent_registry: Dict[str, Any] = Field(default_factory=dict, exclude=True)
     completed_steps: set[int] = Field(default_factory=set)
-    research_results: Dict[int, ResearchResult] = Field(default_factory=Dict)
+    research_results: Dict[int, ResearchResult] = Field(default_factory=dict)
     knowledge_store: Dict[str, str] = Field(
-        default_factory=Dict
+        default_factory=dict
     )  # store for accumulated knowledge
     iteration: int = 0
     tokens_used: int = 0
@@ -319,7 +324,7 @@ class DeepAgent:
         agent = Agent(
             model="openai:gpt-4.1-mini",
             deps_type=RuntimeState,
-            output_type=NextAction,
+            # output_type=RuntimeState,
             tools=tools,
         )
 
@@ -445,9 +450,6 @@ class DeepAgent:
             return f"Step {step.label} failed: {str(e)}"
 
 
-from dotenv import load_dotenv
-
-load_dotenv()
 agent = DeepAgent(
     "Help me plan a trip to japan. I want to see cultural sites, tourist sites, and eat good food.",
     "gpt-4.1-mini",
