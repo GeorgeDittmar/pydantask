@@ -3,11 +3,9 @@ import json
 import uuid
 from os import system
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, RunContext
 from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
-
-from transformers import RobertaForQuestionAnswering
 
 
 # =========================
@@ -127,6 +125,40 @@ def _default_tool_registry():
             "capabilities": ["synthesis", "creative_problem_solving"],
         },
     }
+
+
+def supervisor_system_prompt(ctx: RunContext[RuntimeState]) -> str:
+    return f"""You are the supervisor agent in a deep agent system.
+Your job is to manage and delegate tasks to sub-agents to achieve the overall goal.
+
+You have the following runtime state:
+
+{ctx.agent_state.model_dump_json(indent=2)}
+
+Based on this information, you must decide the next action to take. You must not modify the tasks if you decide to delegate a task. You must pick the task as is from the plan.
+
+Be sure to follow these rules when deciding the next action:
+
+###Rules:
+- You must check if there are any pending tasks in the plan.
+- You must check if any tasks have been completed.
+- You must check the results of completed tasks to inform your decision.
+- You must check task dependencies before delegating a task.
+- You must always consider the overall goal when deciding the next action.
+- You must prioritize tasks that unblock progress towards the goal.
+- You must delegate tasks to sub-agents based on their capabilities.
+- You must not delegate tasks that have already been completed.
+- You must provide a clear reasoning summary for your decision.
+- You must only output a single NextAction object in your response. 
+
+Do not include any additional text or explanation.
+Do not output anything other than the NextAction object.
+Do not modify the plan directly.
+
+If you decide to delegate a task, specify the target_agent and any necessary payload for the agent. When delegating, pick a task from the plan that is pending and whose dependencies have been met.
+
+Output a valid NextAction object only.
+"""
 
 
 # =========================
@@ -252,6 +284,50 @@ def __subagent_instruction_writer(goal: str, taskspec: TaskSpec) -> SubAgentInst
     return __subagent_writer_agent.run_sync(subagent_task_instructions).output
 
 
+class SupervisorSpec:
+    def system_prompt(self, ctx: RunContext) -> str:
+        return f"""You are the supervisor agent in a deep agent system.
+Your job is to manage and delegate tasks to sub-agents to achieve the overall goal.
+
+You have the following runtime state:
+
+{ctx.deps.model_dump_json(indent=2)}
+
+Based on this information, you must decide the next action to take. You must not modify the tasks if you decide to delegate a task. You must pick the task as is from the plan.
+
+Be sure to follow these rules when deciding the next action:
+
+###Rules:
+- You must check if there are any pending tasks in the plan.
+- You must check if any tasks have been completed.
+- You must check the results of completed tasks to inform your decision.
+- You must check task dependencies before delegating a task.
+- You must always consider the overall goal when deciding the next action.
+- You must prioritize tasks that unblock progress towards the goal.
+- You must delegate tasks to sub-agents based on their capabilities.
+- You must not delegate tasks that have already been completed.
+- You must provide a clear reasoning summary for your decision.
+- You must only output a single NextAction object in your response. 
+
+Do not include any additional text or explanation.
+Do not output anything other than the NextAction object.
+Do not modify the plan directly.
+
+If you decide to delegate a task, specify the target_agent and any necessary payload for the agent. When delegating, pick a task from the plan that is pending and whose dependencies have been met.
+
+Output a valid NextAction object only.
+"""
+
+    def tools(self):
+        return [
+            self.mark_task_done,
+        ]
+
+    def mark_task_done(self, ctx, task_id: str):
+        ctx.deps.tasks[task_id].done = True
+        return f"Task {task_id} marked done."
+
+
 class DeepAgent:
     """DeepDantic AI Agent that manages sub-agents to achieve complex goals."""
 
@@ -276,12 +352,21 @@ class DeepAgent:
         self._planner_agent = Agent(
             model=model, system_prompt=PLANNER_SYSTEM_PROMPT, output_type=Plan
         )
-        self._supervisor_agent = Agent(
-            model=model,
-            system_prompt=SUPERVISOR_SYSTEM_PROMPT,
-            output_type=NextAction,
-            deps_type=RuntimeState,
+
+    def _create_supervisor(self) -> Agent:
+        spec = SupervisorSpec()
+        agent = Agent(
+            model="openai:gpt-4.1-mini", deps_type=RuntimeState, output_type=NextAction
         )
+
+        @agent.system_prompt
+        def _prompt(ctx):
+            return spec.system_prompt(ctx)
+
+        # for tool in spec.tools():
+        #     agent.tool(tool)
+
+        return agent
 
     def _generate_subagent_instructions(
         self, goal: str, task: TaskSpec
@@ -334,54 +419,17 @@ class DeepAgent:
 
         print("\n--- Initial Runtime State ---")
         print(runtime_state)
+        supervisor_agent = self._create_supervisor()
 
         step = 0
         while step < self._max_steps or runtime_state.tokens_used < self.token_budget:
             print(f"\n--- Supervisor Step {step + 1} ---")
-            supervisor_response = self._supervisor_agent.run_sync(
-                deps=runtime_state
-            ).output
+            supervisor_response = supervisor_agent.run_sync(deps=runtime_state).output
 
-            # if supervisor_response.action_type == "complete":
-            #     print("Goal completed by supervisor.")
-            #     break
-            # if supervisor_response.action_type == "delegate":
-            #     task_spec = supervisor_response.task_spec
-            #     if task_spec is None:
-            #         print("No task specification provided for delegation.")
-            #         break
-
-            #     # Generate sub-agent instructions
-            #     subagent_instructions = self._generate_subagent_instructions(
-            #         goal=runtime_state.goal,
-            #         task=TaskItem(
-            #             id=task_spec.task_id,
-            #             description=task_spec.objective,
-            #             status="pending",
-            #             capability=task_spec.capability,
-            #         ),
-            #     )
-            #     print(
-            #         f"Delegating Task ID {task_spec.task_id} to {supervisor_response.target_agent}"
-            #     )
-            #     print("Sub-Agent Instructions:", subagent_instructions.instructions)
             # Here you would create and run the sub-agent based on the instructions
             # For simplicity, we will just print the instructions for now
             print("Supervisor Response:", supervisor_response)
             step += 1
-        # print(
-        #     "Planner Response:",
-        #     agent_plan,
-        # )
-
-        # for _step in range(self._max_iterations):  # Limit to 5 steps for demo purposes
-        #     print(f"\n--- Supervisor Step {step + 1} ---")
-        #     supervisor_response = self._supervisor_agent.run_sync(
-        #         "Decide the next action.", deps=agent_plan
-        #     ).output
-        #     print("Supervisor Response:", supervisor_response)
-        # Here you would parse the supervisor response and create/manage sub-agents accordingly
-        # For simplicity, we will just print the response for now
 
 
 from dotenv import load_dotenv
