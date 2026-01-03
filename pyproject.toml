@@ -3,16 +3,9 @@ name = "deepdantic-ai"
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
-    "datasets>=4.4.2",
-    "diffusers>=0.36.0",
     "langfuse>=3.11.0",
-    "peft>=0.18.0",
     "pydantic>=2.12.5",
     "pydantic-ai>=1.32.0",
     "pydantic-graph>=1.32.0",
-    "sentencepiece>=0.2.1",
-    "trl>=0.26.2",
+    "tavily>=1.1.0",
 ]
-
-[tool.uv.sources]
-diffusers = { git = "https://github.com/huggingface/diffusers" }

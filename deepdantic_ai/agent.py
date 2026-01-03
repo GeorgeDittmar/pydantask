@@ -3,10 +3,12 @@ import json
 import uuid
 from os import system
 
-from pydantic_ai import Agent, RunContext
-from pydantic import BaseModel, Field
-from typing import List, Optional, Literal
+from pydantic_ai import Agent, RunContext, FunctionToolset
+from pydantic import BaseModel, Field, ConfigDict
+from typing import List, Optional, Literal, Any, Dict
 
+import asyncio
+from pydantic_ai import RunContext
 from prompts import PLANNER_SYSTEM_PROMPT, SUPERVISOR_SYSTEM_PROMPT
 
 # =========================
@@ -17,7 +19,7 @@ from prompts import PLANNER_SYSTEM_PROMPT, SUPERVISOR_SYSTEM_PROMPT
 class TaskItem(BaseModel):
     id: str
     description: str
-    status: Literal["pending", "in_progress", "done"]
+    status: Literal["pending", "running", "completed", "failed"] = "pending"
     owner: Optional[str] = None
     capability: Literal[
         "research",
@@ -64,19 +66,23 @@ class ResearchResult(BaseModel):
 
 
 class RuntimeState(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     plan: Plan = Field(default_factory=Plan)
-    agent_registry = dict[str, Agent]
+    agent_registry: Dict[str, Any] = Field(default_factory=Dict, exclude=True)
     completed_steps: set[int] = Field(default_factory=set)
-    research_results: dict[int, ResearchResult] = Field(default_factory=dict)
-    knowledge_store: dict[str, str] = Field(
-        default_factory=dict
+    research_results: Dict[int, ResearchResult] = Field(default_factory=Dict)
+    knowledge_store: Dict[str, str] = Field(
+        default_factory=Dict
     )  # store for accumulated knowledge
     iteration: int = 0
     tokens_used: int = 0
     tool_available: Literal["research_agent", "writer_agent", "web_search"] = (
         "web_search"
     )
-    goal: str
+    goal: str = Field(
+        default="Perform a websearch for microsoft and tell me what you know."
+    )
 
 
 class NextAction(BaseModel):
@@ -252,10 +258,42 @@ Output a valid NextAction object only.
         return f"Task {task_id} marked done."
 
 
+# Your Registry stays clean
+# registry = {
+#     "researcher": deep_research_agent,  # Heavy reasoning
+#     "coder": coding_agent,  # Heavy reasoning
+#     "files": file_agent,  # Atomic / Utility
+# }
+
+
+# default_registry = {"websearch": search_web}
+
+from pydantic_ai.common_tools.tavily import (
+    TavilySearchTool,
+    TavilySearchResult,
+    tavily_search_tool,
+)
+
+
+# A "Thin" Agent that just wraps a tool
+web_agent = Agent(
+    "gpt-4.1-mini",  # Use a cheap model for simple tasks
+    system_prompt="You are a websearch specialist. Use the search tools provided to search the web for information.",
+    tools=[tavily_search_tool],
+)
+
+
 class DeepAgent:
     """DeepDantic AI Agent that manages sub-agents to achieve complex goals."""
 
-    def __init__(self, prompt, model="gpt-4.1-mini", max_steps=20, token_budget=20000):
+    def __init__(
+        self,
+        prompt,
+        model="gpt-4.1-mini",
+        max_steps=20,
+        token_budget=20000,
+        agent_registry={},
+    ):
         """
         DeepAgent constructor. Creates a DeepDantic AI Agent.
 
@@ -268,8 +306,7 @@ class DeepAgent:
         self.prompt = prompt  # Goal Prompt
         self._max_steps = max_steps  # Max steps to prevent infinite loops
         self.token_budget = token_budget  # Token budget for the agent's operations
-        self.tool_registry = _default_tool_registry()
-        self.agent_registry = {}
+        self.agent_registry = {"websearch": web_agent}
         # Initialize planner and supervisor agents
         # Planner agent to break down the goal into tasks
         # Supervisor agent to manage todos and delegate tasks
@@ -277,18 +314,21 @@ class DeepAgent:
             model=model, system_prompt=PLANNER_SYSTEM_PROMPT, output_type=Plan
         )
 
-    def _create_supervisor(self) -> Agent:
+    def _create_supervisor(self, tools=None) -> Agent:
         spec = SupervisorSpec()
         agent = Agent(
-            model="openai:gpt-4.1-mini", deps_type=RuntimeState, output_type=NextAction
+            model="openai:gpt-4.1-mini",
+            deps_type=RuntimeState,
+            output_type=NextAction,
+            tools=tools,
         )
 
         @agent.system_prompt
         def _prompt(ctx):
             return spec.system_prompt(ctx)
 
-        # for tool in spec.tools():
-        #     agent.tool(tool)
+        for tool in spec.tools():
+            agent.tool(tool)
 
         return agent
 
@@ -316,10 +356,6 @@ class DeepAgent:
                     break
         # Additional action types like 'delegate' and 'complete' would be handled here
 
-    def _run_supervisor(self):
-        # Logic to run the supervisor agent and manage sub-agents
-        pass
-
     def _initialize_runtime_state(self, plan: Plan, goal: str) -> RuntimeState:
         # Logic to initialize and manage the runtime state
         return RuntimeState(plan=plan, goal=goal)
@@ -343,7 +379,7 @@ class DeepAgent:
 
         print("\n--- Initial Runtime State ---")
         print(runtime_state)
-        supervisor_agent = self._create_supervisor()
+        supervisor_agent = self._create_supervisor(tools=[tavily_search_tool])
 
         # plan = planner(current_state)
         # for step in plan:
@@ -355,26 +391,58 @@ class DeepAgent:
         step = 0
         while step < self._max_steps or runtime_state.tokens_used < self.token_budget:
             print(f"\n--- Supervisor Step {step + 1} ---")
-            supervisor_response = supervisor_agent.run_sync(deps=runtime_state).output
-
-            if supervisor_response.action_type == "complete":
-                print("All tasks completed. Exiting.")
-                break
-            elif supervisor_response.action_type == "delegate":
-                task_to_delegate = supervisor_response.task_spec
-                if not task_to_delegate:
-                    print("No task specified for delegation. Exiting.")
-                    break
-                # Generate sub-agent instructions
-                subagent_instructions = self._generate_subagent_instructions(
-                    goal=runtime_state.goal,
-                    task=task_to_delegate,
-                )
-                print("\n--- Sub-Agent Instructions ---")
-
+            supervisor_response = supervisor_agent.run_sync(
+                "Execute the plan given the runtime state and knowledge you know.",
+                deps=runtime_state,
+            ).output
+            print(supervisor_response)
+            break
             # Here you would create and run the sub-agent based on the instructions
             # For simplicity, we will just print the instructions for now
             step += 1
+
+    async def execute_ready_tasks_tool(self, ctx: RunContext[RuntimeState]) -> str:
+        """Finds all tasks ready to run and executes them in parallel."""
+        plan = ctx.deps.plan
+
+        # 1. Identify "Ready" tasks
+        ready_steps = [
+            step
+            for step in plan.steps
+            if step.status == "pending"
+            and all(
+                plan.get_step(d_id).status == "completed" for d_id in step.depends_on
+            )
+        ]
+
+        if not ready_steps:
+            return "No tasks are currently ready for execution."
+
+        # 2. Prepare the concurrent coroutines
+        tasks = []
+        for step in ready_steps:
+            # grab the tool that the plan or supervisor decides
+            worker = ctx.deps.registry.get(step.assigned_to)
+            if worker:
+                step.status = "running"
+                # We wrap the agent run in a small wrapper to update the step status after
+                tasks.append(self.run_and_update_step(worker, step))
+
+        # 3. Execute all at once
+        results = await asyncio.gather(*tasks)
+
+        return f"Executed {len(results)} tasks in parallel."
+
+    async def run_and_update_step(self, worker, step):
+        """Helper to run an agent and capture its output into the step object."""
+        try:
+            result = await worker.run(step.description)
+            step.output = result.data
+            step.status = "completed"
+            return f"Step {step.label} success"
+        except Exception as e:
+            step.status = "failed"
+            return f"Step {step.label} failed: {str(e)}"
 
 
 from dotenv import load_dotenv
