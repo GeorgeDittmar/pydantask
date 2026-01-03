@@ -12,5 +12,10 @@ dependencies = [
     "pydantic-ai>=1.32.0",
     "pydantic-graph>=1.32.0",
     "sentencepiece>=0.2.1",
+    "torch>=2.9.1",
+    "torchvision>=0.24.1",
     "trl>=0.26.2",
 ]
+
+[tool.uv.sources]
+diffusers = { git = "https://github.com/huggingface/diffusers" }

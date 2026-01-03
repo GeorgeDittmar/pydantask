@@ -1,4 +1,4 @@
-from asyncio import tasks, tools
+# from asyncio import tasks
 import json
 import uuid
 from os import system
@@ -8,33 +8,6 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
 
 from transformers import RobertaForQuestionAnswering
-
-from deepdantic_ai.agents import AgentState
-
-
-SUPERVISOR_SYSTEM_PROMPT = """
-You are the supervisor agent in a deep agent system.
-Your job is to manage and delegate tasks to sub-agents to achieve the overall goal.
-
-You will be provided with the current runtime state, including the plan of tasks to be completed, and the results of any completed tasks.
-Based on this information, you must decide the next action to take.
-
-###Rules:
-- You must always consider the overall goal when deciding the next action.
-- You must prioritize tasks that unblock progress towards the goal.
-- You must delegate tasks to sub-agents based on their capabilities.
-- You must not delegate tasks that have already been completed.
-- You must provide a clear reasoning summary for your decision.
-- You must only output a single NextAction object in your response. 
-
-Do not include any additional text or explanation.
-Do not output anything other than the NextAction object.
-Do not modify the plan directly.
-
-If you decide to delegate a task, specify the target_agent and any necessary payload.
-
-Output a valid NextAction object only.
-"""
 
 
 # =========================
@@ -71,18 +44,18 @@ class Plan(BaseModel):
 #     last_event: Optional[str] = None
 
 
-class ResearcherAgent:
-    """Researcher Agent that performs research tasks."""
+# class ResearcherAgent:
+#     """Researcher Agent that performs research tasks."""
 
-    class AgentState(BaseModel):
-        goal: str
-        completed_steps: List[str] = Field(default_factory=list)
-        step_results: dict[str, dict] = Field(default_factory=dict)
-        steps: List["ResearchStep"] = Field(default_factory=list)
-        hypotheses: List[str] = Field(default_factory=list)
-        evidence: List[dict] = Field(default_factory=list)
-        claims: List[str] = Field(default_factory=list)
-        confidence: float = 0.0
+#     class AgentState(BaseModel):
+#         goal: str
+#         completed_steps: List[str] = Field(default_factory=list)
+#         step_results: dict[str, dict] = Field(default_factory=dict)
+#         steps: List["ResearchStep"] = Field(default_factory=list)
+#         hypotheses: List[str] = Field(default_factory=list)
+#         evidence: List[dict] = Field(default_factory=list)
+#         claims: List[str] = Field(default_factory=list)
+#         confidence: float = 0.0
 
 
 class ResearchResult(BaseModel):
@@ -95,9 +68,14 @@ class RuntimeState(BaseModel):
     plan: Plan = Field(default_factory=Plan)
     completed_steps: set[int] = Field(default_factory=set)
     research_results: dict[int, ResearchResult] = Field(default_factory=dict)
+    knowledge_store: dict[str, str] = Field(
+        default_factory=dict
+    )  # store for accumulated knowledge
     iteration: int = 0
     tokens_used: int = 0
-    tool_available: Literal["research_agent", "writer_agent"] = "web_search"
+    tool_available: Literal["research_agent", "writer_agent", "web_search"] = (
+        "web_search"
+    )
     goal: str
 
 
@@ -107,7 +85,26 @@ class NextAction(BaseModel):
     reasoning_summary: str
     action_type: Literal["delegate", "complete"]
     target_agent: Optional[str] = None
-    payload: Optional[dict] = None
+    task_spec: Optional[TaskItem] = None
+
+
+def _mocked_websearch(query: str) -> dict:
+    """Mocked web search function for demonstration purposes."""
+    return {
+        "query": query,
+        "results": [
+            {
+                "title": "Japan has many interesting palces to visit",
+                "url": "http://example.com/1",
+                "snippet": "Tokyo Disneyland is a popular tourist destination.",
+            },
+            {
+                "title": "Japanese food places are top",
+                "url": "http://example.com/2",
+                "snippet": "Jiro Ono's sushi restaurant in Tokyo is world-renowned. The ramen shops in Fukuoka are also a must-visit.",
+            },
+        ],
+    }
 
 
 # =========================
@@ -119,7 +116,7 @@ class SupervisorDeps(BaseModel):
     last_event: Optional[str] = None
 
 
-def _tool_registry():
+def _default_tool_registry():
     return {
         "research_agent": {
             "description": "An agent that can perform research tasks using web search and data retrieval.",
@@ -163,32 +160,36 @@ There are several types of tasks you can create based on the capabilities of you
 """
 
 
-class WebSearchAgent:
-    """Web Search Agent that performs research tasks."""
+SUPERVISOR_SYSTEM_PROMPT = """
+You are the supervisor agent in a deep agent system.
+Your job is to manage and delegate tasks to sub-agents to achieve the overall goal.
 
-    class AgentState(BaseModel):
-        goal: str
-        completed_steps: List[str] = Field(default_factory=list)
-        step_results: dict[str, dict] = Field(default_factory=dict)
-        steps: List["ResearchStep"] = Field(default_factory=list)
-        hypotheses: List[str] = Field(default_factory=list)
-        evidence: List[dict] = Field(default_factory=list)
-        claims: List[str] = Field(default_factory=list)
-        confidence: float = 0.0
+You will be provided with the current runtime state, including the plan of tasks to be completed, and the results of any completed tasks.
+Based on this information, you must decide the next action to take. You must not modify the tasks if you decide to delegate a task. You must pick the task as is from the plan.
 
-    def __init__(self, name: str, ai_model: Agent, tools: ToolRegistry):
-        self.name = name
-        self.ai_model = ai_model
-        self.tool_registry = tools
-        self.state = AgentState()
-        self.step_counter = 0
+Be sure to follow these rules when deciding the next action:
 
-    def initialize(self, goal: str):
-        self.state.goal = goal
+###Rules:
+- You must check if there are any pending tasks in the plan.
+- You must check if any tasks have been completed.
+- You must check the results of completed tasks to inform your decision.
+- You must check task dependencies before delegating a task.
+- You must always consider the overall goal when deciding the next action.
+- You must prioritize tasks that unblock progress towards the goal.
+- You must delegate tasks to sub-agents based on their capabilities.
+- You must not delegate tasks that have already been completed.
+- You must provide a clear reasoning summary for your decision.
+- You must only output a single NextAction object in your response. 
 
-    def plan_next_step(self) -> ResearchStep:
-        step_id = f"step_{self.step_counter}"
+Do not include any additional text or explanation.
+Do not output anything other than the NextAction object.
+Do not modify the plan directly.
 
+
+If you decide to delegate a task, specify the target_agent and any necessary payload for the agent. When delegating, pick a task from the plan that is pending and whose dependencies have been met.
+
+Output a valid NextAction object only.
+"""
 
 GENERIC_SUB_AGENT_SYSTEM_PROMPT = """
 You are a sub-agent in a deep agent system.
@@ -211,19 +212,28 @@ class SubAgentInstruction(BaseModel):
     instructions: str
 
 
-def __subagent_instruction_writer_tool(
-    goal: str, task_description: str
-) -> SubAgentInstruction:
+class TaskSpec(BaseModel):
+    task_id: str
+    objective: str
+    capability: Literal["research", "analysis", "synthesis"]
+    inputs: dict
+    success_criteria: str
+    constraints: list[str]
+    overall_goal: str
+
+
+def __subagent_instruction_writer(goal: str, taskspec: TaskSpec) -> SubAgentInstruction:
     """Write instructions for the sub-agent that explains its task in detail and how it acheives the overall goal.
     return str: Instructions for the sub-agent.
     """
     subagent_task_instructions = f"""
     You are a sub-agent task writer in a deep agent system.
-    You take the goal and the task description you have been given by the supervisor agent 
+    You take the goal and a task specification
     and use your capabilities to write clear instructions that the supervisor can give to a sub-agent to complete the task.
 
     The overall goal is: {goal}
-    The specific task is: {task_description}   
+    
+    The task specification is: {taskspec.model_dump_json(indent=2)}
     
     To achieve this task, you should:
     1. Understand the overall goal and how your task contributes to it.
@@ -235,8 +245,8 @@ def __subagent_instruction_writer_tool(
 
     __subagent_writer_agent = Agent(
         model="gpt-4.1-mini",
-        system_prompt=GENERIC_SUB_AGENT_SYSTEM_PROMPT,
         output_type=SubAgentInstruction,
+        deps_type=TaskSpec,
     )
 
     return __subagent_writer_agent.run_sync(subagent_task_instructions).output
@@ -258,6 +268,8 @@ class DeepAgent:
         self.prompt = prompt  # Goal Prompt
         self._max_steps = max_steps  # Max steps to prevent infinite loops
         self.token_budget = token_budget  # Token budget for the agent's operations
+        self.tool_registry = _default_tool_registry()
+        self.agent_registry = {}
         # Initialize planner and supervisor agents
         # Planner agent to break down the goal into tasks
         # Supervisor agent to manage todos and delegate tasks
@@ -270,6 +282,12 @@ class DeepAgent:
             output_type=NextAction,
             deps_type=RuntimeState,
         )
+
+    def _generate_subagent_instructions(
+        self, goal: str, task: TaskSpec
+    ) -> SubAgentInstruction:
+        """Generate instructions for a sub-agent based on the goal and task."""
+        return __subagent_instruction_writer(goal, task.description)
 
     def _apply_action(self, action: NextAction, state: RuntimeState):
         """Apply the chosen action to the runtime state."""
@@ -313,6 +331,8 @@ class DeepAgent:
         runtime_state = self._initialize_runtime_state(
             plan=agent_plan, goal=self.prompt
         )
+
+        print("\n--- Initial Runtime State ---")
         print(runtime_state)
 
         step = 0
@@ -321,6 +341,32 @@ class DeepAgent:
             supervisor_response = self._supervisor_agent.run_sync(
                 deps=runtime_state
             ).output
+
+            # if supervisor_response.action_type == "complete":
+            #     print("Goal completed by supervisor.")
+            #     break
+            # if supervisor_response.action_type == "delegate":
+            #     task_spec = supervisor_response.task_spec
+            #     if task_spec is None:
+            #         print("No task specification provided for delegation.")
+            #         break
+
+            #     # Generate sub-agent instructions
+            #     subagent_instructions = self._generate_subagent_instructions(
+            #         goal=runtime_state.goal,
+            #         task=TaskItem(
+            #             id=task_spec.task_id,
+            #             description=task_spec.objective,
+            #             status="pending",
+            #             capability=task_spec.capability,
+            #         ),
+            #     )
+            #     print(
+            #         f"Delegating Task ID {task_spec.task_id} to {supervisor_response.target_agent}"
+            #     )
+            #     print("Sub-Agent Instructions:", subagent_instructions.instructions)
+            # Here you would create and run the sub-agent based on the instructions
+            # For simplicity, we will just print the instructions for now
             print("Supervisor Response:", supervisor_response)
             step += 1
         # print(
