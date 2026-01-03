@@ -191,38 +191,6 @@ There are several types of tasks you can create based on the capabilities of you
 - You can create tasks that require collaboration with other agents.
 """
 
-
-SUPERVISOR_SYSTEM_PROMPT = """
-You are the supervisor agent in a deep agent system.
-Your job is to manage and delegate tasks to sub-agents to achieve the overall goal.
-
-You will be provided with the current runtime state, including the plan of tasks to be completed, and the results of any completed tasks.
-Based on this information, you must decide the next action to take. You must not modify the tasks if you decide to delegate a task. You must pick the task as is from the plan.
-
-Be sure to follow these rules when deciding the next action:
-
-###Rules:
-- You must check if there are any pending tasks in the plan.
-- You must check if any tasks have been completed.
-- You must check the results of completed tasks to inform your decision.
-- You must check task dependencies before delegating a task.
-- You must always consider the overall goal when deciding the next action.
-- You must prioritize tasks that unblock progress towards the goal.
-- You must delegate tasks to sub-agents based on their capabilities.
-- You must not delegate tasks that have already been completed.
-- You must provide a clear reasoning summary for your decision.
-- You must only output a single NextAction object in your response. 
-
-Do not include any additional text or explanation.
-Do not output anything other than the NextAction object.
-Do not modify the plan directly.
-
-
-If you decide to delegate a task, specify the target_agent and any necessary payload for the agent. When delegating, pick a task from the plan that is pending and whose dependencies have been met.
-
-Output a valid NextAction object only.
-"""
-
 GENERIC_SUB_AGENT_SYSTEM_PROMPT = """
 You are a sub-agent in a deep agent system.
 Your job is to complete the task assigned to you by the supervisor agent.
@@ -426,9 +394,23 @@ class DeepAgent:
             print(f"\n--- Supervisor Step {step + 1} ---")
             supervisor_response = supervisor_agent.run_sync(deps=runtime_state).output
 
+            if supervisor_response.action_type == "complete":
+                print("All tasks completed. Exiting.")
+                break
+            elif supervisor_response.action_type == "delegate":
+                task_to_delegate = supervisor_response.task_spec
+                if not task_to_delegate:
+                    print("No task specified for delegation. Exiting.")
+                    break
+                # Generate sub-agent instructions
+                subagent_instructions = self._generate_subagent_instructions(
+                    goal=runtime_state.goal,
+                    task=task_to_delegate,
+                )
+                print("\n--- Sub-Agent Instructions ---")
+
             # Here you would create and run the sub-agent based on the instructions
             # For simplicity, we will just print the instructions for now
-            print("Supervisor Response:", supervisor_response)
             step += 1
 
 
