@@ -125,38 +125,34 @@ def _default_tool_registry():
     }
 
 
-def supervisor_system_prompt(ctx: RunContext[RuntimeState]) -> str:
+def system_prompt(self, ctx: RunContext[RuntimeState]) -> str:
     return f"""You are the supervisor agent in a deep agent system.
-Your job is to manage and delegate tasks to sub-agents to achieve the overall goal.
+    Your job is to manage and delegate tasks to sub-agents and tools to achieve the overall goal.
 
-You have the following runtime state:
+    Job plan:
 
-{ctx.agent_state.model_dump_json(indent=2)}
+    {ctx.deps.plan}
 
-Based on this information, you must decide the next action to take. You must not modify the tasks if you decide to delegate a task. You must pick the task as is from the plan.
+    You have the following capabilities available to use:
 
-Be sure to follow these rules when deciding the next action:
+    {ctx.deps.agent_registry.keys()}
 
-###Rules:
-- You must check if there are any pending tasks in the plan.
-- You must check if any tasks have been completed.
-- You must check the results of completed tasks to inform your decision.
-- You must check task dependencies before delegating a task.
-- You must always consider the overall goal when deciding the next action.
-- You must prioritize tasks that unblock progress towards the goal.
-- You must delegate tasks to sub-agents based on their capabilities.
-- You must not delegate tasks that have already been completed.
-- You must provide a clear reasoning summary for your decision.
-- You must only output a single NextAction object in your response. 
+    Based on this information, you must decide the next action to take. You must not modify the tasks if you decide to delegate a task. You must pick the task as is from the plan.
 
-Do not include any additional text or explanation.
-Do not output anything other than the NextAction object.
-Do not modify the plan directly.
+    Be sure to follow these rules when deciding what to do:
 
-If you decide to delegate a task, specify the target_agent and any necessary payload for the agent. When delegating, pick a task from the plan that is pending and whose dependencies have been met.
+    ###Rules:
+    - You must check if there are any pending tasks in the plan.
+    - You must check if any tasks have been completed.
+    - You must check the results of completed tasks to inform your decision.
+    - You must check task dependencies before delegating a task.
+    - You must always consider the overall goal when deciding the next action.
+    - You must prioritize tasks that unblock progress towards the goal.
+    - You must delegate tasks to sub-agents based on their capabilities.
+    - You must not delegate tasks that have already been completed.
 
-Output a valid NextAction object only.
-"""
+    Decide which capability to use that are available to you.
+    """
 
 
 class SubAgentInstruction(BaseModel):
@@ -167,7 +163,7 @@ class SubAgentInstruction(BaseModel):
 class TaskSpec(BaseModel):
     task_id: str
     objective: str
-    capability: Literal["research", "analysis", "synthesis"]
+    capability: Literal["researcher", "writer", "synthesizer"]
     inputs: dict
     success_criteria: str
     constraints: list[str]
@@ -201,7 +197,7 @@ def __subagent_instruction_writer(goal: str, taskspec: TaskSpec) -> SubAgentInst
         deps_type=TaskSpec,
     )
 
-    return __subagent_writer_agent.run_sync(subagent_task_instructions).output
+    return None
 
 
 class SupervisorSpec:
@@ -215,7 +211,7 @@ Job plan:
 
 You have the following capabilities available to use:
 
-{ctx.dep.agent_registory.keys()}
+{ctx.deps.agent_registry.keys()}
 
 Based on this information, you must decide the next action to take. You must not modify the tasks if you decide to delegate a task. You must pick the task as is from the plan.
 
