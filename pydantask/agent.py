@@ -23,6 +23,17 @@ from .prompts import PLANNER_SYSTEM_PROMPT, SUPERVISOR_SYSTEM_PROMPT
 from dotenv import load_dotenv
 
 load_dotenv()
+from langfuse import get_client
+
+langfuse = get_client()
+
+# Verify connection
+if langfuse.auth_check():
+    print("Langfuse client is authenticated and ready!")
+else:
+    print("Authentication failed. Please check your credentials and host.")
+
+Agent.instrument_all()
 
 
 class TaskItem(BaseModel):
@@ -45,7 +56,7 @@ class TaskItem(BaseModel):
 # Planner state models
 # =========================
 class Plan(BaseModel):
-    tasks: List[TaskItem] = Field(default_factory=list)
+    tasks: list[TaskItem]
 
 
 # class RuntimeState(BaseModel):
@@ -201,37 +212,28 @@ class TaskSpec(BaseModel):
 
 
 class SupervisorSpec:
-    def system_prompt(self, ctx: RunContext) -> str:
+    def system_prompt(self, ctx: RunContext[RuntimeState]) -> str:
+        print("SYSTEM PROMPT")
         return f"""You are the supervisor agent in a deep agent system.
 Your job is to manage and delegate tasks to sub-agents and tools to achieve the overall goal.
 
-Job plan:
+Job plan from planning agent:
 
 {ctx.deps.plan}
 
-You have the following capabilities available to use:
+You have the following capabilities tied to agents available to use:
 
-{ctx.deps.agent_registry.keys()}
+{ctx.deps.agent_registry}
 
-Based on this information, you must decide the next action to take. You must not modify the tasks if you decide to delegate a task. You must pick the task as is from the plan.
+You must reason out and decide which task from the plan to run and use the call_worker tool to call the worker to run said task.
+If a task is completed use the update_state 
 
-Be sure to follow these rules when deciding the next action:
-
-###Rules:
-- You must check if there are any pending tasks in the plan.
-- You must check if any tasks have been completed.
-- You must check the results of completed tasks to inform your decision.
-- You must check task dependencies before delegating a task.
-- You must always consider the overall goal when deciding the next action.
-- You must prioritize tasks that unblock progress towards the goal.
-- You must delegate tasks to sub-agents based on their capabilities.
-- You must not delegate tasks that have already been completed.
-- You must provide a clear reasoning summary for your decision.
-- You must only output a single NextAction object in your response. 
-
-Do not include any additional text or explanation.
-Do not output anything other than the NextAction object.
-Do not modify the plan directly.
+Think step by step keeping the following rules in mind:
+1. Reason out why you need to call a capability
+2. Come up with an instruction to give to the capability
+3. Make sure that the instruction you give is related to the task.
+4. When reviewing a sub agent or tools response be sure it solves the task that was given. 
+5. If the response from a sub agent or tool does not solve the task, attempt to retry, otherwise set the task to 'failed'
 """
 
     # def tools(self):
@@ -265,22 +267,9 @@ class SearchQuery(BaseModel):
     search_query: str
 
 
-api_key = os.getenv("TAVILY_API_KEY")
-assert api_key is not None
-
-# A "Thin" Agent that just wraps a tool
-web_agent = Agent(
-    "gpt-4.1-mini",  # Use a cheap model for simple tasks
-    system_prompt="You are a search specialist. When given a task, follow these steps: "
-    "1. Generate 3 specific search queries to cover the topic. "
-    "2. Call the search tool for each query. "
-    "3. Summarize the findings into a clear report.",
-    tools=[tavily_search_tool(api_key)],
-    output_type=str,
-)
-
 synth_agent_sys_prompt = """
-You take information from various sources and synthesize a response"""
+You take information from various sources and synthesize a response for the goal
+"""
 
 
 class DeepAgent:
@@ -311,16 +300,31 @@ class DeepAgent:
         # Planner agent to break down the goal into tasks
         # Supervisor agent to manage todos and delegate tasks
         self._planner_agent = Agent(
-            model=model, system_prompt=PLANNER_SYSTEM_PROMPT, output_type=Plan
+            model=self.model, system_prompt=PLANNER_SYSTEM_PROMPT, output_type=Plan
         )
 
     def _setup_default_agents(self):
+
+        api_key = os.getenv("TAVILY_API_KEY")
+        assert api_key is not None
+
         synthesizer = Agent(
             "gpt-4.1-mini",
-            system_prompt=synth_agent_sys_prompt,
+            instructions=synth_agent_sys_prompt,
             output_type=str,
         )
-        return {"researcher": web_agent, "synthesizer": synthesizer}
+
+        # A "Thin" Agent that just wraps a tool
+        researcher_agent = Agent(
+            "gpt-4.1-mini",  # Use a cheap model for simple tasks
+            instructions="You are a research specialist. When given a task, follow these steps: "
+            "1. Generate 3 specific search queries to cover the topic. "
+            "2. Call the search tool for each query. "
+            "3. Summarize the findings into a clear report.",
+            tools=[tavily_search_tool(api_key)],
+            output_type=str,
+        )
+        return {"researcher": researcher_agent, "synthesizer": synthesizer}
 
     def _create_supervisor(self, tools=None, model="openai:gpt-4.1-mini") -> Agent:
         spec = SupervisorSpec()
@@ -336,15 +340,17 @@ class DeepAgent:
 
         return agent
 
-    def _initialize_runtime_state(self, plan: Plan, goal: str) -> RuntimeState:
+    def _initialize_runtime_state(
+        self, plan: Plan, goal: str, registry: dict
+    ) -> RuntimeState:
         # Logic to initialize and manage the runtime state
-        return RuntimeState(plan=plan, goal=goal)
+        return RuntimeState(plan=plan, goal=goal, agent_registry=registry)
 
     def run(self):
         # Start the supervisor agent to manage sub-agents
         # state = RuntimeState(goal=self.prompt)
         agent_plan = self._planner_agent.run_sync(self.prompt).output
-
+        print(agent_plan)
         # Run the supervisor to decide next actions from the plan
         # self._apply_action(supervisor_response, state)
         for todo in agent_plan.tasks:
@@ -354,13 +360,14 @@ class DeepAgent:
 
         # now save the plan to the agent state
         runtime_state = self._initialize_runtime_state(
-            plan=agent_plan, goal=self.prompt
+            plan=agent_plan, goal=self.prompt, registry=self.agent_registry
         )
 
         print("\n--- Initial Runtime State ---")
         print(runtime_state)
-        supervisor_agent = self._create_supervisor(tools=[self.call_worker])
-
+        supervisor_agent = self._create_supervisor(
+            tools=[self.call_worker, self.update_task_status]
+        )
         # plan = planner(current_state)
         # for step in plan:
         #     result = executor.run(step)
@@ -368,18 +375,14 @@ class DeepAgent:
         #     if supervisor.detects_issue(result):
         #         supervisor.correct(step, current_state)
 
-        step = 0
-        while step < self._max_steps or runtime_state.tokens_used < self.token_budget:
-            print(f"\n--- Supervisor Step {step + 1} ---")
-            supervisor_response = supervisor_agent.run_sync(
-                "Execute the plan given the runtime state and knowledge you know.",
-                deps=runtime_state,
-            ).output
-            print(supervisor_response)
-            break
-            # Here you would create and run the sub-agent based on the instructions
-            # For simplicity, we will just print the instructions for now
-            step += 1
+        supervisor_response = supervisor_agent.run_sync(
+            "Execute the plan given the runtime state and knowledge you know.",
+            deps=runtime_state,
+        ).output
+        print(supervisor_response)
+
+        # Here you would create and run the sub-agent based on the instructions
+        # For simplicity, we will just print the instructions for now
 
     # Tools used by the supervisor or planner agents
     async def get_system_time(self, ctx: RunContext[RuntimeState]) -> str:
@@ -387,6 +390,15 @@ class DeepAgent:
         from datetime import datetime
 
         return datetime.now().isoformat()
+
+    async def review_plan(self, ctx: RunContext[RuntimeState]):
+        """Tool to review the current state of the plan."""
+        return f"Current state of the plan: {ctx.deps.plan}"
+
+    async def update_knowledge(
+        self, capabiliity, answer, ctx: RunContext[RuntimeState]
+    ):
+        """Updates the knowledge runtime state with any new knowledge that is needed to answer a goal or task"""
 
     async def execute_ready_tasks(self, ctx: RunContext[RuntimeState]) -> str:
         """Finds all tasks that are ready to run and executes them in parallel."""
@@ -420,7 +432,7 @@ class DeepAgent:
 
     async def search_web(self, search_query):
         """Take a search query and search the internet for information to solve a research / task need."""
-        return await web_agent.run(search_query).output
+        return await res.run(search_query).output
 
     async def run_and_update_step(self, worker, step):
         """Helper to run an agent and capture its output into the step object."""
@@ -433,29 +445,15 @@ class DeepAgent:
             step.status = "failed"
             return f"Step {step.label} failed: {str(e)}"
 
-    def update_step_status(
-        ctx: RunContext[RuntimeState],
-        step_id: int,
-        status: Literal["pending", "completed", "failed"],
-        output: str | None = None,
-    ) -> str:
-        """Updates the status and output of a specific step in the plan."""
-        plan = ctx.deps.plan
-        for step in plan.tasks:
-            if step.id == step_id:
-                step.status = status
-                if output:
-                    step.output = output
-                return f"Step {step_id} updated to {status}."
-        return f"Error: Step {step_id} not found."
-
     # 1. ATOMIC TOOLS (The Manager's "Desk Tools")
-    def update_task_status(
+    async def update_task_status(
         self, ctx: RunContext[RuntimeState], step_id: int, status: str
     ):
         """Directly updates the plan. No other agent needed."""
-        ctx.deps.plan.get_step(step_id).status = status
-        return f"Status for {step_id} is now {status}."
+        for step_id in ctx.deps.plan.tasks:
+            ctx.deps.plan.tasks.get(step_id).status = status
+            return f"Status for {step_id} is now {status}."
+        return f"Error: No step with {step_id} found in plan. Be sure status_id actually exists."
 
     # 2. THE BRIDGE TOOL (The Manager's "Phone")
     async def call_worker(
@@ -467,19 +465,19 @@ class DeepAgent:
 
         if not worker_agent:
             return f"Error: No specialist found for '{capability}'."
-
+        print(f"AGENT: {capability} INSTRUCTION: {instruction}")
         # Trigger the deep reasoning loop of the sub-agent
         result = await worker_agent.run(instruction)
-
+        print(result)
         # Return just the result to the Supervisor
-        return result.data
+        return result
 
 
 # print(web_agent.run_sync("Look up top tourist locations japan").output)
 
-agent = DeepAgent(
-    "Help me plan a trip to japan. I want to see cultural sites, tourist sites, and eat good food.",
-    "gpt-4.1-mini",
-    max_steps=2,
-)
-agent.run()
+# agent = DeepAgent(
+#     "Help me plan a trip to japan. I want to see cultural sites, tourist sites, and eat good food.",
+#     "gpt-4.1-mini",
+#     max_steps=2,
+# )
+# agent.run()

@@ -53,7 +53,6 @@ Do not modify the plan directly.
 
 If you decide to delegate a task, specify the target_agent and any necessary payload for the agent. When delegating, pick a task from the plan that is pending and whose dependencies have been met.
 
-Output a valid NextAction object only.
 """
 
 GENERIC_SUB_AGENT_SYSTEM_PROMPT = """
