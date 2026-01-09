@@ -40,7 +40,6 @@ class TaskItem(BaseModel):
     id: str
     description: str
     status: str = "pending"
-    owner: Optional[str] = None
     capability: Literal[
         "researcher",
         "writer",
@@ -49,7 +48,10 @@ class TaskItem(BaseModel):
         # "creative_problem_solving",
         # "collaboration",
     ] = "research"
-    task_dependencies: Optional[List[int]] = Field(default_factory=list)
+    task_dependencies: Optional[List[int]] = Field(description="Put task dependency IDs here",default_factory=list)
+    review_feedback: Optional[str] = None  # Store the "critique" here
+    attempt_count: int = 0
+    max_attempts: int = 3
 
 
 # =========================
@@ -80,22 +82,22 @@ class Plan(BaseModel):
 
 
 class ResearchResult(BaseModel):
-    findings: list[str]
+    summary: str
+    information: list[str]
     sources: list[str]
-    confidence: float
 
 
 class RuntimeState(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    plan: Dict[str, TaskItem]
+    
+    plan: list[TaskItem]
     agent_registry: Dict[str, Any] = Field(default_factory=dict, exclude=True)
     completed_steps: set[int] = Field(default_factory=set)
     research_results: Dict[int, ResearchResult] = Field(default_factory=dict)
-    knowledge_store: Dict[str, str] = Field(
+    accumulated_knowledge_store: Dict[str, str] = Field(
         default_factory=dict
     )  # store for accumulated knowledge
-    iteration: int = 0
+    runtime_steps: int = 0
     tokens_used: int = 0
     tool_available: Literal["research_agent", "writer_agent", "web_search"] = (
         "web_search"
@@ -108,19 +110,11 @@ class RuntimeState(BaseModel):
 class NextAction(BaseModel):
     """Next action to be taken by the supervisor agent."""
 
-    reasoning_summary: str
+    reasoning: str
     action_type: Literal["delegate", "complete"]
     target_agent: Optional[str] = None
     task_spec: Optional[TaskItem] = None
 
-
-# =========================
-# Supervisor input/output
-# =========================
-class SupervisorDeps(BaseModel):
-    goal: str
-    plan: Plan
-    last_event: Optional[str] = None
 
 
 def _default_tool_registry():
@@ -180,36 +174,37 @@ class TaskSpec(BaseModel):
     constraints: list[str]
     overall_goal: str
 
+class ToolResult(BaseModel):
+    result: str
+    
 
-# def __subagent_instruction_writer(goal: str, taskspec: TaskSpec) -> SubAgentInstruction:
-#     """Write instructions for the sub-agent that explains its task in detail and how it acheives the overall goal.
-#     return str: Instructions for the sub-agent.
-#     """
-#     subagent_task_instructions = f"""
-#     You are a sub-agent task writer in a deep agent system.
-#     You take the goal and a task specification
-#     and use your capabilities to write clear instructions that the supervisor can give to a sub-agent to complete the task.
+class SupervisorSpecv2:
+    def system_prompt(self, ctx: RunContext[RuntimeState]) -> str:
+        return f"""
+        You are a supervisor of a plan to perform a goal. You must execute the 
+        plan as described and only make modifications or update the plan
+        if there are issues in completeing steps or needing to do more work.
+        Goal: {ctx.deps.goal}
 
-#     The overall goal is: {goal}
+        --- OPERATIONAL STATE ---
+        CURRENT PLAN:
+        {json.dumps({k: v.model_dump() for k, v in ctx.deps.plan.items()}, indent=2)}
 
-#     The task specification is: {taskspec.model_dump_json(indent=2)}
+        KNOWLEDGE STORE (What we know so far):
+        {ctx.deps.knowledge_store}
 
-#     To achieve this task, you should:
-#     1. Understand the overall goal and how your task contributes to it.
-#     2. Use your capabilities to complete the task effectively.
-#     3. Report your findings or results back to the supervisor agent.
-#     4. Ensure that your work aligns with the overall goal.
-#     5. If you encounter any challenges, think creatively to overcome them.
-#     Good luck!"""
+        --- YOUR RESPONSIBILITIES ---
+        1. ANALYZE: Which tasks are 'pending' and have their dependencies 'completed'?
+        2. EVALUATE: Look at the Knowledge Store. Is there enough info to skip a task or does a task need revision?
+        3. DELEGATE: Use 'call_worker' for the next logical task. 
+        4. REFLECT: When a worker returns data, you must decide: Is it good enough? If not, use feedback to ask for a retry.
+        5. EVOLVE: If you discover a new sub-goal is needed, use 'add_task_to_plan'.
 
-#     __subagent_writer_agent = Agent(
-#         model="gpt-4.1-mini",
-#         output_type=SubAgentInstruction,
-#         deps_type=TaskSpec,
-#     )
-
-#     return None
-
+        --- RULES ---
+        - Do not perform work yourself. Delegate it to the appropriate capability worker.
+        - If a worker fails, analyze the error and decide to retry or fail the task.
+        - Once the goal is fully satisfied, provide the final synthesis.
+        """
 
 class SupervisorSpec:
     def system_prompt(self, ctx: RunContext[RuntimeState]) -> str:
@@ -273,6 +268,13 @@ synth_agent_sys_prompt = """
 You take information from various sources and synthesize a response for the goal
 """
 
+critic_agent = Agent(
+    'gpt-4o', # Use a smarter model for the critic than the worker
+    system_prompt="""You are a Quality Assurance specialist. 
+    Compare the Worker's Output against the Original Task. 
+    Look for: Missing details, hallucinations, or lack of depth.
+    If it's perfect, say 'APPROVED'. Otherwise, list what needs to change."""
+)
 
 class DeepAgent:
     """DeepDantic AI Agent that manages sub-agents to achieve complex goals."""
@@ -363,12 +365,6 @@ class DeepAgent:
         supervisor_agent = self._create_supervisor(
             tools=[self.call_worker, self.update_task_status]
         )
-        # plan = planner(current_state)
-        # for step in plan:
-        #     result = executor.run(step)
-        #     supervisor.observe(step, result)
-        #     if supervisor.detects_issue(result):
-        #         supervisor.correct(step, current_state)
 
         supervisor_response = supervisor_agent.run_sync(
             "Execute the plan given the runtime state and knowledge you know.",
@@ -386,6 +382,28 @@ class DeepAgent:
 
         return datetime.now().isoformat()
 
+    async def review_worker_output(
+        self, ctx: RunContext[RuntimeState], task_id: str, worker_output: str
+    ):
+        task = ctx.deps.plan[task_id]
+        task.attempt_count += 1
+
+        # Call the separate Critic Agent
+        critic_report = await critic_agent.run(f"Goal: {task.description}\nResult: {worker_output}")
+
+        if "APPROVED" in critic_report.data.upper():
+            ctx.deps.knowledge_store[task_id] = worker_output
+            task.status = "completed"
+            return f"Task {task_id} approved after {task.attempt_count} attempts."
+        
+        if task.attempt_count >= task.max_attempts:
+            task.status = "failed"
+            return f"Task {task_id} failed after maximum revision attempts."
+
+        # Otherwise, set up for revision
+        task.status = "requires_revision"
+        task.review_feedback = critic_report.data
+        return f"Revision requested for {task_id}. Feedback: {critic_report.data}"
     async def review_plan(self, ctx: RunContext[RuntimeState]):
         """Tool to review the current state of the plan."""
         return f"Current state of the plan: {ctx.deps.plan}"
@@ -454,6 +472,9 @@ class DeepAgent:
             return f"Status for {step_id} is now {status}."
         return f"Error: No step with {step_id} found in plan. Be sure status_id actually exists."
 
+    async def store_tool_result(self, capability, tool_result, ctx:RunContext[RuntimeState]):
+
+        
     # 2. THE BRIDGE TOOL (The Manager's "Phone")
     async def call_worker(
         self, ctx: RunContext[RuntimeState], capability: str, instruction: str
