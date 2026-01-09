@@ -183,7 +183,8 @@ class SupervisorSpecv2:
         return f"""
         You are a supervisor of a plan to perform a goal. You must execute the 
         plan as described and only make modifications or update the plan
-        if there are issues in completeing steps or needing to do more work.
+        if there are issues in completing steps or needing to do more work.
+        
         Goal: {ctx.deps.goal}
 
         --- OPERATIONAL STATE ---
@@ -192,6 +193,13 @@ class SupervisorSpecv2:
 
         KNOWLEDGE STORE (What we know so far):
         {ctx.deps.knowledge_store}
+
+        --- YOUR OPERATIONAL MANDATE ---
+        1. Identify the next unblocked task in the Plan.
+        2. Delegate that task using the 'call_worker' tool.
+        3. Once you receive the result (Verified/Failed), update the state.
+        4. IMPORTANT: After updating the state for ONE task, stop and provide a brief status update. 
+        5. DO NOT attempt to run the entire plan in one turn.
 
         --- YOUR RESPONSIBILITIES ---
         1. ANALYZE: Which tasks are 'pending' and have their dependencies 'completed'?
@@ -204,6 +212,10 @@ class SupervisorSpecv2:
         - Do not perform work yourself. Delegate it to the appropriate capability worker.
         - If a worker fails, analyze the error and decide to retry or fail the task.
         - Once the goal is fully satisfied, provide the final synthesis.
+
+        --- TERMINATION CRITERIA ---
+        - When ALL tasks in the plan are 'completed', call 'generate_final_output' and return the result as your final answer.
+        - If a critical task is 'failed' and cannot be recovered, explain the blocker to the user.
         """
 
 class SupervisorSpec:
@@ -258,6 +270,7 @@ from pydantic_ai.common_tools.tavily import (
     TavilySearchResult,
     tavily_search_tool,
 )
+
 
 
 class SearchQuery(BaseModel):
@@ -360,16 +373,18 @@ class DeepAgent:
         runtime_state = self._initialize_runtime_state(
             plan=agent_plan_map, goal=self.prompt, registry=self.agent_registry
         )
-
-        print("\n--- Initial Runtime State ---")
         supervisor_agent = self._create_supervisor(
             tools=[self.call_worker, self.update_task_status]
         )
+        
+        step_count = 0
+        while step_count < self._max_steps:
+            print(f"\n--- DeepAgent Cycle {step_count} ---")
 
-        supervisor_response = supervisor_agent.run_sync(
-            "Execute the plan given the runtime state and knowledge you know.",
-            deps=runtime_state,
-        )
+            supervisor_response = supervisor_agent.run_sync(
+                "Execute the plan given the runtime state and knowledge you know.",
+                deps=runtime_state,
+            )
         return supervisor_response
 
         # Here you would create and run the sub-agent based on the instructions
@@ -462,7 +477,7 @@ class DeepAgent:
         "Tool to reflect on if work has been completed."
         return f"{reflection}"
 
-    # 1. ATOMIC TOOLS (The Manager's "Desk Tools")
+    
     async def update_task_status(
         self, ctx: RunContext[RuntimeState], step_id: str, status: str
     ):
@@ -475,7 +490,6 @@ class DeepAgent:
     async def store_tool_result(self, capability, tool_result, ctx:RunContext[RuntimeState]):
 
         
-    # 2. THE BRIDGE TOOL (The Manager's "Phone")
     async def call_worker(
         self, ctx: RunContext[RuntimeState], capability: str, instruction: str
     ):
