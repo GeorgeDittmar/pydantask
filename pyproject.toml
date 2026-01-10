@@ -7,5 +7,6 @@ dependencies = [
     "pydantic>=2.12.5",
     "pydantic-ai>=1.32.0",
     "pydantic-graph>=1.32.0",
+    "pytest>=9.0.2",
     "tavily>=1.1.0",
 ]

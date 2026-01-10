@@ -14,7 +14,7 @@ import asyncio
 from pydantic_ai import RunContext
 from pydantic_ai.common_tools.tavily import tavily_search_tool
 from .prompts import PLANNER_SYSTEM_PROMPT, SUPERVISOR_SYSTEM_PROMPT
-from .models import RuntimeState, TaskItem
+from .models import RuntimeState, TaskItem, Plan
 
 from pydantic_ai.common_tools.tavily import (
     TavilySearchTool,
@@ -321,6 +321,7 @@ class DeepAgent:
                 "Execute the plan given the runtime state and knowledge you know.",
                 deps=runtime_state,
             )
+            step_count += 1
         return supervisor_response
 
         # Here you would create and run the sub-agent based on the instructions
@@ -423,8 +424,6 @@ class DeepAgent:
             return f"Status for {step_id} is now {status}."
         return f"Error: No step with {step_id} found in plan. Be sure status_id actually exists."
 
-    async def store_tool_result(self, capability, tool_result, ctx:RunContext[RuntimeState]):
-
         
     async def call_worker(
         self, ctx: RunContext[RuntimeState], capability: str, instruction: str
@@ -440,13 +439,3 @@ class DeepAgent:
         result = await worker_agent.run(instruction)
         # Return just the result to the Supervisor
         return result
-
-
-# print(web_agent.run_sync("Look up top tourist locations japan").output)
-
-# agent = DeepAgent(
-#     "Help me plan a trip to japan. I want to see cultural sites, tourist sites, and eat good food.",
-#     "gpt-4.1-mini",
-#     max_steps=2,
-# )
-# agent.run()
