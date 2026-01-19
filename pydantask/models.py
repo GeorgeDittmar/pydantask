@@ -2,24 +2,47 @@ from typing import Literal, List
 from enum import Enum
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Literal, Any, Dict
+from datetime import datetime
 
+class TaskStatus(Enum):
+    PENDING = "pending"  # Waiting for dependencies
+    READY = "ready"  # Dependencies met, can run now
+    RUNNING = "running"  # Currently being executed
+    COMPLETED = "completed"
+    FAILED = "failed"  # Evaluator rejected it
+
+class VerifiedSegment(BaseModel):
+    segment_id: str
+    content: str
+    is_valid: bool
+    reason: Optional[str] = None # Why it failed, if it did
+
+class PartialEvaluation(BaseModel):
+    all_passed: bool
+    segments: List[VerifiedSegment]
+    summary_feedback: str # Instructions for the next iteration
+    
+class TaskIteration(BaseModel):
+    timestamp: datetime = Field(default_factory=datetime.now)
+    output: Any
+    evaluation: Optional[PartialEvaluation] = None
+    prompt_used: str
+    
 
 class TaskItem(BaseModel):
     id: str
     description: str
-    status: str = "pending"
-    capability: Literal[
-        "researcher",
-        "writer",
-        "synthesiser",
-        # "external_interaction",
-        # "creative_problem_solving",
-        # "collaboration",
-    ] = "research"
+    status: TaskStatus
+    capability: str
     task_dependencies: Optional[List[int]] = Field(description="Put task dependency IDs here",default_factory=list)
     review_feedback: Optional[str] = None  # Store the "critique" here
+    iteration_history = list[]
     attempt_count: int = 0
     max_attempts: int = 3
+
+    @property
+    def latest_output(self):
+        return self.history[-1].output if self.history else None
 
 class ResearchResult(BaseModel):
     summary: str
@@ -29,7 +52,7 @@ class ResearchResult(BaseModel):
 class RuntimeState(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     
-    plan: list[TaskItem]
+    plan: Dict[str, TaskItem]
     agent_registry: Dict[str, Any] = Field(default_factory=dict, exclude=True)
     completed_steps: set[int] = Field(default_factory=set)
     research_results: Dict[int, ResearchResult] = Field(default_factory=dict)
