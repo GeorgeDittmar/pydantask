@@ -8,20 +8,19 @@ from os import system
 from enum import Enum
 from pydantic_ai import Agent, RunContext, FunctionToolset
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional, Literal, Any, Dict, Callable
+from typing import List, Optional, Literal, Any, Dict, Callable, Union
 
 import asyncio
 from pydantic_ai import RunContext
 from pydantic_ai.common_tools.tavily import tavily_search_tool
 from .prompts import PLANNER_SYSTEM_PROMPT, SUPERVISOR_SYSTEM_PROMPT
-from .models import RuntimeState, TaskItem, Plan, TaskStatus
+from .models import RuntimeState, TaskItem, Plan, TaskStatus, ToolDescription, AgentDescription
 from default_tools import write_to_file_system, read_from_file_system
 
 from pydantic_ai.common_tools.tavily import (
     tavily_search_tool,
 )
 
-from pydantic_ai.common_tools import 
 
 # =========================
 # Runtime state models
@@ -228,7 +227,7 @@ class DeepAgent:
             model=self.model, system_prompt=PLANNER_SYSTEM_PROMPT, output_type=Plan
         )
 
-    def _setup_default_tools(self, tools: list[Callable]):
+    def _setup_default_tools(self, tools: list[Union[ToolDescription, AgentDescription]]):
 
         api_key = os.getenv("TAVILY_API_KEY", "")
         assert api_key is not None
@@ -312,10 +311,13 @@ class DeepAgent:
             # Setup up this iterations supervisor instruction
             super_inst = f"""
 
-                Based on the current job plan and status of tasks, determine next step or steps to take
+                Based on the current job plan and status of tasks, determine next step or steps to take. 
 
-                Job plan:
-                {runtime_state.plan}
+                <plan>
+                
+                    {runtime_state.plan}
+
+                </plan>
                 """
             supervisor_response = supervisor_agent.run_sync(
                 "Execute the plan given the runtime state and knowledge you know.",

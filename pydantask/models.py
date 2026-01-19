@@ -64,7 +64,7 @@ class RuntimeState(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     
     plan: Dict[str, TaskItem]
-    agent_registry: Dict[str, Any] = Field(default_factory=dict, exclude=True)
+    capability_registry: Dict[str, Any] = Field(default_factory=dict, exclude=True)
     completed_steps: set[int] = Field(default_factory=set)
     research_results: Dict[int, ResearchResult] = Field(default_factory=dict)
     accumulated_knowledge_store: Dict[str, str] = Field(
@@ -72,9 +72,6 @@ class RuntimeState(BaseModel):
     )  # store for accumulated knowledge
     runtime_steps: int = 0
     tokens_used: int = 0
-    tool_available: Literal["research_agent", "writer_agent", "web_search"] = (
-        "web_search"
-    )
     goal: str 
 
 class SupervisorDecision(BaseModel):
