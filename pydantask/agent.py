@@ -14,7 +14,14 @@ import asyncio
 from pydantic_ai import RunContext
 from pydantic_ai.common_tools.tavily import tavily_search_tool
 from .prompts import PLANNER_SYSTEM_PROMPT, SUPERVISOR_SYSTEM_PROMPT
-from .models import RuntimeState, TaskItem, Plan, TaskStatus, ToolDescription, AgentDescription
+from .models import (
+    RuntimeState,
+    TaskItem,
+    Plan,
+    TaskStatus,
+    ToolDescription,
+    AgentDescription,
+)
 from default_tools import write_to_file_system, read_from_file_system
 
 from pydantic_ai.common_tools.tavily import (
@@ -205,7 +212,7 @@ class DeepAgent:
         critic_model="gpt-4.1-mini",
         max_steps=3,
         token_budget=20000,
-        tools: list[Callable] 
+        tools: Union[None, list[Union[ToolDescription, AgentDescription]]] = None,
     ):
         """
         DeepAgent constructor. Creates a DeepDantic AI Agent.
@@ -220,14 +227,14 @@ class DeepAgent:
         self._max_steps = max_steps  # Max steps to prevent infinite loops
         self.token_budget = token_budget  # Token budget for the agent's operations
         self.agent_registry = self._setup_default_tools(tools=tools)
-        # Initialize planner and supervisor agents
-        # Planner agent to break down the goal into tasks
-        # Supervisor agent to manage todos and delegate tasks
+
         self._planner_agent = Agent(
             model=self.model, system_prompt=PLANNER_SYSTEM_PROMPT, output_type=Plan
         )
 
-    def _setup_default_tools(self, tools: list[Union[ToolDescription, AgentDescription]]):
+    def _setup_default_tools(
+        self, tools: Union[None, list[Union[ToolDescription, AgentDescription]]] = None
+    ):
 
         api_key = os.getenv("TAVILY_API_KEY", "")
         assert api_key is not None
@@ -236,6 +243,10 @@ class DeepAgent:
             "gpt-4.1-mini",
             instructions=synth_agent_sys_prompt,
             output_type=str,
+        )
+        synthesizer = AgentDescription(
+            description="Agent to generate answers based on information for a goal.",
+            agent_func=synthesizer_agent,
         )
 
         # A "Thin" Agent that just wraps a tool
@@ -249,6 +260,11 @@ class DeepAgent:
             output_type=str,
         )
 
+        researcher = AgentDescription(
+            description="Agent to perform research tasks which could include searching the web or a data source.",
+            agent_func=researcher_agent,
+        )
+
         file_system_agent = Agent(
             self.model,
             instructions="You have access to a file system to use for tasks that need to be completed. \
@@ -256,17 +272,19 @@ class DeepAgent:
             You may also write output for the user to the file system",
             tools=[write_to_file_system, read_from_file_system],
         )
-        _tools = [synthesizer_agent, researcher_agent, file_system_agent]
-        # check if there are user tools to add to the tool list
-        if len(tools) > 0:
-            _tools.extend(tools)
-            
+
+        file_system = AgentDescription(
+            description="Agent to interact with the file system in some way.",
+            agent_func=file_system_agent,
+        )
+
+        _tools = [synthesizer, researcher, file_system]
+
+        _tool_registry = {uuid.uuid4(): tool for tool in _tools}
+        print(_tool_registry)
+
         # each agent gets its own unique id
-        return {
-            "researcher_agent": researcher_agent,
-            "synthesizer_agent": synthesizer_agent,
-            "file_system_agent": file_system_agent,
-        }
+        return _tool_registry
 
     def _create_supervisor(self, tools=None, model="openai:gpt-4.1-mini") -> Agent:
         spec = SupervisorSpec()

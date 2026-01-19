@@ -18,7 +18,7 @@ Be sure to follow these rules when creating the tasks:
 There are several types of tasks you can create based on the capabilities of your sub-agents.
 
 ###Capabilities:
-- You can create tasks that require 'research' or 'synthesis' of information.
+- You can create tasks that utilize capabilities that are available.
 - You can create tasks that require interaction with external systems or APIs.
 - You can create tasks that require creative problem solving or ideation.
 - You can create tasks that require collaboration with other agents.
