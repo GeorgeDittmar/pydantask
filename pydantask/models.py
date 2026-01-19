@@ -1,8 +1,9 @@
 from typing import Literal, List
 from enum import Enum
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional, Literal, Any, Dict
+from typing import List, Optional, Literal, Any, Dict, Callable
 from datetime import datetime
+from pydantic_ai import Agent
 
 class TaskStatus(Enum):
     PENDING = "pending"  # Waiting for dependencies
@@ -44,6 +45,16 @@ class TaskItem(BaseModel):
     def latest_output(self):
         return self.history[-1].output if self.history else None
 
+# Tool Desription Object
+class ToolDescription(BaseModel):
+    description: str
+    tool_func: Callable
+    
+# Agent Description Object
+class AgentDescription(BaseModel):
+    description: str
+    agent_func: Agent
+
 class ResearchResult(BaseModel):
     summary: str
     information: list[str]
@@ -64,9 +75,7 @@ class RuntimeState(BaseModel):
     tool_available: Literal["research_agent", "writer_agent", "web_search"] = (
         "web_search"
     )
-    goal: str = Field(
-        default="Perform a websearch for microsoft and tell me what you know."
-    )
+    goal: str 
 
 class SupervisorDecision(BaseModel):
     status: Literal["DELEGATE", "REPLAN", "COMPLETE", "ERROR"]

@@ -8,7 +8,7 @@ from os import system
 from enum import Enum
 from pydantic_ai import Agent, RunContext, FunctionToolset
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional, Literal, Any, Dict
+from typing import List, Optional, Literal, Any, Dict, Callable
 
 import asyncio
 from pydantic_ai import RunContext
@@ -188,7 +188,7 @@ You take information from various sources and synthesize a response for the goal
 """
 
 critic_agent = Agent(
-    "gpt-4o",  # Use a smarter model for the critic than the worker
+    "gpt-4o",  # Use a smarter model for the critic
     system_prompt="""You are a Quality Assurance specialist. 
     Compare the Worker's Output against the Original Task. 
     Look for: Missing details, hallucinations, or lack of depth.
@@ -203,9 +203,10 @@ class DeepAgent:
         self,
         prompt,
         model="gpt-4.1-mini",
+        critic_model="gpt-4.1-mini",
         max_steps=3,
         token_budget=20000,
-        agent_registry={},
+        tools: list[Callable] 
     ):
         """
         DeepAgent constructor. Creates a DeepDantic AI Agent.
@@ -219,7 +220,7 @@ class DeepAgent:
         self.prompt = prompt  # Goal Prompt
         self._max_steps = max_steps  # Max steps to prevent infinite loops
         self.token_budget = token_budget  # Token budget for the agent's operations
-        self.agent_registry = self._setup_default_agents()
+        self.agent_registry = self._setup_default_tools(tools=tools)
         # Initialize planner and supervisor agents
         # Planner agent to break down the goal into tasks
         # Supervisor agent to manage todos and delegate tasks
@@ -227,9 +228,9 @@ class DeepAgent:
             model=self.model, system_prompt=PLANNER_SYSTEM_PROMPT, output_type=Plan
         )
 
-    def _setup_default_agents(self):
+    def _setup_default_tools(self, tools: list[Callable]):
 
-        api_key = os.getenv("TAVILY_API_KEY")
+        api_key = os.getenv("TAVILY_API_KEY", "")
         assert api_key is not None
 
         synthesizer_agent = Agent(
@@ -256,6 +257,12 @@ class DeepAgent:
             You may also write output for the user to the file system",
             tools=[write_to_file_system, read_from_file_system],
         )
+        _tools = [synthesizer_agent, researcher_agent, file_system_agent]
+        # check if there are user tools to add to the tool list
+        if len(tools) > 0:
+            _tools.extend(tools)
+            
+        # each agent gets its own unique id
         return {
             "researcher_agent": researcher_agent,
             "synthesizer_agent": synthesizer_agent,
@@ -283,57 +290,59 @@ class DeepAgent:
         # Logic to initialize and manage the runtime state
         return RuntimeState(plan=plan, goal=goal, agent_registry=registry)
 
-    # def run(self):
-    #     # Start the supervisor agent to manage sub-agents
-    #     # state = RuntimeState(goal=self.prompt)
-    #     agent_plan = self._planner_agent.run_sync(self.prompt).output
-    #     agent_plan_map = {v.id: v for v in agent_plan.tasks}
-
-    #     # now save the plan to the agent state
-    #     runtime_state = self._initialize_runtime_state(
-    #         plan=agent_plan_map, goal=self.prompt, registry=self.agent_registry
-    #     )
-    #     supervisor_agent = self._create_supervisor(
-    #         tools=[self.call_worker, self.update_task_status]
-    #     )
-
-    #     step_count = 0
-    #     while step_count < self._max_steps:
-    #         print(f"\n--- DeepAgent Cycle {step_count} ---")
-    #         # Setup up this iterations supervisor instruction
-    #         super_inst = f"""
-
-    #             Based on the current job plan and status of tasks, determine next step or steps to take
-
-    #             Job plan:
-    #             {runtime_state.plan}
-    #             """
-    #         supervisor_response = supervisor_agent.run_sync(
-    #             "Execute the plan given the runtime state and knowledge you know.",
-    #             deps=runtime_state,
-    #         )
-
-    #         print(runtime_state)
-
-    #         step_count += 1
-
-    #     return supervisor_response
-
     def run(self):
-        # init the runtime state
-
-        # planner agent creates the initial work plan
+        # Start the supervisor agent to manage sub-agents
+        # state = RuntimeState(goal=self.prompt)
         agent_plan = self._planner_agent.run_sync(self.prompt).output
         agent_plan_map = {v.id: v for v in agent_plan.tasks}
 
-        run_state = self._initialize_runtime_state(
-            agent_plan_map, self.prompt, self.agent_registry
+        # now save the plan to the agent state
+        runtime_state = self._initialize_runtime_state(
+            plan=agent_plan_map, goal=self.prompt, registry=self.agent_registry
         )
-        # runner looks at the plan and executes tasks that have no dependencies or all dependencies are taken care of
-        run_results = self.execute_ready_tasks()
-        # after agent runs call eval agent to determine if the task was compeleted successfully
 
-        # if not it needs to decide to either replan
+        # setup supervisor whose job is to determine if work is done or if there are more things to do
+        supervisor_agent = self._create_supervisor(
+            tools=[write_to_file_system, read_from_file_system, self.update_task_status]
+        )
+
+        step_count = 0
+        while step_count < self._max_steps:
+            print(f"\n--- DeepAgent Cycle {step_count} ---")
+            # Setup up this iterations supervisor instruction
+            super_inst = f"""
+
+                Based on the current job plan and status of tasks, determine next step or steps to take
+
+                Job plan:
+                {runtime_state.plan}
+                """
+            supervisor_response = supervisor_agent.run_sync(
+                "Execute the plan given the runtime state and knowledge you know.",
+                deps=runtime_state,
+            )
+
+            print(supervisor_response)
+
+            step_count += 1
+
+        return supervisor_response
+
+    # def run(self):
+    #     # init the runtime state
+
+    #     # planner agent creates the initial work plan
+    #     agent_plan = self._planner_agent.run_sync(self.prompt).output
+    #     agent_plan_map = {v.id: v for v in agent_plan.tasks}
+
+    #     run_state = self._initialize_runtime_state(
+    #         agent_plan_map, self.prompt, self.agent_registry
+    #     )
+    #     # runner looks at the plan and executes tasks that have no dependencies or all dependencies are taken care of
+    #     run_results = self.execute_ready_tasks()
+    #     # after agent runs call eval agent to determine if the task was compeleted successfully
+
+    #     # if not it needs to decide to either replan
 
     async def review_worker_output(
         self, ctx: RunContext[RuntimeState], task_id: str, worker_output: str
