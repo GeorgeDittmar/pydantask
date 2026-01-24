@@ -19,15 +19,17 @@ from .models import (
     TaskItem,
     Plan,
     TaskStatus,
+    NextAction,
+    SupervisorDecision,
     ToolDescription,
-    AgentDescription,
 )
-from default_tools import write_to_file_system, read_from_file_system
+from .default_tools import write_to_file_system, read_from_file_system
 
 from pydantic_ai.common_tools.tavily import (
     tavily_search_tool,
 )
 
+from pprint import pprint
 
 # =========================
 # Runtime state models
@@ -151,9 +153,13 @@ class SupervisorSpec:
         return f"""You are the supervisor agent in a deep agent system.
         Your job is to manage and delegate tasks to sub-agents and tools to achieve the overall goal.
 
-        You have the following capabilities available to use:
+        You have the following capabilities available to delegate work to
 
         {ctx.deps.agent_registry}
+
+        Current State of job plan:
+
+        {ctx.deps.plan.model_dump_json()}
 
         You must look at the current state of the job plan, and decide which task or tasks should be run next.
         Honor task dependencies and do not start tasks whose dependencies are not 'COMPLETE'.
@@ -164,14 +170,18 @@ class SupervisorSpec:
         When delegating a task set the status to 'DELEGATE'. You may delegate multiple tasks if they can be run independently.
         """
 
-    # def tools(self):
-    #     return [
-    #         self.mark_task_done,
-    #     ]
+    def tools(self):
+        return [
+            self.mark_task_done,
+        ]
 
-    # def mark_task_done(self, ctx, task_id: str):
-    #     ctx.deps.tasks[task_id].done = True
-    #     return f"Task {task_id} marked done."
+    def mark_task_done(self, ctx, task_id: str):
+
+        if task_id not in ctx.deps.tasks:
+            return f"Could not find {task_id} in plan. Try again and make sure you provide the correct task id."
+
+        ctx.deps.tasks[task_id].done = True
+        return f"Task {task_id} marked complete."
 
 
 # Your Registry stays clean
@@ -212,7 +222,7 @@ class DeepAgent:
         critic_model="gpt-4.1-mini",
         max_steps=3,
         token_budget=20000,
-        tools: Union[None, list[Union[ToolDescription, AgentDescription]]] = None,
+        tools: Union[None, list[ToolDescription]] = None,
     ):
         """
         DeepAgent constructor. Creates a DeepDantic AI Agent.
@@ -232,26 +242,35 @@ class DeepAgent:
             model=self.model, system_prompt=PLANNER_SYSTEM_PROMPT, output_type=Plan
         )
 
-    def _setup_default_tools(
-        self, tools: Union[None, list[Union[ToolDescription, AgentDescription]]] = None
-    ):
+    def _setup_default_tools(self, tools: Union[None, list[ToolDescription]] = None):
+        """
+        Setup default tools along with any custom tools that may be provided by the caller.
+        Default tools available are synthesizer, researcher, and file_system agents
 
+        Args:
+            tools (Union[None, list[ToolDescription]], optional): Any custom tools to include in the agent. Defaults to None.
+
+        Returns:
+            dict[str, ToolDescription]: Mapping of toolId's to the tool description and function
+        """
         api_key = os.getenv("TAVILY_API_KEY", "")
         assert api_key is not None
 
         synthesizer_agent = Agent(
-            "gpt-4.1-mini",
+            self.model,
             instructions=synth_agent_sys_prompt,
             output_type=str,
+            tools=[write_to_file_system, read_from_file_system],
         )
-        synthesizer = AgentDescription(
-            description="Agent to generate answers based on information for a goal.",
-            agent_func=synthesizer_agent,
+
+        synthesizer = ToolDescription(
+            description="Generate Answers based on the completed task output.",
+            tool_func=synthesizer_agent,
         )
 
         # A "Thin" Agent that just wraps a tool
         researcher_agent = Agent(
-            "gpt-4.1-mini",  # Use a cheap model for simple tasks
+            self.model,  # Use a cheap model for simple tasks
             instructions="You are a research specialist. When given a task, follow these steps: "
             "1. Generate 3 specific search queries to cover the topic. "
             "2. Call the search tool for each query. "
@@ -260,28 +279,31 @@ class DeepAgent:
             output_type=str,
         )
 
-        researcher = AgentDescription(
-            description="Agent to perform research tasks which could include searching the web or a data source.",
-            agent_func=researcher_agent,
+        researcher = ToolDescription(
+            description="Tool to research information. This could include searching the web or querying a data source.",
+            tool_func=researcher_agent,
         )
 
         file_system_agent = Agent(
             self.model,
             instructions="You have access to a file system to use for tasks that need to be completed. \
-            Use the file system to store long term information that may be needed between excutions. \
-            You may also write output for the user to the file system",
+            Use the file system to store long term information. \
+            You may also write output for the user to the file system.",
             tools=[write_to_file_system, read_from_file_system],
         )
 
-        file_system = AgentDescription(
-            description="Agent to interact with the file system in some way.",
-            agent_func=file_system_agent,
+        file_system = ToolDescription(
+            description="Agent to interact with the file system of host machine. Should be used to store information that needs to persist for further use or context.",
+            tool_func=file_system_agent,
         )
 
         _tools = [synthesizer, researcher, file_system]
 
-        _tool_registry = {uuid.uuid4(): tool for tool in _tools}
-        print(_tool_registry)
+        # if additional tools ahve been supplied then add those to the tool list
+        if tools:
+            _tools.extend(tools)
+
+        _tool_registry = {str(uuid.uuid4()): tool for tool in _tools}
 
         # each agent gets its own unique id
         return _tool_registry
@@ -292,11 +314,11 @@ class DeepAgent:
             model=model,
             deps_type=RuntimeState,
             tools=tools,
+            output_type=SupervisorDecision,
         )
 
         @agent.system_prompt
         def _prompt(ctx):
-            print(ctx.deps)
             return spec.system_prompt(ctx)
 
         return agent
@@ -310,7 +332,12 @@ class DeepAgent:
     def run(self):
         # Start the supervisor agent to manage sub-agents
         # state = RuntimeState(goal=self.prompt)
-        agent_plan = self._planner_agent.run_sync(self.prompt).output
+        planner_prompt = f"""
+        Goal: {self.prompt}
+
+        Capabilities: {self.agent_registry}
+        """
+        agent_plan = self._planner_agent.run_sync(planner_prompt).output
         agent_plan_map = {v.id: v for v in agent_plan.tasks}
 
         # now save the plan to the agent state
@@ -319,9 +346,7 @@ class DeepAgent:
         )
 
         # setup supervisor whose job is to determine if work is done or if there are more things to do
-        supervisor_agent = self._create_supervisor(
-            tools=[write_to_file_system, read_from_file_system, self.update_task_status]
-        )
+        supervisor_agent = self._create_supervisor(tools=[self.update_task_status])
 
         step_count = 0
         while step_count < self._max_steps:
@@ -329,24 +354,35 @@ class DeepAgent:
             # Setup up this iterations supervisor instruction
             super_inst = f"""
 
-                Based on the current job plan and status of tasks, determine next step or steps to take. 
+                Based on the current job plan and status of tasks, determine next step or steps to take.
 
                 <plan>
-                
+
                     {runtime_state.plan}
 
                 </plan>
                 """
-            supervisor_response = supervisor_agent.run_sync(
-                "Execute the plan given the runtime state and knowledge you know.",
+            supervisor_response = supervisor_agent.run(
+                "Execute the plan given the current runtime state and knowledge.",
                 deps=runtime_state,
             )
 
-            print(supervisor_response)
+            # execute tasks that are ready to run
+            task_results = await self.execute_ready_tasks(
+                supervisor_response, runtime_state
+            )
+            # wait for responses
+
+            # go through responses and evaluate if they have completed the task
+
+            # output qa report of task completion for supervisor
+
+            qa_agent = Agent(self.mo)
+
+            # supervisor gets qa report and decides if work is done and if so marks it as done and decides what to do next.
 
             step_count += 1
-
-        return supervisor_response
+            return supervisor_response
 
     # def run(self):
     #     # init the runtime state
@@ -394,33 +430,37 @@ class DeepAgent:
     ):
         """Updates the knowledge runtime state with any new knowledge that is needed to answer a goal or task"""
 
-    async def execute_ready_tasks(self, ctx: RunContext[RuntimeState]) -> str:
+    async def execute_ready_tasks(
+        self, tasks_to_execute: SupervisorDecision, ctx: RuntimeState
+    ) -> Union[None, list]:
         """Finds all tasks that are ready to run and executes them in parallel."""
-        plan = ctx.deps.plan
 
         # 1. Identify "Ready" tasks
         ready_steps = [
             step
-            for step in plan.tasks
-            if step.status == "pending"
-            and all(plan.get(d_id).status == "completed" for d_id in step.depends_on)
+            for step in tasks_to_execute.tasks_to_execute
+            # if step.status == TaskStatus.PENDING
+            # and all(
+            #     tasks_to_execute.get(d_id).status == "completed"
+            #     for d_id in step.task_dependencies
+            # )
         ]
 
         if not ready_steps:
-            return "No tasks are currently ready for execution."
+            return None
 
         # 2. Prepare the concurrent coroutines
         tasks = []
         for step in ready_steps:
             # grab the tool that the plan or supervisor decides
-            worker = ctx.deps.agent_registry.get(step.capability)
+            worker = self.agent_registry.get(step.capability)
             if worker:
-                step.status = "running"
+                step.status = TaskStatus.RUNNING
                 # We wrap the agent run in a small wrapper to update the step status after
-                tasks.append(self.run_and_update_step(worker, step))
+                tasks.append(self.execute(worker, step))
 
-        # 3. Execute tasks
-        results = await asyncio.gather(*tasks)
+        # 3. Execute tasks and return exceptions to notify the supervisor
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
         return results
 
@@ -428,23 +468,23 @@ class DeepAgent:
         """Take a search query and search the internet for information to solve a research / task need."""
         return await res.run(search_query).output
 
-    async def run_and_update_step(self, worker, step):
+    async def execute(self, worker, step):
         """Helper to run an agent and capture its output into the step object."""
         try:
             result = await worker.run(step.description)
             step.output = result.data
-            step.status = "completed"
-            return f"Step {step.label} success"
+            return result, step
         except Exception as e:
-            step.status = "failed"
-            return f"Step {step.label} failed: {str(e)}"
+            step.status = TaskStatus.FAILED
+            step.error_msg = str(e)
+            return None, step
 
     async def reflect_on_work(self, reflection, ctx: RunContext[RuntimeState]):
         "Tool to reflect on if work has been completed."
         return f"{reflection}"
 
     async def update_task_status(
-        self, ctx: RunContext[RuntimeState], step_id: str, status: str
+        self, ctx: RunContext[RuntimeState], step_id: str, status: TaskStatus
     ):
         """The supervisor uses this for updating a specific step in the plan to a new status."""
         if step_id in ctx.deps.plan:
