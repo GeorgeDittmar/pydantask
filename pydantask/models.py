@@ -14,6 +14,12 @@ class TaskStatus(Enum):
     FAILED = "failed"  # Evaluator rejected it
 
 
+class EvalResult(BaseModel):
+    task_id: str
+    reasoning: str
+    passed: bool = False
+
+
 class VerifiedSegment(BaseModel):
     segment_id: str
     content: str
@@ -38,6 +44,7 @@ class TaskItem(BaseModel):
     id: str
     description: str
     status: TaskStatus
+    result: Optional[str]
     capability: str
     task_dependencies: Optional[List[int]] = Field(
         description="Put task dependency IDs here", default_factory=list

@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Literal, Any, Dict, Callable, Union
 
 import asyncio
+from asyncio import TaskGroup
 from pydantic_ai import RunContext
 from pydantic_ai.common_tools.tavily import tavily_search_tool
 from .prompts import PLANNER_SYSTEM_PROMPT, SUPERVISOR_SYSTEM_PROMPT
@@ -22,8 +23,9 @@ from .models import (
     NextAction,
     SupervisorDecision,
     ToolDescription,
+    EvalResult,
 )
-from .default_tools import write_to_file_system, read_from_file_system
+from .default_tools import write_to_file_system, read_from_file_system, think_tool
 
 from pydantic_ai.common_tools.tavily import (
     tavily_search_tool,
@@ -237,9 +239,15 @@ class DeepAgent:
         self._max_steps = max_steps  # Max steps to prevent infinite loops
         self.token_budget = token_budget  # Token budget for the agent's operations
         self.agent_registry = self._setup_default_tools(tools=tools)
-
+        self.critic_model = critic_model
         self._planner_agent = Agent(
             model=self.model, system_prompt=PLANNER_SYSTEM_PROMPT, output_type=Plan
+        )
+
+        self._critic_agent = Agent(
+            self.critic_model,
+            system_prompt="Evaluate the following output from work done on a task. Give a response if the output completes the task and give and explanation as to why.",
+            output_type=EvalResult,
         )
 
     def _setup_default_tools(self, tools: Union[None, list[ToolDescription]] = None):
@@ -253,8 +261,12 @@ class DeepAgent:
         Returns:
             dict[str, ToolDescription]: Mapping of toolId's to the tool description and function
         """
-        api_key = os.getenv("TAVILY_API_KEY", "")
-        assert api_key is not None
+        api_key = os.getenv("TAVILY_API_KEY", None)
+
+        if not api_key:
+            raise ValueError(
+                "Tavily search api key not found or provided in env variables"
+            )
 
         synthesizer_agent = Agent(
             self.model,
@@ -264,7 +276,7 @@ class DeepAgent:
         )
 
         synthesizer = ToolDescription(
-            description="Generate Answers based on the completed task output.",
+            description="Generate answers based on the completed task output.",
             tool_func=synthesizer_agent,
         )
 
@@ -362,22 +374,17 @@ class DeepAgent:
 
                 </plan>
                 """
-            supervisor_response = supervisor_agent.run(
+            supervisor_response = supervisor_agent.run_sync(
                 "Execute the plan given the current runtime state and knowledge.",
                 deps=runtime_state,
-            )
+            ).output
 
-            # execute tasks that are ready to run
-            task_results = await self.execute_ready_tasks(
-                supervisor_response, runtime_state
-            )
-            # wait for responses
+            # execute tasks that are ready to run and await responses
+            task_results = self.execute_ready_tasks(supervisor_response, runtime_state)
 
             # go through responses and evaluate if they have completed the task
 
             # output qa report of task completion for supervisor
-
-            qa_agent = Agent(self.mo)
 
             # supervisor gets qa report and decides if work is done and if so marks it as done and decides what to do next.
 
@@ -431,14 +438,14 @@ class DeepAgent:
         """Updates the knowledge runtime state with any new knowledge that is needed to answer a goal or task"""
 
     async def execute_ready_tasks(
-        self, tasks_to_execute: SupervisorDecision, ctx: RuntimeState
+        self, tasks: SupervisorDecision, ctx: RuntimeState
     ) -> Union[None, list]:
         """Finds all tasks that are ready to run and executes them in parallel."""
 
         # 1. Identify "Ready" tasks
         ready_steps = [
             step
-            for step in tasks_to_execute.tasks_to_execute
+            for step in tasks.tasks_to_execute
             # if step.status == TaskStatus.PENDING
             # and all(
             #     tasks_to_execute.get(d_id).status == "completed"
@@ -450,16 +457,20 @@ class DeepAgent:
             return None
 
         # 2. Prepare the concurrent coroutines
-        tasks = []
+        ready_tasks = []
         for step in ready_steps:
             # grab the tool that the plan or supervisor decides
             worker = self.agent_registry.get(step.capability)
             if worker:
                 step.status = TaskStatus.RUNNING
                 # We wrap the agent run in a small wrapper to update the step status after
-                tasks.append(self.execute(worker, step))
+                ready_tasks.append(self.execute(worker, step))
 
         # 3. Execute tasks and return exceptions to notify the supervisor
+        async with TaskGroup() as tg:
+            for task in ready_tasks:
+                tg.create_task(task)
+
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         return results
@@ -472,7 +483,7 @@ class DeepAgent:
         """Helper to run an agent and capture its output into the step object."""
         try:
             result = await worker.run(step.description)
-            step.output = result.data
+            step.result = result.data
             return result, step
         except Exception as e:
             step.status = TaskStatus.FAILED
