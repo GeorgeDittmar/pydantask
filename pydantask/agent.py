@@ -1,4 +1,6 @@
 # from asyncio import tasks
+from email import errors
+from langfuse import get_client
 import json
 import uuid
 import os
@@ -41,7 +43,6 @@ from pprint import pprint
 from dotenv import load_dotenv
 
 load_dotenv()
-from langfuse import get_client
 
 langfuse = get_client()
 
@@ -379,6 +380,21 @@ class DeepAgent:
                 deps=runtime_state,
             ).output
 
+            # execute tasks that are ready to run
+            task_results = self.execute_ready_tasks(supervisor_response, runtime_state)
+
+            # wait for responses
+            task_errors = []
+
+            for result in task_results:
+                if isinstance(result, Exception):
+                    task_errors.append(result)
+                else:
+                    agent_result, task = result
+                    if agent_result is None:
+                        print(f"Task {task.id} failed with error: {task.error_msg}")
+                    else:
+                        print(f"Task {task.id} completed successfully.")
             # execute tasks that are ready to run and await responses
             task_results = self.execute_ready_tasks(supervisor_response, runtime_state)
 

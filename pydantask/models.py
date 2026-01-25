@@ -12,6 +12,7 @@ class TaskStatus(Enum):
     RUNNING = "running"  # Currently being executed
     COMPLETED = "completed"
     FAILED = "failed"  # Evaluator rejected it
+    REVIEW = "review"  # Needs Evaluator review
 
 
 class EvalResult(BaseModel):
@@ -50,7 +51,7 @@ class TaskItem(BaseModel):
         description="Put task dependency IDs here", default_factory=list
     )
     review_feedback: Optional[str] = None  # Store the "critique" here
-    error_msg: Optional[str]
+    error_msg: Optional[str] = None  # Store any error messages here
     iteration_history: list = []
     attempt_count: int = 0
     max_attempts: int = 3
