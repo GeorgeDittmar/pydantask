@@ -13,7 +13,7 @@ DEFAULT_DIR = Path("tmp_files/")
 
 
 async def ask_user(ctx: RunContext[RuntimeState], question_for_user: str) -> str:
-    """Prompt the user for input via the console."""
+    """Prompt the user for input via the console. This is a synchronous blocking call."""
     return input(f"{question_for_user}: ")
 
 

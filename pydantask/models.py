@@ -11,6 +11,7 @@ class TaskStatus(Enum):
     READY = "ready"  # Dependencies met, can run now
     RUNNING = "running"  # Currently being executed
     COMPLETED = "completed"
+    ERROR = "error"
     FAILED = "failed"  # Evaluator rejected it
     REVIEW = "review"  # Needs Evaluator review
 
@@ -23,6 +24,7 @@ class TaskQAResult(BaseModel):
 
 class TaskResult(BaseModel):
     task_id: str
+    task_status: TaskStatus
     output: Any
     error_msg: Optional[str] = None
 
@@ -73,14 +75,6 @@ class ToolDescription(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     description: str
     tool_func: Any
-
-
-# Agent Description Object
-# class AgentDescription(BaseModel):
-#     model_config = ConfigDict(arbitrary_types_allowed=True)
-
-#     description: str
-#     agent_func: Agent
 
 
 class ResearchResult(BaseModel):

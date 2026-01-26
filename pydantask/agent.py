@@ -174,12 +174,12 @@ class SupervisorSpec:
         {ctx.deps.plan}
 
         You must look at the current state of the job plan, and decide which task or tasks should be run next.
-        Honor task dependencies and do not start tasks whose dependencies are not 'COMPLETE'.
+        Honor task dependencies and do not start tasks whose dependencies are not COMPLETED.
 
-        If any task is given the state 'ERROR' or 'REPLAN' delegate to the planner to attempt to rework the plan
+        If any task is given the state ERROR or REPLAN delegate to the planner to attempt to rework the plan
         for that task.
 
-        When delegating a task set the status to 'DELEGATE'. You may delegate multiple tasks if they can be run independently.
+        You may delegate multiple tasks if they can be run independently. When delegating a task set the status to READY.
         """
 
     def tools(self):
@@ -320,14 +320,27 @@ class DeepAgent:
             tool_func=file_system_agent,
         )
 
+        ask_user_agent = Agent(
+            self.model,
+            instructions="You ask the user clarifying questions when you need more information to complete a task. Once you have the information you need, you provide it back to the supervisor agent as a summary for it to then reason over. Do not return a question in that summary since the user will not see it. When done, set the status to REVIEW. If you runinto errors set the status to ERROR",
+            tools=[ask_user],
+            output_type=TaskResult,
+        )
+
         ask_user_tool = ToolDescription(
             description="Tool to ask the user a question and get input back from them.",
-            tool_func=ask_user,
+            tool_func=ask_user_agent,
+        )
+
+        thinking_tool_agent = Agent(
+            self.model,
+            instructions="You can use this tool to reflect on your progress and plan your next steps carefully.",
+            tools=[think_tool],
         )
 
         thinking_tool = ToolDescription(
             description="Tool for strategic reflection on progress and decision-making.",
-            tool_func=think_tool,
+            tool_func=thinking_tool_agent,
         )
 
         _tools = [synthesizer, researcher, file_system, ask_user_tool, thinking_tool]
@@ -372,6 +385,7 @@ class DeepAgent:
         """
         agent_plan = await self._planner_agent.run(planner_prompt)
         agent_plan_map = {v.id: v for v in agent_plan.output.tasks}
+
         pprint("=== Initial Agent Plan ===")
         pprint(agent_plan.output)
         # now save the plan to the agent state
@@ -407,17 +421,6 @@ class DeepAgent:
                 supervisor_response, runtime_state
             )
             print(f"--- Awaiting Task Results ---")
-            # wait for responses
-
-            # for result in task_results:
-            #     if isinstance(result, Exception):
-            #         task_errors.append(result)
-            #     else:
-            #         agent_result, task = result
-            #         if agent_result is None:
-            #             print(f"Task {task.id} failed with error: {task.error_msg}")
-            #         else:
-            #             print(f"Task {task.id} completed successfully.")
             # execute tasks that are ready to run and await responses
             task_results = await self.execute_ready_tasks(
                 supervisor_response, runtime_state
@@ -505,12 +508,13 @@ class DeepAgent:
             print(f"  Dependencies: {step.task_dependencies}")
             print(f"  Status: {step.status}")
             print(f"  Result: {step.result}")
+            print()
             # grab the tool that the plan or supervisor decides
             worker = self.agent_registry.get(step.capability)
             if worker:
                 step.status = TaskStatus.RUNNING
                 # We wrap the agent run in a small wrapper to update the step status after
-                ready_tasks.append(self.execute(worker, step))
+                ready_tasks.append(self.execute(worker.tool_func, step))
 
         # 3. Execute tasks and return exceptions to notify the supervisor
         task_results = []
@@ -520,20 +524,18 @@ class DeepAgent:
 
         return task_results
 
-    async def search_web(self, search_query):
-        """Take a search query and search the internet for information to solve a research / task need."""
-        return await res.run(search_query).output
-
-    async def execute(self, worker, step):
+    async def execute(self, tool, step):
         """Helper to run an agent and capture its output into the step object."""
         try:
-            result = await worker.run(step.description)
-            step.result = result.data
-            return result, step
+            result = await tool.run(step.description)
+            step.result = result.output
+            # Update the step status to REVIEW
+            step.status = TaskStatus.REVIEW
+            return step
         except Exception as e:
-            step.status = TaskStatus.FAILED
+            step.status = TaskStatus.ERROR
             step.error_msg = str(e)
-            return None, step
+            return step
 
     async def reflect_on_work(self, reflection, ctx: RunContext[RuntimeState]):
         "Tool to reflect on if work has been completed."
