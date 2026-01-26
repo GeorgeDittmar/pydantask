@@ -414,12 +414,7 @@ class DeepAgent:
                 "Execute the plan given the current runtime state and knowledge.",
                 deps=runtime_state,
             )
-            print(f"--- Supervisor Decision ---")
-            # pprint(supervisor_response.output.model_dump())
-            # execute tasks that are ready to run
-            task_results = await self.execute_ready_tasks(
-                supervisor_response, runtime_state
-            )
+
             print(f"--- Awaiting Task Results ---")
             # execute tasks that are ready to run and await responses
             task_results = await self.execute_ready_tasks(
