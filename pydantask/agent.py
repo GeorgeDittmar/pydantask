@@ -425,8 +425,21 @@ class DeepAgent:
             task_results = await self.execute_ready_tasks(
                 supervisor_response, runtime_state
             )
-            pprint(task_results)
+            print(f"--- Task Results ---")
             # go through responses and evaluate if they have completed the task
+            for task_result in task_results or []:
+                print(f"--- Evaluating Task Result for {task_result.id} ---")
+                qa_prompt = f"""
+                Goal: {runtime_state.goal}
+                Task Description: {task_result.description}
+                Worker Output: {task_result.result}
+
+                Based on the goal and task description, evaluate if the worker output sufficiently completes the task.
+                Provide a detailed analysis and TRUE or FALSE if it passed or not quality check.
+                """
+                qa_response = await self._critic_agent.run(qa_prompt)
+                print(f"--- QA Response ---")
+                pprint(qa_response.output.model_dump())
 
             # output qa report of task completion for supervisor
 
@@ -497,7 +510,9 @@ class DeepAgent:
             #     for d_id in step.task_dependencies
             # )
         ]
+
         print("Ready Steps to Execute:")
+        print(len(ready_steps))
         if not ready_steps:
             return None
 
