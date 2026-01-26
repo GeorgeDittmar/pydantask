@@ -323,7 +323,7 @@ class DeepAgent:
         ask_user_agent = Agent(
             self.model,
             instructions="You ask the user clarifying questions when you need more information to complete a task. Once you have the information you need, you provide it back to the supervisor agent as a summary for it to then reason over. Do not return a question in that summary since the user will not see it. When done, set the status to REVIEW. If you runinto errors set the status to ERROR",
-            tools=[ask_user],
+            tools=[ask_user, think_tool],
             output_type=TaskResult,
         )
 
@@ -532,12 +532,17 @@ class DeepAgent:
                 ready_tasks.append(self.execute(worker.tool_func, step))
 
         # 3. Execute tasks and return exceptions to notify the supervisor
+        print("--- Executing Ready Tasks ---")
         task_results = []
         async with TaskGroup() as tg:
             for task in ready_tasks:
                 task_results.append(tg.create_task(task))
 
-        return task_results
+        results = [t.result() for t in task_results]
+        print("--- All Ready Tasks Completed ---")
+        print(len(results))
+        pprint(results)
+        return results
 
     async def execute(self, tool, step):
         """Helper to run an agent and capture its output into the step object."""
@@ -546,10 +551,12 @@ class DeepAgent:
             step.result = result.output
             # Update the step status to REVIEW
             step.status = TaskStatus.REVIEW
+            pprint(step.model_dump())
             return step
         except Exception as e:
             step.status = TaskStatus.ERROR
             step.error_msg = str(e)
+            pprint(step.model_dump())
             return step
 
     async def reflect_on_work(self, reflection, ctx: RunContext[RuntimeState]):
