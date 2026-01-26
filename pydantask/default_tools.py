@@ -4,15 +4,17 @@ import json
 import asyncio
 
 from pydantic import BaseModel
-from pydantic_ai import Agent
+from pydantic_ai import Agent, RunContext
 from pathlib import Path
+
+from pydantask.models import RuntimeState
 
 DEFAULT_DIR = Path("tmp_files/")
 
 
-async def call_worker(agent_registry: dict):
-    """Call Agent worker to perform a task"""
-    pass
+async def ask_user(ctx: RunContext[RuntimeState], question_for_user: str) -> str:
+    """Prompt the user for input via the console."""
+    return input(f"{question_for_user}: ")
 
 
 async def think_tool(reflection: str):

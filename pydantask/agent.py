@@ -1,10 +1,13 @@
 # from asyncio import tasks
 from email import errors
+from json import tool
+
 from langfuse import get_client
 import json
 import uuid
 import os
 
+import logging
 from os import system
 
 from enum import Enum
@@ -21,13 +24,19 @@ from .models import (
     RuntimeState,
     TaskItem,
     Plan,
+    TaskQAResult,
     TaskStatus,
     NextAction,
     SupervisorDecision,
     ToolDescription,
-    EvalResult,
+    TaskResult,
 )
-from .default_tools import write_to_file_system, read_from_file_system, think_tool
+from .default_tools import (
+    write_to_file_system,
+    read_from_file_system,
+    think_tool,
+    ask_user,
+)
 
 from pydantic_ai.common_tools.tavily import (
     tavily_search_tool,
@@ -162,7 +171,7 @@ class SupervisorSpec:
 
         Current State of job plan:
 
-        {ctx.deps.plan.model_dump_json()}
+        {ctx.deps.plan}
 
         You must look at the current state of the job plan, and decide which task or tasks should be run next.
         Honor task dependencies and do not start tasks whose dependencies are not 'COMPLETE'.
@@ -248,7 +257,7 @@ class DeepAgent:
         self._critic_agent = Agent(
             self.critic_model,
             system_prompt="Evaluate the following output from work done on a task. Give a response if the output completes the task and give and explanation as to why.",
-            output_type=EvalResult,
+            output_type=TaskQAResult,
         )
 
     def _setup_default_tools(self, tools: Union[None, list[ToolDescription]] = None):
@@ -277,7 +286,7 @@ class DeepAgent:
         )
 
         synthesizer = ToolDescription(
-            description="Generate answers based on the completed task output.",
+            description="Generate answers based on information collected from tasks.",
             tool_func=synthesizer_agent,
         )
 
@@ -301,8 +310,9 @@ class DeepAgent:
             self.model,
             instructions="You have access to a file system to use for tasks that need to be completed. \
             Use the file system to store long term information. \
-            You may also write output for the user to the file system.",
-            tools=[write_to_file_system, read_from_file_system],
+            You may also write output for the user to the file system. \
+            You also have an addtional think tool that you can use to reflect on your work and plan next steps.",
+            tools=[write_to_file_system, read_from_file_system, think_tool],
         )
 
         file_system = ToolDescription(
@@ -310,7 +320,17 @@ class DeepAgent:
             tool_func=file_system_agent,
         )
 
-        _tools = [synthesizer, researcher, file_system]
+        ask_user_tool = ToolDescription(
+            description="Tool to ask the user a question and get input back from them.",
+            tool_func=ask_user,
+        )
+
+        thinking_tool = ToolDescription(
+            description="Tool for strategic reflection on progress and decision-making.",
+            tool_func=think_tool,
+        )
+
+        _tools = [synthesizer, researcher, file_system, ask_user_tool, thinking_tool]
 
         # if additional tools ahve been supplied then add those to the tool list
         if tools:
@@ -342,7 +362,7 @@ class DeepAgent:
         # Logic to initialize and manage the runtime state
         return RuntimeState(plan=plan, goal=goal, agent_registry=registry)
 
-    def run(self):
+    async def run(self):
         # Start the supervisor agent to manage sub-agents
         # state = RuntimeState(goal=self.prompt)
         planner_prompt = f"""
@@ -350,9 +370,10 @@ class DeepAgent:
 
         Capabilities: {self.agent_registry}
         """
-        agent_plan = self._planner_agent.run_sync(planner_prompt).output
-        agent_plan_map = {v.id: v for v in agent_plan.tasks}
-
+        agent_plan = await self._planner_agent.run(planner_prompt)
+        agent_plan_map = {v.id: v for v in agent_plan.output.tasks}
+        pprint("=== Initial Agent Plan ===")
+        pprint(agent_plan.output)
         # now save the plan to the agent state
         runtime_state = self._initialize_runtime_state(
             plan=agent_plan_map, goal=self.prompt, registry=self.agent_registry
@@ -375,29 +396,33 @@ class DeepAgent:
 
                 </plan>
                 """
-            supervisor_response = supervisor_agent.run_sync(
+            supervisor_response = await supervisor_agent.run(
                 "Execute the plan given the current runtime state and knowledge.",
                 deps=runtime_state,
-            ).output
-
+            )
+            print(f"--- Supervisor Decision ---")
+            # pprint(supervisor_response.output.model_dump())
             # execute tasks that are ready to run
-            task_results = self.execute_ready_tasks(supervisor_response, runtime_state)
-
+            task_results = await self.execute_ready_tasks(
+                supervisor_response, runtime_state
+            )
+            print(f"--- Awaiting Task Results ---")
             # wait for responses
-            task_errors = []
 
-            for result in task_results:
-                if isinstance(result, Exception):
-                    task_errors.append(result)
-                else:
-                    agent_result, task = result
-                    if agent_result is None:
-                        print(f"Task {task.id} failed with error: {task.error_msg}")
-                    else:
-                        print(f"Task {task.id} completed successfully.")
+            # for result in task_results:
+            #     if isinstance(result, Exception):
+            #         task_errors.append(result)
+            #     else:
+            #         agent_result, task = result
+            #         if agent_result is None:
+            #             print(f"Task {task.id} failed with error: {task.error_msg}")
+            #         else:
+            #             print(f"Task {task.id} completed successfully.")
             # execute tasks that are ready to run and await responses
-            task_results = self.execute_ready_tasks(supervisor_response, runtime_state)
-
+            task_results = await self.execute_ready_tasks(
+                supervisor_response, runtime_state
+            )
+            pprint(task_results)
             # go through responses and evaluate if they have completed the task
 
             # output qa report of task completion for supervisor
@@ -423,35 +448,36 @@ class DeepAgent:
 
     #     # if not it needs to decide to either replan
 
-    async def review_worker_output(
-        self, ctx: RunContext[RuntimeState], task_id: str, worker_output: str
-    ):
-        task = ctx.deps.plan[task_id]
-        task.attempt_count += 1
+    # async def review_worker_output(
+    #     self, ctx: RunContext[RuntimeState], task_id: str, worker_output: str
+    # ):
+    #     task = ctx.deps.plan[task_id]
+    #     task.attempt_count += 1
 
-        # Call the separate Critic Agent
-        critic_report = await critic_agent.run(
-            f"Goal: {task.description}\nResult: {worker_output}"
-        )
+    #     # Call the separate Critic Agent
+    #     critic_report = await critic_agent.run(
+    #         f"Goal: {task.description}\nResult: {worker_output}"
+    #     )
 
-        if "APPROVED" in critic_report.data.upper():
-            ctx.deps.knowledge_store[task_id] = worker_output
-            task.status = "completed"
-            return f"Task {task_id} approved after {task.attempt_count} attempts."
+    #     if "APPROVED" in critic_report.data.upper():
+    #         ctx.deps.knowledge_store[task_id] = worker_output
+    #         task.status = "completed"
+    #         return f"Task {task_id} approved after {task.attempt_count} attempts."
 
-        if task.attempt_count >= task.max_attempts:
-            task.status = "failed"
-            return f"Task {task_id} failed after maximum revision attempts."
+    #     if task.attempt_count >= task.max_attempts:
+    #         task.status = "failed"
+    #         return f"Task {task_id} failed after maximum revision attempts."
 
-        # Otherwise, set up for revision
-        task.status = "requires_revision"
-        task.review_feedback = critic_report.data
-        return f"Revision requested for {task_id}. Feedback: {critic_report.data}"
+    #     # Otherwise, set up for revision
+    #     task.status = "requires_revision"
+    #     task.review_feedback = critic_report.data
+    #     return f"Revision requested for {task_id}. Feedback: {critic_report.data}"
 
     async def update_knowledge(
         self, capabiliity, answer, ctx: RunContext[RuntimeState]
     ):
         """Updates the knowledge runtime state with any new knowledge that is needed to answer a goal or task"""
+        pass
 
     async def execute_ready_tasks(
         self, tasks: SupervisorDecision, ctx: RuntimeState
@@ -461,20 +487,24 @@ class DeepAgent:
         # 1. Identify "Ready" tasks
         ready_steps = [
             step
-            for step in tasks.tasks_to_execute
+            for step in tasks.output.tasks_to_execute
             # if step.status == TaskStatus.PENDING
             # and all(
             #     tasks_to_execute.get(d_id).status == "completed"
             #     for d_id in step.task_dependencies
             # )
         ]
-
+        print("Ready Steps to Execute:")
         if not ready_steps:
             return None
 
         # 2. Prepare the concurrent coroutines
         ready_tasks = []
         for step in ready_steps:
+            print(f"- {step.id}: {step.description} using {step.capability}")
+            print(f"  Dependencies: {step.task_dependencies}")
+            print(f"  Status: {step.status}")
+            print(f"  Result: {step.result}")
             # grab the tool that the plan or supervisor decides
             worker = self.agent_registry.get(step.capability)
             if worker:
@@ -483,13 +513,12 @@ class DeepAgent:
                 ready_tasks.append(self.execute(worker, step))
 
         # 3. Execute tasks and return exceptions to notify the supervisor
+        task_results = []
         async with TaskGroup() as tg:
             for task in ready_tasks:
-                tg.create_task(task)
+                task_results.append(tg.create_task(task))
 
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        return results
+        return task_results
 
     async def search_web(self, search_query):
         """Take a search query and search the internet for information to solve a research / task need."""

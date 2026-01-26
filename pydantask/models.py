@@ -15,10 +15,16 @@ class TaskStatus(Enum):
     REVIEW = "review"  # Needs Evaluator review
 
 
-class EvalResult(BaseModel):
+class TaskQAResult(BaseModel):
     task_id: str
     reasoning: str
     passed: bool = False
+
+
+class TaskResult(BaseModel):
+    task_id: str
+    output: Any
+    error_msg: Optional[str] = None
 
 
 class VerifiedSegment(BaseModel):
