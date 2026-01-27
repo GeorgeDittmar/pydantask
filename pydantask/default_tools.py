@@ -65,7 +65,7 @@ async def delete_from_file_system(file_name: str):
 async def read_from_file_system(file_to_read: str):
     """Read from file on file system if it exists."""
     try:
-        with open(file_to_read, "r") as f:
+        with open(DEFAULT_DIR.joinpath(file_to_read), "r") as f:
             return f.read()
     except FileNotFoundError as e:
         return "File does not exist. If you were expencting it to be, create the file."
