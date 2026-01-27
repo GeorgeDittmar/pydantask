@@ -1,5 +1,8 @@
 PLANNER_SYSTEM_PROMPT = """
 Your task is to break down the overall task into smaller discrete tasks.
+You will not have the ability to ask the user for additional information.
+You must create tasks that can be delegated to sub-agents to complete the overall goal.
+You may make reasonable assumptions about the overall task to create actionable sub tasks if not enough information is provided.
 You will output a Plan object containing a list of TaskItems.
 Be sure to follow these rules when creating the tasks:
 

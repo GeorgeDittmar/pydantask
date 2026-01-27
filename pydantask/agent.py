@@ -21,6 +21,7 @@ from pydantic_ai import RunContext
 from pydantic_ai.common_tools.tavily import tavily_search_tool
 from .prompts import PLANNER_SYSTEM_PROMPT, SUPERVISOR_SYSTEM_PROMPT
 from .models import (
+    ResearchResult,
     RuntimeState,
     TaskItem,
     Plan,
@@ -233,8 +234,9 @@ class DeepAgent:
         model="gpt-4.1-mini",
         critic_model="gpt-4.1-mini",
         max_steps=3,
-        token_budget=20000,
+        set_token_budget: int = None,
         tools: Union[None, list[ToolDescription]] = None,
+        human_feedback: bool = False,
     ):
         """
         DeepAgent constructor. Creates a DeepDantic AI Agent.
@@ -242,12 +244,14 @@ class DeepAgent:
         :param prompt: The overall goal or prompt for the agent.
         :param model: The language model to use. default is "gpt-4.1-mini".
         :param max_steps: Maximum steps to prevent infinite loops. defaults to 20 steps
-        :param token_budget: Token budget for the agent's operations. default is 20000 tokens.
+        :param set_token_budget: Token budget for the agent's operation. Defaults to None (no limit).
+        :param tools: List of ToolDescription objects representing the agent's capabilities. Defaults to None.
+        :param human_feedback: Whether to incorporate human feedback in the agent's decision-making. Defaults to False.
         """
         self.model = model
         self.prompt = prompt  # Goal Prompt
         self._max_steps = max_steps  # Max steps to prevent infinite loops
-        self.token_budget = token_budget  # Token budget for the agent's operations
+        self.token_budget = set_token_budget
         self.agent_registry = self._setup_default_tools(tools=tools)
         self.critic_model = critic_model
         self._planner_agent = Agent(
@@ -256,8 +260,9 @@ class DeepAgent:
 
         self._critic_agent = Agent(
             self.critic_model,
-            system_prompt="Evaluate the following output from work done on a task. Give a response if the output completes the task and give and explanation as to why.",
+            system_prompt="Evaluate the following output from work done on a task. Output a detailed report and if it meets the task requirements.",
             output_type=TaskQAResult,
+            tools=[read_from_file_system, think_tool],
         )
 
     def _setup_default_tools(self, tools: Union[None, list[ToolDescription]] = None):
@@ -294,11 +299,21 @@ class DeepAgent:
         researcher_agent = Agent(
             self.model,  # Use a cheap model for simple tasks
             instructions="You are a research specialist. When given a task, follow these steps: "
-            "1. Generate 3 specific search queries to cover the topic. "
+            "1. Generate 5 search queries based on the task description. Start with broad queries and narrow down."
             "2. Call the search tool for each query. "
-            "3. Summarize the findings into a clear report.",
-            tools=[tavily_search_tool(api_key)],
-            output_type=str,
+            "3. Analyze the results from the search tool and extract key information."
+            "4. Use the think tool to reflect on the information gathered and determine if another search is needed."
+            "5. If enough information has been gathered, summarize the findings into a clear report."
+            " Be concise and focus on the most relevant information to the task."
+            " When building the search report, generate a detailed report and a summary."
+            "When genrating the detailed report, include references to sources used. Write the detailed report to a markdown file and return the file path in the detailed_report_path field of the output.",
+            tools=[
+                tavily_search_tool(api_key),
+                think_tool,
+                write_to_file_system,
+                read_from_file_system,
+            ],
+            output_type=ResearchResult,
         )
 
         researcher = ToolDescription(
@@ -343,7 +358,7 @@ class DeepAgent:
             tool_func=thinking_tool_agent,
         )
 
-        _tools = [synthesizer, researcher, file_system, ask_user_tool, thinking_tool]
+        _tools = [synthesizer, researcher, file_system, thinking_tool]
 
         # if additional tools ahve been supplied then add those to the tool list
         if tools:
@@ -386,8 +401,6 @@ class DeepAgent:
         agent_plan = await self._planner_agent.run(planner_prompt)
         agent_plan_map = {v.id: v for v in agent_plan.output.tasks}
 
-        pprint("=== Initial Agent Plan ===")
-        pprint(agent_plan.output)
         # now save the plan to the agent state
         runtime_state = self._initialize_runtime_state(
             plan=agent_plan_map, goal=self.prompt, registry=self.agent_registry
@@ -395,23 +408,13 @@ class DeepAgent:
 
         # setup supervisor whose job is to determine if work is done or if there are more things to do
         supervisor_agent = self._create_supervisor(tools=[self.update_task_status])
-
+        task_queue = []
         step_count = 0
         while step_count < self._max_steps:
             print(f"\n--- DeepAgent Cycle {step_count} ---")
             # Setup up this iterations supervisor instruction
-            super_inst = f"""
-
-                Based on the current job plan and status of tasks, determine next step or steps to take.
-
-                <plan>
-
-                    {runtime_state.plan}
-
-                </plan>
-                """
             supervisor_response = await supervisor_agent.run(
-                "Execute the plan given the current runtime state and knowledge.",
+                "Execute the plan given the current runtime state and status of tasks.",
                 deps=runtime_state,
             )
 
@@ -431,13 +434,21 @@ class DeepAgent:
 
                 Based on the goal and task description, evaluate if the worker output sufficiently completes the task.
                 Provide a detailed analysis and TRUE or FALSE if it passed or not quality check.
+
+                You have the ability to reflect on the work done and provide feedback for improvement if needed.
+                1. If the work is sufficient, respond with TRUE.
+                2. If the work is insufficient, respond with FALSE and provide detailed feedback on what needs to be improved.
+                3. Consider any additional information we may need to complete the task successfully.
+
+                You have the ability to read the detailed report file if it was generated by the worker. Use that to inform your decision.
                 """
                 qa_response = await self._critic_agent.run(qa_prompt)
                 print(f"--- QA Response ---")
                 pprint(qa_response.output.model_dump())
 
             # output qa report of task completion for supervisor
-
+            # add any new knowledge to the runtime state knowledge store
+            runtime_state.runtime_steps += 1
             # supervisor gets qa report and decides if work is done and if so marks it as done and decides what to do next.
 
             step_count += 1

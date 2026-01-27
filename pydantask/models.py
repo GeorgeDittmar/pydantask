@@ -78,9 +78,10 @@ class ToolDescription(BaseModel):
 
 
 class ResearchResult(BaseModel):
-    summary: str
-    information: list[str]
-    sources: list[str]
+    summary: str = Field(description="Concise summary of findings.")
+    detailed_report_path: list[str] = Field(
+        description="path to detailed report files containing in-depth information."
+    )
 
 
 class RuntimeState(BaseModel):
@@ -95,6 +96,7 @@ class RuntimeState(BaseModel):
     runtime_steps: int = 0
     tokens_used: int = 0
     goal: str
+    task_queue: List[TaskItem] = Field(default_factory=list)
 
 
 class SupervisorDecision(BaseModel):

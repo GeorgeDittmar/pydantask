@@ -44,25 +44,25 @@ async def think_tool(reflection: str):
     return f"Reflection recorded: {reflection}"
 
 
-async def write_to_file_system(file_to_write_to, information):
-    "Create or write to a file on the filesystem."
-    with open(DEFAULT_DIR.joinpath(file_to_write_to), "a") as f:
-        f.write(information + "\n")
+async def write_to_file_system(file_name: str, detailed_report: str):
+    "Create or write to a file on the file system."
+    with open(DEFAULT_DIR.joinpath(file_name), "a") as f:
+        f.write(detailed_report + "\n")
 
 
-async def delete_from_file_system(path_to_delete):
+async def delete_from_file_system(file_name: str):
     """Delete a file or directory"""
     # Attempt to delete the file, ignore error if it doesn't exist (Python 3.8+)
     try:
-        DEFAULT_DIR.joinpath(path_to_delete).unlink(missing_ok=True)
-        print(f"File '{path_to_delete}' deletion attempted (if existed).")
+        DEFAULT_DIR.joinpath(file_name).unlink(missing_ok=True)
+        print(f"File '{file_name}' deletion attempted (if existed).")
     except PermissionError:
-        print(f"Permission denied to delete the file '{path_to_delete}'.")
+        print(f"Permission denied to delete the file '{file_name}'.")
     except Exception as e:
         print(f"An error occurred: {e}")
 
 
-async def read_from_file_system(file_to_read):
+async def read_from_file_system(file_to_read: str):
     """Read from file on file system if it exists."""
     try:
         with open(file_to_read, "r") as f:
