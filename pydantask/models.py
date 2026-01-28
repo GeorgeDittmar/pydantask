@@ -33,7 +33,7 @@ class TaskItem(BaseModel):
     id: str
     description: str
     status: TaskStatus
-    result: Optional[TaskResult]
+    result: str = ""
     capability: str
     task_dependencies: Optional[List[int]] = Field(
         description="Put task dependency IDs here", default_factory=list
@@ -60,6 +60,7 @@ class ToolDescription(BaseModel):
 
 
 class ResearchResult(BaseModel):
+    task_id: str
     summary: str = Field(description="Concise summary of findings.")
     detailed_report_path: list[str] = Field(
         description="path to detailed report files containing in-depth information."
@@ -90,6 +91,9 @@ class SupervisorDecision(BaseModel):
     feedback_for_planner: Optional[str] = Field(
         default=None,
         description="Any feedback to the planner if a task has become blocked.",
+    )
+    all_tasks_completed: bool = Field(
+        default=False, description="Indicates if all tasks are completed."
     )
 
 
