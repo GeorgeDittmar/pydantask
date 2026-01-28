@@ -86,7 +86,7 @@ class SupervisorDecision(BaseModel):
     reasoning: str = Field(
         description="Reasoning for why these tasks need to be completed next."
     )
-    tasks_to_execute: List[TaskItem] = Field(description="List of tasks to execute.")
+    tasks_to_execute: List[str] = Field(description="List of task id's to execute.")
     feedback_for_planner: Optional[str] = Field(
         default=None,
         description="Any feedback to the planner if a task has become blocked.",

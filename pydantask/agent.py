@@ -405,7 +405,7 @@ class DeepAgent:
         task_queue = []
         step_count = 0
         while step_count < self._max_steps:
-            break
+
             print(f"\n--- DeepAgent Cycle {step_count} ---")
             # Setup up this iterations supervisor instruction
             supervisor_response = await supervisor_agent.run(
@@ -507,8 +507,8 @@ class DeepAgent:
 
         # 1. Identify "Ready" tasks
         ready_steps = [
-            step
-            for step in tasks.output.tasks_to_execute
+            ctx.plan[id]
+            for id in tasks.tasks_to_execute
             # if step.status == TaskStatus.PENDING
             # and all(
             #     tasks_to_execute.get(d_id).status == "completed"
