@@ -29,38 +29,20 @@ class TaskResult(BaseModel):
     error_msg: Optional[str] = None
 
 
-class VerifiedSegment(BaseModel):
-    segment_id: str
-    content: str
-    is_valid: bool
-    reason: Optional[str] = None  # Why it failed, if it did
-
-
-class PartialEvaluation(BaseModel):
-    all_passed: bool
-    segments: List[VerifiedSegment]
-    summary_feedback: str  # Instructions for the next iteration
-
-
-class TaskIteration(BaseModel):
-    timestamp: datetime = Field(default_factory=datetime.now)
-    output: Any
-    evaluation: Optional[PartialEvaluation] = None
-    prompt_used: str
-
-
 class TaskItem(BaseModel):
     id: str
     description: str
     status: TaskStatus
-    result: Optional[str]
+    result: Optional[TaskResult]
     capability: str
     task_dependencies: Optional[List[int]] = Field(
         description="Put task dependency IDs here", default_factory=list
     )
-    review_feedback: Optional[str] = None  # Store the "critique" here
+    task_feedback: Optional[TaskQAResult] = None  # Store the Eval "critique" here
     error_msg: Optional[str] = None  # Store any error messages here
-    iteration_history: list = []
+    iteration_history: list = (
+        []
+    )  # Store any answer history if multiple attempts are made
     attempt_count: int = 0
     max_attempts: int = 3
     metadata: dict = {}

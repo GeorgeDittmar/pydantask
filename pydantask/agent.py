@@ -216,14 +216,6 @@ synth_agent_sys_prompt = """
 You take information from various sources and synthesize a response for the goal
 """
 
-critic_agent = Agent(
-    "gpt-4o",  # Use a smarter model for the critic
-    system_prompt="""You are a Quality Assurance specialist. 
-    Compare the Worker's Output against the Original Task. 
-    Look for: Missing details, hallucinations, or lack of depth.
-    If it's perfect, say 'APPROVED'. Otherwise, list what needs to change.""",
-)
-
 
 class DeepAgent:
     """DeepDantic AI Agent that manages sub-agents to achieve complex goals."""
@@ -231,8 +223,8 @@ class DeepAgent:
     def __init__(
         self,
         prompt,
-        model="gpt-4.1-mini",
-        critic_model="gpt-4.1-mini",
+        model="openai:gpt-4.1-mini",
+        critic_model="openai:gpt-4.1-mini",
         max_steps=3,
         set_token_budget: int = None,
         tools: Union[None, list[ToolDescription]] = None,
@@ -400,6 +392,8 @@ class DeepAgent:
         """
         agent_plan = await self._planner_agent.run(planner_prompt)
         agent_plan_map = {v.id: v for v in agent_plan.output.tasks}
+        print(f"--- Initial Plan Created with {len(agent_plan_map)} tasks ---")
+        pprint(agent_plan_map)
 
         # now save the plan to the agent state
         runtime_state = self._initialize_runtime_state(
@@ -411,6 +405,7 @@ class DeepAgent:
         task_queue = []
         step_count = 0
         while step_count < self._max_steps:
+            break
             print(f"\n--- DeepAgent Cycle {step_count} ---")
             # Setup up this iterations supervisor instruction
             supervisor_response = await supervisor_agent.run(
@@ -445,6 +440,10 @@ class DeepAgent:
                 qa_response = await self._critic_agent.run(qa_prompt)
                 print(f"--- QA Response ---")
                 pprint(qa_response.output.model_dump())
+
+                runtime_state.plan[task_result.id].iteration_history.append(
+                    qa_response.output
+                )
 
             # output qa report of task completion for supervisor
             # add any new knowledge to the runtime state knowledge store
