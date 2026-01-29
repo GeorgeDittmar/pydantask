@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Literal, Any, Dict, Callable
 from datetime import datetime
 from pydantic_ai import Agent
+from regex import F
 
 
 class TaskStatus(Enum):
@@ -31,6 +32,7 @@ class TaskResult(BaseModel):
 
 class TaskItem(BaseModel):
     id: str
+    goal: str = Field(description="The overall goal this task is contributing to.")
     description: str
     status: TaskStatus
     result: str = ""
