@@ -7,7 +7,7 @@ from pydantic_ai.agent import Agent
 agent_registry = {}
 
 da = DeepAgent(
-    "I need help planning a trip to scotland. please provide a compiled trip plan itinerary."
+    "Give me a detailed report on what tax laws changed this year compared to last year. Output a single comprehensive report with citations to markdown.",
 )
 result = asyncio.run(da.run())
 

@@ -3,6 +3,7 @@ from email import errors
 from json import tool
 
 from langfuse import get_client
+from langfuse import observe
 import json
 import uuid
 import os
@@ -37,6 +38,7 @@ from .default_tools import (
     read_from_file_system,
     think_tool,
     ask_user,
+    get_current_system_time,
 )
 
 from pydantic_ai.common_tools.tavily import (
@@ -172,14 +174,16 @@ class SupervisorSpec:
 
         Current State of job plan:
 
-        {ctx.deps.plan}
+        {json.dumps({k: v.model_dump_json() for k, v in ctx.deps.plan.items()}, indent=2)}
 
         You must look at the current state of the job plan, and decide which task or tasks should be run next.
         Honor task dependencies and do not start tasks whose dependencies are not COMPLETED.
 
-        If any task is given the state ERROR or REPLAN delegate to the planner to attempt to rework the plan
-        for that task.
-
+        If any task was in the REVIEW state, review the summary from the TaskQAReport and either mark the task as COMPLETE or if it did not meet the requirements, 
+        set it back to READY with feedback on what needs to be improved to the downstream agent.
+        
+        If any task is given the FAILED status, review the TaskQAReport and determine what went wrong and update the task is appropriate to allow for its completion.  
+        
         You may delegate multiple tasks if they can be run independently. When delegating a task set the status to READY.
         """
 
@@ -245,7 +249,7 @@ class DeepAgent:
         human_feedback: bool = False,
     ):
         """
-        DeepAgent constructor. Creates a DeepDantic AI Agent.
+        Create DeepAgent instance.
 
         :param prompt: The overall goal or prompt for the agent.
         :param model: The language model to use. default is "gpt-4.1-mini".
@@ -261,11 +265,16 @@ class DeepAgent:
         self.agent_registry = self._setup_default_tools(tools=tools)
         self.critic_model = critic_model
         self._planner_agent = Agent(
-            model=self.model, system_prompt=PLANNER_SYSTEM_PROMPT, output_type=Plan
+            name="Task Planner",
+            model=self.model,
+            system_prompt=PLANNER_SYSTEM_PROMPT,
+            output_type=Plan,
+            tools=[get_current_system_time, think_tool],
         )
 
         self._critic_agent = Agent(
             self.critic_model,
+            name="Critic Agent",
             system_prompt="Evaluate the following output from work done on a task. Output a detailed report and if it meets the task requirements.",
             output_type=TaskQAResult,
             tools=[read_from_file_system, think_tool],
@@ -291,19 +300,25 @@ class DeepAgent:
 
         synthesizer_agent = Agent(
             self.model,
+            name="Synthesizer Agent",
             instructions=synth_agent_sys_prompt,
             output_type=str,
-            tools=[write_to_file_system, read_from_file_system, think_tool],
+            tools=[
+                write_to_file_system,
+                read_from_file_system,
+                think_tool,
+            ],
         )
 
         synthesizer = ToolDescription(
-            description="Generate answers based on information collected from tasks.",
+            description="Generate answers based on information from various sources and sub agents.",
             tool_func=synthesizer_agent,
         )
 
         # A "Thin" Agent that just wraps a tool
         researcher_agent = Agent(
-            self.model,  # Use a cheap model for simple tasks
+            self.model,
+            name="Research Agent",  # Use a cheap model for simple tasks
             instructions="You are a research specialist. When given a task, follow these steps: "
             "1. Generate 5 search queries based on the task description. Start with broad queries and narrow down."
             "2. Call the search tool for each query. "
@@ -379,6 +394,7 @@ class DeepAgent:
         spec = SupervisorSpec()
         agent = Agent(
             model=model,
+            name="Supervisor",
             deps_type=RuntimeState,
             tools=tools,
             output_type=SupervisorDecision,
@@ -396,6 +412,7 @@ class DeepAgent:
         # Logic to initialize and manage the runtime state
         return RuntimeState(plan=plan, goal=goal, agent_registry=registry)
 
+    @observe
     async def run(self):
         # Start the supervisor agent to manage sub-agents
         # state = RuntimeState(goal=self.prompt)
@@ -404,10 +421,10 @@ class DeepAgent:
 
         Capabilities: {self.agent_registry}
         """
+
         agent_plan = await self._planner_agent.run(planner_prompt)
+
         agent_plan_map = {v.id: v for v in agent_plan.output.tasks}
-        print(f"--- Initial Plan Created with {len(agent_plan_map)} tasks ---")
-        pprint(agent_plan_map)
 
         # now save the plan to the agent state
         runtime_state = self._initialize_runtime_state(
@@ -423,7 +440,7 @@ class DeepAgent:
             print(f"\n--- DeepAgent Cycle {step_count} ---")
             # Setup up this iterations supervisor instruction
             supervisor_response = await supervisor_agent.run(
-                "Execute the plan given the current runtime plan state and status of tasks. Be sure to check if any tasks are ready for review for final acceptance.",
+                "Execute the plan given the current runtime plan state and status of tasks. Be sure to check if any tasks are ready for review for final acceptance or if a task is needing to be reran.",
                 deps=runtime_state,
             )
             supervisor_response = supervisor_response.output
@@ -468,6 +485,9 @@ class DeepAgent:
 
                 # add the qa report to the task result for the supervisor to review
                 runtime_state.plan[task_result.id].task_feedback = qa_response
+                # if review did not pass from QA bot set to failed to notify supervisor to replan
+                if not qa_response.passed:
+                    runtime_state.plan[task_result.id].status = TaskStatus.FAILED
 
             # output qa report of task completion for supervisor
             # add any new knowledge to the runtime state knowledge store

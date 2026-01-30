@@ -73,7 +73,7 @@ async def read_from_file_system(file_to_read: str):
 
 # Tools used by the supervisor or planner agents
 async def get_current_system_time() -> str:
-    """Use this to get the current system time for contex on a task."""
+    """Use this to get the current system time for contex on a task if there is a temporal component."""
     from datetime import datetime
 
     return datetime.now().isoformat()
