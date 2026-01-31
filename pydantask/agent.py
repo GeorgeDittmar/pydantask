@@ -38,7 +38,7 @@ from .default_tools import (
     read_from_file_system,
     think_tool,
     ask_user,
-    get_current_system_time,
+    current_datetime,
 )
 
 from pydantic_ai.common_tools.tavily import (
@@ -103,6 +103,8 @@ def _default_tool_registry():
 def system_prompt(self, ctx: RunContext[RuntimeState]) -> str:
     return f"""You are the supervisor agent in a deep agent system.
     Your job is to manage and delegate tasks to sub-agents and tools to achieve the overall goal.
+    
+    Think step by step. You have access to a think_tool to help reason and reflect on what you should do.
 
     Job plan:
 
@@ -169,14 +171,20 @@ class SupervisorSpec:
         Your job is to manage and delegate tasks to sub-agents and tools to achieve the overall goal.
 
         You have the following capabilities available to delegate work to
-
+        
+        ### Capabilities ###
+        
         {ctx.deps.agent_registry}
 
-        Current State of job plan:
-
-        {json.dumps({k: v.model_dump_json() for k, v in ctx.deps.plan.items()}, indent=2)}
-
         You must look at the current state of the job plan, and decide which task or tasks should be run next.
+        
+        ### Current Plan ###
+        {ctx.deps.plan}
+
+        Be sure to think step by step on what should be run next. You have access to a think_tool for you to reflect on work or results from sub agents. Reason
+        out if the work returned was enough to satisfy the overall goal.
+        
+        ### How to execute tasks ###    
         Honor task dependencies and do not start tasks whose dependencies are not COMPLETED.
 
         If any task was in the REVIEW state, review the summary from the TaskQAReport and either mark the task as COMPLETE or if it did not meet the requirements, 
@@ -221,6 +229,8 @@ Your sole task is to take all the information that has been gathered from resear
 You may not ask for more information. You must answer with the information you have. 
 If you are confused you may use the think tool to reflect on your work and plan next steps or raise any issues you have with the supervisor
 in the return object with a task status of ERROR. You cannot ask the user for more information.
+
+Think through your task 
 
 You have access to the following tools:
     - write_to_file_system: Use this to write long form answers to the file system for later retrieval. 
@@ -269,7 +279,7 @@ class DeepAgent:
             model=self.model,
             system_prompt=PLANNER_SYSTEM_PROMPT,
             output_type=Plan,
-            tools=[get_current_system_time, think_tool],
+            tools=[current_datetime, think_tool],
         )
 
         self._critic_agent = Agent(
@@ -322,12 +332,12 @@ class DeepAgent:
             instructions="You are a research specialist. When given a task, follow these steps: "
             "1. Generate 5 search queries based on the task description. Start with broad queries and narrow down."
             "2. Call the search tool for each query. "
-            "3. Analyze the results from the search tool and extract key information."
+            "3. Analyze the results from the search tool and extract detailed information."
             "4. Use the think tool to reflect on the information gathered and determine if another search is needed."
             "5. If enough information has been gathered, summarize the findings into a clear report."
             " Be concise and focus on the most relevant information to the task."
             " When building the search report, generate a detailed report and a summary."
-            "When genrating the detailed report, include references to sources used. Write the detailed report to a markdown file and return the file path in the detailed_report_path field of the output.",
+            "When genrating the detailed report, include references to sources used with each section written. Write the detailed report to a markdown file and return the file path in the detailed_report_path field of the output.",
             tools=[
                 tavily_search_tool(api_key),
                 think_tool,
@@ -420,6 +430,8 @@ class DeepAgent:
         Goal: {self.prompt}
 
         Capabilities: {self.agent_registry}
+        
+        Come up with a plan for the above goal using the available capabilities.
         """
 
         agent_plan = await self._planner_agent.run(planner_prompt)
@@ -432,7 +444,9 @@ class DeepAgent:
         )
 
         # setup supervisor whose job is to determine if work is done or if there are more things to do
-        supervisor_agent = self._create_supervisor(tools=[self.update_task_status])
+        supervisor_agent = self._create_supervisor(
+            tools=[self.update_task_status], model=self.model
+        )
         step_count = 0
         stop_execution = False
         while step_count < self._max_steps and not stop_execution:
