@@ -20,7 +20,7 @@ import asyncio
 from asyncio import TaskGroup
 from pydantic_ai import RunContext
 from pydantic_ai.common_tools.tavily import tavily_search_tool
-from .prompts import PLANNER_SYSTEM_PROMPT, SUPERVISOR_SYSTEM_PROMPT
+from .prompts import PLANNER_SYS_PROMPT, CRITIC_SYS_PROMPT
 from .models import (
     ResearchResult,
     RuntimeState,
@@ -28,7 +28,6 @@ from .models import (
     Plan,
     TaskQAResult,
     TaskStatus,
-    NextAction,
     SupervisorDecision,
     ToolDescription,
     TaskResult,
@@ -67,26 +66,6 @@ else:
 Agent.instrument_all()
 
 
-# class RuntimeState(BaseModel):
-#     goal: str
-#     plan: PlanState
-#     last_event: Optional[str] = None
-
-
-# class ResearcherAgent:
-#     """Researcher Agent that performs research tasks."""
-
-#     class AgentState(BaseModel):
-#         goal: str
-#         completed_steps: List[str] = Field(default_factory=list)
-#         step_results: dict[str, dict] = Field(default_factory=dict)
-#         steps: List["ResearchStep"] = Field(default_factory=list)
-#         hypotheses: List[str] = Field(default_factory=list)
-#         evidence: List[dict] = Field(default_factory=list)
-#         claims: List[str] = Field(default_factory=list)
-#         confidence: float = 0.0
-
-
 def _default_tool_registry():
     return {
         "research_agent": {
@@ -100,133 +79,92 @@ def _default_tool_registry():
     }
 
 
-def system_prompt(self, ctx: RunContext[RuntimeState]) -> str:
-    return f"""You are the supervisor agent in a deep agent system.
-    Your job is to manage and delegate tasks to sub-agents and tools to achieve the overall goal.
-    
-    Think step by step. You have access to a think_tool to help reason and reflect on what you should do.
+# class SupervisorSpec:
+#     def system_prompt(self, ctx: RunContext[RuntimeState]) -> str:
+#         return f"""
+#         You are an expert at running tasks in a plan and delegating to appropriate sub-agents.
+#         You must look at the plan and decide what tasks need to be run next to achieve the overall goal.
 
-    Job plan:
+#         Overall Goal: {ctx.deps.objective}
 
-    {ctx.deps.plan}
+#         Plan:
 
-    You have the following capabilities available to use:
+#         <plan>
+#         \n
+#             {ctx.deps.plan}
+#         \n
+#         </plan>
 
-    {ctx.deps.agent_registry}
+#         The following sub-agents are available to use to solve each task.
 
-    You must look at the current state of the job plan, and decide which task or tasks should be run next.
-    Honor task dependencies and do not start tasks whose dependencies are not 'COMPLETE'.
+#         <sub-agents>
+#         \n
+#             {ctx.deps.agent_registry}
+#         \n
+#         </sub-agents>
 
-    If any task is given the state 'ERROR' or 'REPLAN' delegate to the planner to attempt to rework the plan
-    for that task.
+#         Be sure to think step by step on what should be run next. You have access to a 'think_tool' for you to reflect on work or results from sub agents. Reason
+#         out if the work returned was enough to satisfy the overall goal. If not, then set the task back to pending and
 
-    When delegating a task set the status to 'DELEGATE'. You may delegate multiple tasks if they can be run independently.
-    """
+#         Honor task dependencies and do not start tasks whose dependencies are not COMPLETED.
 
+#         If any task was in the REVIEW state, review the summary from the TaskQAReport and either mark the task as COMPLETE or if it did not meet the requirements,
+#         set it back to READY with feedback on what needs to be improved to the downstream agent.
 
-class SupervisorSpecv2:
-    def system_prompt(self, ctx: RunContext[RuntimeState]) -> str:
-        return f"""
-        You are a supervisor of a plan to perform a goal. You must execute the 
-        plan as described and only make modifications or update the plan
-        if there are issues in completing steps or needing to do more work.
-        
-        Goal: {ctx.deps.goal}
+#         If any task is given the FAILED status, review the TaskQAReport and determine what went wrong and update the task is appropriate to allow for its completion.
 
-        --- OPERATIONAL STATE ---
-        CURRENT PLAN:
-        {json.dumps({k: v.model_dump() for k, v in ctx.deps.plan.items()}, indent=2)}
-
-        KNOWLEDGE STORE (What we know so far):
-        {ctx.deps.knowledge_store}
-
-        --- YOUR OPERATIONAL MANDATE ---
-        1. Identify the next unblocked task in the Plan.
-        2. Delegate that task using the 'call_worker' tool.
-        3. Once you receive the result (Verified/Failed), update the state.
-        4. IMPORTANT: After updating the state for ONE task, stop and provide a brief status update. 
-        5. DO NOT attempt to run the entire plan in one turn.
-
-        --- YOUR RESPONSIBILITIES ---
-        1. ANALYZE: Which tasks are 'pending' and have their dependencies 'completed'?
-        2. EVALUATE: Look at the Knowledge Store. Is there enough info to skip a task or does a task need revision?
-        3. DELEGATE: Use 'call_worker' for the next logical task. 
-        4. REFLECT: When a worker returns data, you must decide: Is it good enough? If not, use feedback to ask for a retry.
-        5. EVOLVE: If you discover a new sub-goal is needed, use 'add_task_to_plan'.
-
-        --- RULES ---
-        - Do not perform work yourself. Delegate it to the appropriate capability worker.
-        - If a worker fails, analyze the error and decide to retry or fail the task.
-        - Once the goal is fully satisfied, provide the final synthesis.
-
-        --- TERMINATION CRITERIA ---
-        - When ALL tasks in the plan are 'completed', call 'generate_final_output' and return the result as your final answer.
-        - If a critical task is 'failed' and cannot be recovered, explain the blocker to the user.
-        """
+#         You may delegate multiple tasks if they can be run independently. When delegating a task set the status to READY.
+#         """
 
 
 class SupervisorSpec:
     def system_prompt(self, ctx: RunContext[RuntimeState]) -> str:
+        # Pre-format the plan to ensure the LLM sees a clean "Status Board"
+        plan_display = "\n".join(
+            [
+                f"- [{t.status}] ID: {t.task_id} | Task: {t.task_objective} | Deps: {t.task_dependencies}"
+                for t in ctx.deps.plan.values()
+            ]
+        )
+
+        # Simplify the registry so the Supervisor sees "Tools" not "Agent Objects"
+        agent_display = "\n".join(
+            [
+                f"- {uuid}: {info.description}"
+                for uuid, info in ctx.deps.agent_registry.items()
+            ]
+        )
+
         return f"""
-        You are an expert at running tasks in a plan and delegating to appropriate sub-agents. You must look at the plan
+### ROLE
+You are the Orchestrator/Supervisor. Your job is to manage the execution of a multi-step plan by delegating tasks to specialized sub-agents.
 
-        <plan>
-        \n
-            {ctx.deps.plan}
-        \n
-        </plan>
-                
-        The following sub-agents are available to use to solve each task. 
-        
-        <sub-agents>
-        \n
-            {ctx.deps.agent_registry}
-        \n
-        </sub-agents>
-        
-        
-        
-        Be sure to think step by step on what should be run next. You have access to a 'think_tool' for you to reflect on work or results from sub agents. Reason
-        out if the work returned was enough to satisfy the overall goal. If not, then set the task back to pending and
-        
-        ### How to execute tasks ###    
-        Honor task dependencies and do not start tasks whose dependencies are not COMPLETED.
+### MISSION OBJECTIVE
+{ctx.deps.objective}
 
-        If any task was in the REVIEW state, review the summary from the TaskQAReport and either mark the task as COMPLETE or if it did not meet the requirements, 
-        set it back to READY with feedback on what needs to be improved to the downstream agent.
-        
-        If any task is given the FAILED status, review the TaskQAReport and determine what went wrong and update the task is appropriate to allow for its completion.  
-        
-        You may delegate multiple tasks if they can be run independently. When delegating a task set the status to READY.
-        """
+### CURRENT MISSION CONTROL BOARD
+<plan_status>
+{plan_display}
+</plan_status>
 
-    def tools(self):
-        return [
-            self.mark_task_done,
-        ]
+### AVAILABLE SUB-AGENT CAPABILITIES
+<capabilities>
+{agent_display}
+</capabilities>
 
-    def mark_task_done(self, ctx, task_id: str):
+### OPERATING PROCEDURES
+1. **Dependency Check:** Only move tasks to 'READY' if all their `task_dependencies` are marked 'COMPLETED'.
+2. **Parallel Execution:** You MAY delegate multiple independent 'READY' tasks simultaneously.
+3. **Quality Assurance (QA):**
+   - If a task is in 'REVIEW', check the `TaskQAReport`. 
+   - If QA passed: Mark task as 'COMPLETED'.
+   - If QA failed: Mark task back to 'READY' and include the QA feedback in the task instructions.
+4. **Error Handling:** If a task is 'FAILED', investigate the error and decide if the task needs to be reran or if the plan needs an update via your tools.
+5. **Self-Reflection:** Use the `think_tool` before every decision to verify you aren't missing a dependency or misallocating a sub-agent.
 
-        if task_id not in ctx.deps.tasks:
-            return f"Could not find {task_id} in plan. Try again and make sure you provide the correct task id."
-
-        ctx.deps.tasks[task_id].done = True
-        return f"Task {task_id} marked complete."
-
-
-# Your Registry stays clean
-# registry = {
-#     "researcher": deep_research_agent,  # Heavy reasoning
-#     "coder": coding_agent,  # Heavy reasoning
-#     "files": file_agent,  # Atomic / Utility
-# }
-
-
-# default_registry = {"websearch": search_web}
-
-
-class SearchQuery(BaseModel):
-    search_query: str
+### OUTPUT INSTRUCTIONS
+Decide which tasks to execute now. Return your decision as a `SupervisorDecision` object.
+"""
 
 
 synth_agent_sys_prompt = """
@@ -256,9 +194,9 @@ class DeepAgent:
     def __init__(
         self,
         prompt,
-        model="openai:gpt-4.1-mini",
-        critic_model="openai:gpt-4.1-mini",
-        max_steps=3,
+        model="openai:gpt-4.1",
+        critic_model="openai:gpt-4.1",
+        max_steps=20,
         set_token_budget: int = None,
         tools: Union[None, list[ToolDescription]] = None,
         human_feedback: bool = False,
@@ -266,7 +204,7 @@ class DeepAgent:
         """
         Create DeepAgent instance.
 
-        :param prompt: The overall goal or prompt for the agent.
+        :param prompt: The overall objective for the agent.
         :param model: The language model to use. default is "gpt-4.1-mini".
         :param max_steps: Maximum steps to prevent infinite loops. defaults to 20 steps
         :param set_token_budget: Token budget for the agent's operation. Defaults to None (no limit).
@@ -274,17 +212,18 @@ class DeepAgent:
         :param human_feedback: Whether to incorporate human feedback in the agent's decision-making. Defaults to False.
         """
         self.model = model
-        self.prompt = prompt  # Goal Prompt
+        self.prompt = prompt  # Objective for the agent
         self._max_steps = max_steps  # Max steps to prevent infinite loops
         self.token_budget = set_token_budget
         self.agent_registry = self._setup_default_tools(tools=tools)
         self.critic_model = critic_model
         self._planner_agent = Agent(
-            name="Task Planner",
+            name="Planner Agent",
             model=self.model,
-            system_prompt=PLANNER_SYSTEM_PROMPT,
+            system_prompt=PLANNER_SYS_PROMPT,
             output_type=Plan,
             tools=[get_current_datetime, think_tool],
+            end_strategy="exhaustive",
         )
 
         self._critic_agent = Agent(
@@ -293,6 +232,7 @@ class DeepAgent:
             system_prompt="Evaluate the following output from work done on a task. Output a detailed report and if it meets the task requirements.",
             output_type=TaskQAResult,
             tools=[read_from_file_system, get_current_datetime, think_tool],
+            end_strategy="exhaustive",
         )
 
     def _setup_default_tools(self, tools: Union[None, list[ToolDescription]] = None):
@@ -316,7 +256,7 @@ class DeepAgent:
         synthesizer_agent = Agent(
             self.model,
             name="Synthesizer Agent",
-            instructions=synth_agent_sys_prompt,
+            system_prompt=synth_agent_sys_prompt,
             output_type=str,
             tools=[
                 write_to_file_system,
@@ -334,7 +274,7 @@ class DeepAgent:
         researcher_agent = Agent(
             self.model,
             name="Research Agent",  # Use a cheap model for simple tasks
-            instructions="You are a research specialist. When given a task, follow these steps: "
+            system_prompt="You are a research specialist. When given a task, follow these steps: "
             "1. Generate 5 search queries based on the task description. Start with broad queries and narrow down."
             "2. Call the search tool for each query. "
             "3. Analyze the results from the search tool and extract detailed information."
@@ -348,8 +288,10 @@ class DeepAgent:
                 think_tool,
                 write_to_file_system,
                 read_from_file_system,
+                get_current_datetime,
             ],
             output_type=TaskResult,
+            end_strategy="exhaustive",
         )
 
         researcher = ToolDescription(
@@ -359,7 +301,7 @@ class DeepAgent:
 
         file_system_agent = Agent(
             self.model,
-            instructions="You have access to a file system to use for tasks that need to be completed. \
+            system_prompt="You have access to a file system to use for tasks that need to be completed. \
             Use the file system to store long term information. \
             You may also write output for the user to the file system. \
             You also have an addtional think tool that you can use to reflect on your work and plan next steps.",
@@ -373,7 +315,7 @@ class DeepAgent:
 
         ask_user_agent = Agent(
             self.model,
-            instructions="You ask the user clarifying questions when you need more information to complete a task. Once you have the information you need, you provide it back to the supervisor agent as a summary for it to then reason over. Do not return a question in that summary since the user will not see it. When done, set the status to REVIEW. If you runinto errors set the status to ERROR",
+            system_prompt="You ask the user clarifying questions when you need more information to complete a task. Once you have the information you need, you provide it back to the supervisor agent as a summary for it to then reason over. Do not return a question in that summary since the user will not see it. When done, set the status to REVIEW. If you runinto errors set the status to ERROR",
             tools=[ask_user, think_tool],
             output_type=TaskResult,
         )
@@ -385,12 +327,12 @@ class DeepAgent:
 
         thinking_tool_agent = Agent(
             self.model,
-            instructions="You can use this tool to reflect on your progress and plan your next steps carefully.",
+            system_prompt="You are a strategic reflection agent. Your job is to think deeply about the work that has been done so far and provide insights and next steps. Use this tool to reflect on progress, identify gaps, and plan future actions. Your reflection should be thorough and consider all aspects of the task at hand.",
             tools=[think_tool],
         )
 
         thinking_tool = ToolDescription(
-            description="Tool for strategic reflection on progress and decision-making.",
+            description="Tool for strategic reflection on progress and decision-making. Must be used after each task to reflect on work done and plan next steps.",
             tool_func=thinking_tool_agent,
         )
 
@@ -422,10 +364,10 @@ class DeepAgent:
         return agent
 
     def _initialize_runtime_state(
-        self, plan: Dict[str, TaskItem], goal: str, registry: dict
+        self, plan: Dict[int, TaskItem], objective: str, registry: dict
     ) -> RuntimeState:
         # Logic to initialize and manage the runtime state
-        return RuntimeState(plan=plan, goal=goal, agent_registry=registry)
+        return RuntimeState(plan=plan, objective=objective, agent_registry=registry)
 
     @observe
     async def run(self):
@@ -441,11 +383,13 @@ class DeepAgent:
 
         agent_plan = await self._planner_agent.run(planner_prompt)
 
-        agent_plan_map = {v.id: v for v in agent_plan.output.tasks}
-
+        agent_plan_map = {v.task_id: v for v in agent_plan.output.tasks}
+        print("--- Generated Plan ---")
+        pprint(agent_plan_map)
+        # return
         # now save the plan to the agent state
         runtime_state = self._initialize_runtime_state(
-            plan=agent_plan_map, goal=self.prompt, registry=self.agent_registry
+            plan=agent_plan_map, objective=self.prompt, registry=self.agent_registry
         )
 
         # setup supervisor whose job is to determine if work is done or if there are more things to do
@@ -457,12 +401,14 @@ class DeepAgent:
         while step_count < self._max_steps and not stop_execution:
 
             print(f"\n--- DeepAgent Cycle {step_count} ---")
-            # Setup up this iterations supervisor instruction
+
             supervisor_response = await supervisor_agent.run(
                 "Execute the plan given the current runtime plan state and status of tasks. Be sure to check if any tasks are ready for review for final acceptance or if a task is needing to be reran.",
                 deps=runtime_state,
             )
             supervisor_response = supervisor_response.output
+
+            pprint(supervisor_response.model_dump_json(indent=2))
             if supervisor_response.all_tasks_completed:
                 print(
                     f"--- All tasks completed according to supervisor. Ending execution loop. ---"
@@ -477,24 +423,25 @@ class DeepAgent:
             print(f"--- Task Results ---")
             # go through responses and evaluate if they have completed the task
             for task_result in task_results or []:
-                print(f"--- Evaluating Task Result for {task_result.id} ---")
+                print(f"--- Evaluating Task Result for {task_result.task_id} ---")
                 qa_prompt = f"""
-                Goal: {runtime_state.goal}
-                Task Result Object: {task_result.model_dump_json(indent=2)}
+                Overall Objective: {runtime_state.objective}
 
-                Based on the goal and task description, evaluate if the worker output sufficiently completes the task.
+                Sub Task Result: {task_result.model_dump_json(indent=2)}
+
+                Based on the objetive and task description, evaluate if the worker output sufficiently completes the task.
                 Provide a detailed analysis and TRUE or FALSE if it passed or not quality check.
-                
+
                 Abilities:
                 You have the ability to reflect on the work done and provide feedback for improvement if needed.
                 You have the ability to read the detailed report file if it was generated by the worker. Use that to inform your decision.
-                
+
                 Instructions:
                 1. If the work is sufficient, respond with TRUE.
                 2. If the work is insufficient, respond with FALSE and provide detailed feedback on what needs to be improved.
                 3. Do not attempt to qa the whole GOAL, just the specific task assigned. The GOAL is meant to provide context only.
                 4. Use the think tool to reflect on the work done and plan your evaluation carefully.
-                
+
                 Do not make assumptions. Base your evaluation strictly on the worker output and the task description.
                 """
                 qa_response = await self._critic_agent.run(qa_prompt)
@@ -503,15 +450,9 @@ class DeepAgent:
                 pprint(qa_response.model_dump_json())
 
                 # add the qa report to the task result for the supervisor to review
-                runtime_state.plan[task_result.id].task_feedback = qa_response
-                # if review did not pass from QA bot set to failed to notify supervisor to replan
-                if not qa_response.passed:
-                    runtime_state.plan[task_result.id].status = TaskStatus.FAILED
+                runtime_state.plan[task_result.task_id].task_feedback = qa_response
 
-            # output qa report of task completion for supervisor
-            # add any new knowledge to the runtime state knowledge store
             runtime_state.runtime_steps += 1
-            # supervisor gets qa report and decides if work is done and if so marks it as done and decides what to do next.
 
             step_count += 1
         return runtime_state
@@ -546,7 +487,7 @@ class DeepAgent:
         # 2. Prepare the concurrent coroutines
         ready_tasks = []
         for step in ready_steps:
-            print(f"- {step.id}: {step.description} using {step.capability}")
+            print(f"- {step.task_id}: {step.task_objective} using {step.capability}")
             print(f"  Dependencies: {step.task_dependencies}")
             print(f"  Status: {step.status}")
             print(f"  Result: {step.result}")
@@ -575,26 +516,21 @@ class DeepAgent:
         """Helper to run an agent and capture its output into the step object."""
         try:
             result = await tool.run(
-                f"""Execute the following task: {step.description}. Make sure to keep in mind the overall goal: {step.goal}.
+                f"""Execute the following task: {step.task_objective}. Make sure to keep in mind the overall objective: {self.prompt}.
                                     Do not act on the goal act only on the singular task description provided."""
             )
             step.result = result.output
-            # Update the step status to REVIEW
-            step.status = TaskStatus.REVIEW
+            step.status = TaskStatus.NEEDS_REVIEW
             pprint(step.model_dump())
             return step
         except Exception as e:
-            step.status = TaskStatus.ERROR
+            step.status = TaskStatus.ERRORED
             step.error_msg = str(e)
             pprint(step.model_dump())
             return step
 
-    async def reflect_on_work(self, reflection, ctx: RunContext[RuntimeState]):
-        "Tool to reflect on if work has been completed."
-        return f"{reflection}"
-
     async def update_task_status(
-        self, ctx: RunContext[RuntimeState], step_id: str, status: TaskStatus
+        self, ctx: RunContext[RuntimeState], step_id: int, status: TaskStatus
     ):
         """The supervisor uses this for updating a specific step in the plan to a new status."""
         if step_id in ctx.deps.plan:
@@ -611,8 +547,6 @@ class DeepAgent:
 
         if not worker_agent:
             return f"Error: No specialist found for '{capability}'."
-        # print(f"AGENT: {capability} INSTRUCTION: {instruction}")
         # Trigger the deep reasoning loop of the sub-agent
         result = await worker_agent.run(instruction)
-        # Return just the result to the Supervisor
         return result

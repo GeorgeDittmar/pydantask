@@ -20,9 +20,6 @@ async def ask_user(ctx: RunContext[RuntimeState], question_for_user: str) -> str
 async def think_tool(reflection: str):
     """Tool for strategic reflection on progress and decision-making.
 
-    Use this tool after each search to analyze results and plan next steps systematically.
-    This creates a deliberate pause in the research workflow for quality decision-making.
-
     When to use:
     - After receiving search results: What key information did I find?
     - Before deciding next steps: Do I have enough to answer comprehensively?
@@ -37,43 +34,66 @@ async def think_tool(reflection: str):
 
     Args:
         reflection: Your detailed reflection on research progress, findings, gaps, and next steps
-
     Returns:
         Confirmation that reflection was recorded for decision-making
     """
     return f"Reflection recorded: {reflection}"
 
 
-async def write_to_file_system(file_name: str, detailed_report: str):
-    "Create or write to a file on the file system."
+async def write_to_file_system(file_name: str, content: str) -> str:
+    """Create or write to a file on the file system.
+
+    Args: file_name
+        file_name: The name of the file to create or write to.
+        content: The content to write into the file."""
     with open(DEFAULT_DIR.joinpath(file_name), "a") as f:
-        f.write(detailed_report + "\n")
+        f.write(content + "\n")
+        return f"Content written to {file_name}."
 
 
-async def delete_from_file_system(file_name: str):
-    """Delete a file or directory"""
+async def delete_from_file_system(path: str) -> str:
+    """Delete a file or directory on the file system.
+
+    Args: ""
+        path: The path to the file or directory to delete.
+    Returns:
+        Confirmation message indicating deletion attempt.
+    """
     # Attempt to delete the file, ignore error if it doesn't exist (Python 3.8+)
     try:
-        DEFAULT_DIR.joinpath(file_name).unlink(missing_ok=True)
-        print(f"File '{file_name}' deletion attempted (if existed).")
+        DEFAULT_DIR.joinpath(path).unlink(missing_ok=True)
+        return f"File '{path}' deletion attempted (if existed)."
     except PermissionError:
-        print(f"Permission denied to delete the file '{file_name}'.")
+        return f"Permission denied to delete the file '{path}'."
     except Exception as e:
-        print(f"An error occurred: {e}")
+        return f"An error occurred: {e}"
 
 
 async def read_from_file_system(file_to_read: str):
-    """Read from file on file system if it exists."""
+    """Read from a file on the file system. If the file dos not exist, returns a message indicating so.
+    Args:
+        file_to_read: The path to the file to read.
+    Returns:
+        The contents of the file as a string, or a message indicating the file does not exist.
+    """
     try:
         with open(DEFAULT_DIR.joinpath(file_to_read), "r") as f:
             return f.read()
     except FileNotFoundError as e:
-        return "File does not exist. If you were expencting it to be, create the file."
+        return f"File does not exist. If you were expencting it to be, create the file. \n{e}"
 
 
 # Tools used by the supervisor or planner agents
 async def get_current_datetime() -> str:
-    """Use this to get the current date and time so you have context as to the current date."""
+    """Get the current date and time in ISO 8601 format.
+    When to use:
+    - When needing to timestamp actions or decisions.
+    - When tracking progress over time.
+    - When scheduling future tasks or deadlines.
+    Args: None
+    Returns:
+        Current date and time as an ISO 8601 formatted string.
+    """
     from datetime import datetime
 
     return datetime.now().isoformat()

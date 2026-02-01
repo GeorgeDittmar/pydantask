@@ -35,7 +35,9 @@ class TaskItem(BaseModel):
     overall_objective: str = Field(
         description="The overall objective this task is contributing to solving."
     )
-    task_objective: str = Field(description="The task objective to solve for.")
+    task_objective: str = Field(
+        description="Description of the sub task to be executed."
+    )
     status: TaskStatus
     result: str = ""
     capability: str = Field(
@@ -66,7 +68,7 @@ class ToolDescription(BaseModel):
 
 
 class ResearchResult(BaseModel):
-    task_id: str
+    task_id: int
     summary: str = Field(description="Concise summary of findings.")
     detailed_results_path: list[str] = Field(
         description="path to detailed report files containing in-depth information."
@@ -76,7 +78,7 @@ class ResearchResult(BaseModel):
 class RuntimeState(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    plan: Dict[str, TaskItem]
+    plan: Dict[int, TaskItem]
     objective: str
     agent_registry: Dict[str, Any] = Field(default_factory=dict, exclude=True)
     completed_steps: set[int] = Field(default_factory=set)
@@ -103,19 +105,13 @@ class SupervisorDecision(BaseModel):
     )
 
 
-class NextAction(BaseModel):
-    """Next action to be taken by the supervisor agent."""
-
-    reasoning: str
-    action_type: Literal["delegate", "complete"]
-    target_agent: Optional[str] = None
-    task_spec: Optional[TaskItem] = None
-
-
 # =========================
 # Planner state models
 # =========================
 class Plan(BaseModel):
+    reasoning_steps: str = Field(
+        description="Internal reasoning before finalizing the plan"
+    )
     tasks: list[TaskItem]
 
 
@@ -134,5 +130,5 @@ class TaskSpec(BaseModel):
     overall_objective: str
 
 
-class ToolResult(BaseModel):
-    result: str
+class SelfReflection(BaseModel):
+    reflection: str

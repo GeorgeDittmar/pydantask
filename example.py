@@ -7,8 +7,8 @@ from pydantic_ai.agent import Agent
 agent_registry = {}
 
 da = DeepAgent(
-    "Give me a detailed report on what tax laws changed this year compared to last year. Output a single comprehensive report with citations to markdown.",
+    "Explain to me the IRS tax changes for this year and compare them to last year.",
 )
 result = asyncio.run(da.run())
 
-print(result)
+# print(result)
