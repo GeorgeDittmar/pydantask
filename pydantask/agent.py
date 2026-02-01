@@ -38,7 +38,7 @@ from .default_tools import (
     read_from_file_system,
     think_tool,
     ask_user,
-    current_datetime,
+    get_current_datetime,
 )
 
 from pydantic_ai.common_tools.tavily import (
@@ -167,22 +167,27 @@ class SupervisorSpecv2:
 
 class SupervisorSpec:
     def system_prompt(self, ctx: RunContext[RuntimeState]) -> str:
-        return f"""You are the supervisor agent in a deep agent system.
-        Your job is to manage and delegate tasks to sub-agents and tools to achieve the overall goal.
+        return f"""
+        You are an expert at running tasks in a plan and delegating to appropriate sub-agents. You must look at the plan
 
-        You have the following capabilities available to delegate work to
+        <plan>
+        \n
+            {ctx.deps.plan}
+        \n
+        </plan>
+                
+        The following sub-agents are available to use to solve each task. 
         
-        ### Capabilities ###
+        <sub-agents>
+        \n
+            {ctx.deps.agent_registry}
+        \n
+        </sub-agents>
         
-        {ctx.deps.agent_registry}
-
-        You must look at the current state of the job plan, and decide which task or tasks should be run next.
         
-        ### Current Plan ###
-        {ctx.deps.plan}
-
-        Be sure to think step by step on what should be run next. You have access to a think_tool for you to reflect on work or results from sub agents. Reason
-        out if the work returned was enough to satisfy the overall goal.
+        
+        Be sure to think step by step on what should be run next. You have access to a 'think_tool' for you to reflect on work or results from sub agents. Reason
+        out if the work returned was enough to satisfy the overall goal. If not, then set the task back to pending and
         
         ### How to execute tasks ###    
         Honor task dependencies and do not start tasks whose dependencies are not COMPLETED.
@@ -279,7 +284,7 @@ class DeepAgent:
             model=self.model,
             system_prompt=PLANNER_SYSTEM_PROMPT,
             output_type=Plan,
-            tools=[current_datetime, think_tool],
+            tools=[get_current_datetime, think_tool],
         )
 
         self._critic_agent = Agent(
@@ -287,7 +292,7 @@ class DeepAgent:
             name="Critic Agent",
             system_prompt="Evaluate the following output from work done on a task. Output a detailed report and if it meets the task requirements.",
             output_type=TaskQAResult,
-            tools=[read_from_file_system, think_tool],
+            tools=[read_from_file_system, get_current_datetime, think_tool],
         )
 
     def _setup_default_tools(self, tools: Union[None, list[ToolDescription]] = None):
@@ -445,7 +450,7 @@ class DeepAgent:
 
         # setup supervisor whose job is to determine if work is done or if there are more things to do
         supervisor_agent = self._create_supervisor(
-            tools=[self.update_task_status], model=self.model
+            tools=[self.update_task_status, get_current_datetime], model=self.model
         )
         step_count = 0
         stop_execution = False

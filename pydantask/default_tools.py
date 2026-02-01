@@ -72,8 +72,8 @@ async def read_from_file_system(file_to_read: str):
 
 
 # Tools used by the supervisor or planner agents
-async def current_datetime() -> str:
-    """Use this to get the current datetime for contex on a task if there is a temporal component."""
+async def get_current_datetime() -> str:
+    """Use this to get the current date and time so you have context as to the current date."""
     from datetime import datetime
 
     return datetime.now().isoformat()

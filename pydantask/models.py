@@ -12,9 +12,9 @@ class TaskStatus(Enum):
     READY = "ready"  # Dependencies met, can run now
     RUNNING = "running"  # Currently being executed
     COMPLETED = "completed"
-    ERROR = "error"
+    ERRORED = "error"
     FAILED = "failed"  # Evaluator rejected it
-    REVIEW = "review"  # Needs Evaluator review
+    NEEDS_REVIEW = "review"  # Needs Evaluator review
 
 
 class TaskQAResult(BaseModel):
@@ -31,12 +31,16 @@ class TaskResult(BaseModel):
 
 
 class TaskItem(BaseModel):
-    id: str
-    goal: str = Field(description="The overall goal this task is contributing to.")
-    description: str
+    task_id: int = Field(description="Unique task id. Should be an integer value.")
+    overall_objective: str = Field(
+        description="The overall objective this task is contributing to solving."
+    )
+    task_objective: str = Field(description="The task objective to solve for.")
     status: TaskStatus
     result: str = ""
-    capability: str
+    capability: str = Field(
+        description="Which sub agent capability should attempt this task."
+    )
     task_dependencies: Optional[List[int]] = Field(
         description="Put task dependency IDs here", default_factory=list
     )
@@ -64,7 +68,7 @@ class ToolDescription(BaseModel):
 class ResearchResult(BaseModel):
     task_id: str
     summary: str = Field(description="Concise summary of findings.")
-    detailed_report_path: list[str] = Field(
+    detailed_results_path: list[str] = Field(
         description="path to detailed report files containing in-depth information."
     )
 
@@ -73,6 +77,7 @@ class RuntimeState(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     plan: Dict[str, TaskItem]
+    objective: str
     agent_registry: Dict[str, Any] = Field(default_factory=dict, exclude=True)
     completed_steps: set[int] = Field(default_factory=set)
     accumulated_knowledge_store: Dict[str, str] = Field(
@@ -80,7 +85,6 @@ class RuntimeState(BaseModel):
     )  # store for accumulated knowledge
     runtime_steps: int = 0
     tokens_used: int = 0
-    goal: str
     task_queue: List[TaskItem] = Field(default_factory=list)
 
 
@@ -89,13 +93,13 @@ class SupervisorDecision(BaseModel):
     reasoning: str = Field(
         description="Reasoning for why these tasks need to be completed next."
     )
-    tasks_to_execute: List[str] = Field(description="List of task id's to execute.")
-    feedback_for_planner: Optional[str] = Field(
+    tasks_to_execute: List[int] = Field(description="List of task id's to execute.")
+    feedback_to_subagent: Optional[str] = Field(
         default=None,
-        description="Any feedback to the planner if a task has become blocked.",
+        description="Any feedback to the sub-agent if a task has become blocked, errored, or failed critic review.",
     )
     all_tasks_completed: bool = Field(
-        default=False, description="Indicates if all tasks are completed."
+        default=False, description="Indicates if all tasks are completed or not."
     )
 
 
@@ -121,13 +125,13 @@ class SubAgentInstruction(BaseModel):
 
 
 class TaskSpec(BaseModel):
-    task_id: str
-    objective: str
+    task_id: int
+    task_objective: str
     capability: Literal["researcher", "writer", "synthesizer"]
     inputs: dict
     success_criteria: str
     constraints: list[str]
-    overall_goal: str
+    overall_objective: str
 
 
 class ToolResult(BaseModel):
