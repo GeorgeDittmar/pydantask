@@ -4,9 +4,11 @@ version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
     "langfuse>=3.11.0",
+    "loguru>=0.7.3",
     "pydantic>=2.12.5",
     "pydantic-ai>=1.48.0",
     "pydantic-graph>=1.32.0",
     "pytest>=9.0.2",
     "tavily>=1.1.0",
+    "tenacity>=9.1.2",
 ]

@@ -1,14 +1,21 @@
 # from asyncio import tasks
 from email import errors
 from json import tool
-
-from langfuse import get_client
-from langfuse import observe
 import json
+from multiprocessing.connection import wait
 import uuid
 import os
 
-import logging
+
+from langfuse import get_client
+from langfuse import observe
+from tenacity import (
+    wait_exponential_jitter,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+)
+from loguru import logger
 from os import system
 
 from enum import Enum
@@ -19,6 +26,8 @@ from typing import List, Optional, Literal, Any, Dict, Callable, Union
 import asyncio
 from asyncio import TaskGroup
 from pydantic_ai import RunContext
+from pydantic_ai.settings import ModelSettings
+from pydantic_ai.retries import AsyncTenacityTransport
 from pydantic_ai.common_tools.tavily import tavily_search_tool
 from .prompts import PLANNER_SYS_PROMPT, CRITIC_SYS_PROMPT
 from .models import (
@@ -512,6 +521,7 @@ class DeepAgent:
         pprint(results)
         return results
 
+    @retry(wait=wait_exponential_jitter(), reraise=True, stop=stop_after_attempt(3))
     async def execute(self, tool, step: TaskItem) -> TaskItem:
         """Helper to run an agent and capture its output into the step object."""
         try:
