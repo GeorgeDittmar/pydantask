@@ -6,7 +6,7 @@ from multiprocessing.connection import wait
 import uuid
 import os
 
-
+from httpx import AsyncClient, HTTPStatusError
 from langfuse import get_client
 from langfuse import observe
 from tenacity import (
@@ -22,11 +22,14 @@ from enum import Enum
 from pydantic_ai import Agent, RunContext, FunctionToolset
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Literal, Any, Dict, Callable, Union
+from tenacity import retry_if_exception_type, stop_after_attempt, wait_exponential
 
 import asyncio
 from asyncio import TaskGroup
 from pydantic_ai import RunContext
 from pydantic_ai.settings import ModelSettings
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.retries import AsyncTenacityTransport
 from pydantic_ai.common_tools.tavily import tavily_search_tool
 from .prompts import PLANNER_SYS_PROMPT, CRITIC_SYS_PROMPT
@@ -52,6 +55,8 @@ from .default_tools import (
 from pydantic_ai.common_tools.tavily import (
     tavily_search_tool,
 )
+from pydantic_ai.retries import AsyncTenacityTransport, RetryConfig, wait_retry_after
+
 
 from pprint import pprint
 
@@ -73,57 +78,6 @@ else:
     print("Authentication failed. Please check your credentials and host.")
 
 Agent.instrument_all()
-
-
-def _default_tool_registry():
-    return {
-        "research_agent": {
-            "description": "An agent that can perform research tasks using web search and data retrieval.",
-            "capabilities": ["research", "analysis"],
-        },
-        "writer_agent": {
-            "description": "An agent that can synthesize information and generate written content.",
-            "capabilities": ["synthesis", "creative_problem_solving"],
-        },
-    }
-
-
-# class SupervisorSpec:
-#     def system_prompt(self, ctx: RunContext[RuntimeState]) -> str:
-#         return f"""
-#         You are an expert at running tasks in a plan and delegating to appropriate sub-agents.
-#         You must look at the plan and decide what tasks need to be run next to achieve the overall goal.
-
-#         Overall Goal: {ctx.deps.objective}
-
-#         Plan:
-
-#         <plan>
-#         \n
-#             {ctx.deps.plan}
-#         \n
-#         </plan>
-
-#         The following sub-agents are available to use to solve each task.
-
-#         <sub-agents>
-#         \n
-#             {ctx.deps.agent_registry}
-#         \n
-#         </sub-agents>
-
-#         Be sure to think step by step on what should be run next. You have access to a 'think_tool' for you to reflect on work or results from sub agents. Reason
-#         out if the work returned was enough to satisfy the overall goal. If not, then set the task back to pending and
-
-#         Honor task dependencies and do not start tasks whose dependencies are not COMPLETED.
-
-#         If any task was in the REVIEW state, review the summary from the TaskQAReport and either mark the task as COMPLETE or if it did not meet the requirements,
-#         set it back to READY with feedback on what needs to be improved to the downstream agent.
-
-#         If any task is given the FAILED status, review the TaskQAReport and determine what went wrong and update the task is appropriate to allow for its completion.
-
-#         You may delegate multiple tasks if they can be run independently. When delegating a task set the status to READY.
-#         """
 
 
 class SupervisorSpec:
@@ -165,7 +119,7 @@ You are the Orchestrator/Supervisor. Your job is to manage the execution of a mu
 1. **Dependency Check:** Only move tasks to 'READY' if all their `task_dependencies` are marked 'COMPLETED'.
 2. **Parallel Execution:** You MAY delegate multiple independent 'READY' tasks simultaneously.
 3. **Quality Assurance (QA):**
-   - If a task is in 'REVIEW', check the `TaskQAReport`. 
+   - If a task is in 'REVIEW', check the `TaskQAReport` and verify if the task meets what is needed towards completing the objective. 
    - If QA passed: Mark task as 'COMPLETED'.
    - If QA failed: Mark task back to 'READY' and include the QA feedback in the task instructions.
 4. **Error Handling:** If a task is 'FAILED', investigate the error and decide if the task needs to be reran or if the plan needs an update via your tools.
@@ -203,8 +157,8 @@ class DeepAgent:
     def __init__(
         self,
         prompt,
-        model="openai:gpt-4.1",
-        critic_model="openai:gpt-4.1",
+        model="gpt-4.1-mini",
+        critic_model="gpt-4.1-mini",
         max_steps=20,
         set_token_budget: int = None,
         tools: Union[None, list[ToolDescription]] = None,
@@ -226,9 +180,12 @@ class DeepAgent:
         self.token_budget = set_token_budget
         self.agent_registry = self._setup_default_tools(tools=tools)
         self.critic_model = critic_model
+
+        client = self._create_retrying_client()
+        _model = OpenAIChatModel(model, provider=OpenAIProvider(http_client=client))
         self._planner_agent = Agent(
             name="Planner Agent",
-            model=self.model,
+            model=_model,
             system_prompt=PLANNER_SYS_PROMPT,
             output_type=Plan,
             tools=[get_current_datetime, think_tool],
@@ -236,13 +193,42 @@ class DeepAgent:
         )
 
         self._critic_agent = Agent(
-            self.critic_model,
+            model=_model,
             name="Critic Agent",
             system_prompt="Evaluate the following output from work done on a task. Output a detailed report and if it meets the task requirements.",
             output_type=TaskQAResult,
             tools=[read_from_file_system, get_current_datetime, think_tool],
             end_strategy="exhaustive",
         )
+
+    def _create_retrying_client(self):
+        """Create a client with smart retry handling for multiple error types.
+        https://ai.pydantic.dev/retries/
+        """
+
+        def should_retry_status(response):
+            """Raise exceptions for retryable HTTP status codes."""
+            if response.status_code in (429, 502, 503, 504):
+                response.raise_for_status()  # This will raise HTTPStatusError
+
+        transport = AsyncTenacityTransport(
+            config=RetryConfig(
+                # Retry on HTTP errors and connection issues
+                retry=retry_if_exception_type((HTTPStatusError, ConnectionError)),
+                # Smart waiting: respects Retry-After headers, falls back to exponential backoff
+                wait=wait_retry_after(
+                    fallback_strategy=wait_exponential(multiplier=1, max=60),
+                    max_wait=300,
+                ),
+                # Stop after 5 attempts
+                stop=stop_after_attempt(5),
+                # Re-raise the last exception if all retries fail
+                reraise=True,
+            ),
+            validate_response=should_retry_status,
+        )
+
+        return AsyncClient(transport=transport)
 
     def _setup_default_tools(self, tools: Union[None, list[ToolDescription]] = None):
         """
@@ -364,6 +350,7 @@ class DeepAgent:
             deps_type=RuntimeState,
             tools=tools,
             output_type=SupervisorDecision,
+            end_strategy="exhaustive",
         )
 
         @agent.system_prompt
@@ -403,7 +390,8 @@ class DeepAgent:
 
         # setup supervisor whose job is to determine if work is done or if there are more things to do
         supervisor_agent = self._create_supervisor(
-            tools=[self.update_task_status, get_current_datetime], model=self.model
+            tools=[self.update_task_status, get_current_datetime, think_tool],
+            model=self.model,
         )
         step_count = 0
         stop_execution = False
@@ -489,7 +477,6 @@ class DeepAgent:
         ]
 
         print("Ready Steps to Execute:")
-        print(len(ready_steps))
         if not ready_steps:
             return None
 
@@ -524,6 +511,7 @@ class DeepAgent:
     @retry(wait=wait_exponential_jitter(), reraise=True, stop=stop_after_attempt(3))
     async def execute(self, tool, step: TaskItem) -> TaskItem:
         """Helper to run an agent and capture its output into the step object."""
+        await asyncio.sleep(1.0)  # 1 second sleep to not hit throttling limits
         try:
             result = await tool.run(
                 f"""Execute the following task: {step.task_objective}. Make sure to keep in mind the overall objective: {self.prompt}.
@@ -531,12 +519,10 @@ class DeepAgent:
             )
             step.result = result.output
             step.status = TaskStatus.NEEDS_REVIEW
-            pprint(step.model_dump())
             return step
         except Exception as e:
             step.status = TaskStatus.ERRORED
             step.error_msg = str(e)
-            pprint(step.model_dump())
             return step
 
     async def update_task_status(
