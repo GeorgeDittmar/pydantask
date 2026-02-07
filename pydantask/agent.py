@@ -152,7 +152,7 @@ When you write the detailed report to the file system, return the file path in t
 
 
 class DeepAgent:
-    """DeepDantic AI Agent that manages sub-agents to achieve complex goals."""
+    """Pydantask AI DeepAgent that manages sub-agents to achieve complex goals."""
 
     def __init__(
         self,
@@ -195,8 +195,9 @@ class DeepAgent:
         self._critic_agent = Agent(
             model=_model,
             name="Critic Agent",
-            system_prompt="Evaluate the following output from work done on a task. Output a detailed report and if it meets the task requirements.",
+            system_prompt="You are an expert critic. Evaluate the following output from work done on a task. Output a detailed report and if it meets the task requirements.",
             output_type=TaskQAResult,
+            deps_type=RuntimeState,
             tools=[read_from_file_system, get_current_datetime, think_tool],
             end_strategy="exhaustive",
         )
@@ -285,6 +286,7 @@ class DeepAgent:
                 read_from_file_system,
                 get_current_datetime,
             ],
+            deps_type=RuntimeState,
             output_type=TaskResult,
             end_strategy="exhaustive",
         )
@@ -301,6 +303,7 @@ class DeepAgent:
             You may also write output for the user to the file system. \
             You also have an addtional think tool that you can use to reflect on your work and plan next steps.",
             tools=[write_to_file_system, read_from_file_system, think_tool],
+            deps_type=RuntimeState,
         )
 
         file_system = ToolDescription(
@@ -381,7 +384,6 @@ class DeepAgent:
 
         agent_plan_map = {v.task_id: v for v in agent_plan.output.tasks}
         print("--- Generated Plan ---")
-        pprint(agent_plan_map)
         # return
         # now save the plan to the agent state
         runtime_state = self._initialize_runtime_state(
@@ -405,18 +407,19 @@ class DeepAgent:
             )
             supervisor_response = supervisor_response.output
 
-            pprint(supervisor_response.model_dump_json(indent=2))
             if supervisor_response.all_tasks_completed:
                 print(
                     f"--- All tasks completed according to supervisor. Ending execution loop. ---"
                 )
                 stop_execution = True
                 break
+
             print(f"--- Awaiting Task Results ---")
             # execute tasks that are ready to run and await responses
             task_results = await self.execute_ready_tasks(
                 supervisor_response, runtime_state
             )
+
             print(f"--- Task Results ---")
             # go through responses and evaluate if they have completed the task
             for task_result in task_results or []:
@@ -441,7 +444,9 @@ class DeepAgent:
 
                 Do not make assumptions. Base your evaluation strictly on the worker output and the task description.
                 """
-                qa_response = await self._critic_agent.run(qa_prompt)
+                qa_response = await self._critic_agent.run(
+                    qa_prompt, deps=runtime_state
+                )
                 qa_response = qa_response.output
                 print(f"--- QA Response ---")
                 pprint(qa_response.model_dump_json())
@@ -477,6 +482,8 @@ class DeepAgent:
         ]
 
         print("Ready Steps to Execute:")
+        print(ready_steps)
+
         if not ready_steps:
             return None
 
@@ -526,13 +533,13 @@ class DeepAgent:
             return step
 
     async def update_task_status(
-        self, ctx: RunContext[RuntimeState], step_id: int, status: TaskStatus
+        self, ctx: RunContext[RuntimeState], task_id: int, status: TaskStatus
     ):
-        """The supervisor uses this for updating a specific step in the plan to a new status."""
-        if step_id in ctx.deps.plan:
-            ctx.deps.plan.get(step_id).status = status
-            return f"Status for {step_id} is now {status}."
-        return f"Error: No step with {step_id} found in plan. Be sure status_id actually exists."
+        """The supervisor uses this for updating a specific task in the plan to a new status."""
+        if task_id in ctx.deps.plan:
+            ctx.deps.plan.get(task_id).status = status
+            return f"Status for {task_id} is now {status}."
+        return f"Error: No task with {task_id} found in plan. Be sure task_id actually exists."
 
     async def call_worker(
         self, ctx: RunContext[RuntimeState], capability: str, instruction: str

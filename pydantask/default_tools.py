@@ -40,14 +40,22 @@ async def think_tool(reflection: str):
     return f"Reflection recorded: {reflection}"
 
 
-async def write_to_file_system(file_name: str, content: str) -> str:
+async def write_to_file_system(
+    ctx: RunContext[RuntimeState], file_name: str, content: str
+) -> str:
     """Create or write to a file on the file system.
 
     Args: file_name
         file_name: The name of the file to create or write to.
         content: The content to write into the file."""
-    with open(DEFAULT_DIR.joinpath(file_name), "a") as f:
+    print(f"DEBUG: Context object: {ctx}")
+    print(f"DEBUG: Deps object: {ctx.deps}")
+    path = DEFAULT_DIR.joinpath(file_name)
+    with open(path, "a") as f:
         f.write(content + "\n")
+        ctx.deps.document_store[file_name] = str(
+            path
+        )  # save file name and path to document
         return f"Content written to {file_name}."
 
 
@@ -69,16 +77,25 @@ async def delete_from_file_system(path: str) -> str:
         return f"An error occurred: {e}"
 
 
-async def read_from_file_system(file_to_read: str):
+async def read_from_file_system(
+    ctx: RunContext[RuntimeState],
+    file_name: str,
+):
     """Read from a file on the file system. If the file dos not exist, returns a message indicating so.
     Args:
         file_to_read: The path to the file to read.
     Returns:
         The contents of the file as a string, or a message indicating the file does not exist.
     """
+    print(f"DEBUG: Context object: {ctx}")
+    print(f"DEBUG: Deps object: {ctx.deps}")
     try:
-        with open(DEFAULT_DIR.joinpath(file_to_read), "r") as f:
+        if file_name not in ctx.deps.document_store:
+            return f"File '{file_name}' not found in document store."
+        path = ctx.deps.document_store[file_name]
+        with open(path, "r") as f:
             return f.read()
+
     except FileNotFoundError as e:
         return f"File does not exist. If you were expencting it to be, create the file. \n{e}"
 

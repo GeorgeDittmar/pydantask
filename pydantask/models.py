@@ -12,22 +12,24 @@ class TaskStatus(Enum):
     READY = "ready"  # Dependencies met, can run now
     RUNNING = "running"  # Currently being executed
     COMPLETED = "completed"
-    ERRORED = "error"
+    ERRORED = "errored"  # Execution error occurred
     FAILED = "failed"  # Evaluator rejected it
     NEEDS_REVIEW = "review"  # Needs Evaluator review
 
 
+class TaskResult(BaseModel):
+    task_id: int
+    task_status: TaskStatus
+    work_summary: str = ""
+    output_path: Optional[str] = None
+    error_msg: Optional[str] = None
+
+
 class TaskQAResult(BaseModel):
-    task_id: str
+    task_id: int
     reasoning: str
     passed: bool = False
-
-
-class TaskResult(BaseModel):
-    task_id: str
-    task_status: TaskStatus
-    output: Any
-    error_msg: Optional[str] = None
+    task_output: TaskResult
 
 
 class TaskItem(BaseModel):
@@ -39,7 +41,7 @@ class TaskItem(BaseModel):
         description="Description of the sub task to be executed."
     )
     status: TaskStatus
-    result: str = ""
+    result: Any = None  # Store TaskResult here after execution
     capability: str = Field(
         description="Which sub agent capability should attempt this task."
     )
@@ -88,6 +90,10 @@ class RuntimeState(BaseModel):
     runtime_steps: int = 0
     tokens_used: int = 0
     task_queue: List[TaskItem] = Field(default_factory=list)
+    document_store: Dict[str, str] = Field(
+        default_factory=dict,
+        description="A simple in-memory document store for storing and retrieving documents by ID.",
+    )  # simple in-memory document store
 
 
 class SupervisorDecision(BaseModel):
