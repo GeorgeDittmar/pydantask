@@ -45,6 +45,8 @@ async def write_to_file_system(
 ) -> str:
     """Create or write to a file on the file system.
 
+    Used to offload context, or write files that may need to be consumed at a later time for execution.
+
     Args: file_name
         file_name: The name of the file to create or write to.
         content: The content to write into the file."""

@@ -15,21 +15,26 @@ class TaskStatus(Enum):
     ERRORED = "errored"  # Execution error occurred
     FAILED = "failed"  # Evaluator rejected it
     NEEDS_REVIEW = "review"  # Needs Evaluator review
-
-
-class TaskResult(BaseModel):
-    task_id: int
-    task_status: TaskStatus
-    work_summary: str = ""
-    output_path: Optional[str] = None
-    error_msg: Optional[str] = None
+    RERUN = "rerun"
 
 
 class TaskQAResult(BaseModel):
     task_id: int
     reasoning: str
     passed: bool = False
-    task_output: TaskResult
+
+
+class TaskResult(BaseModel):
+    task_id: int
+    task_status: TaskStatus
+    work_summary: str = ""
+    output_file_name: Optional[str] = Field(
+        description="Optional output file name if a file was written to the file system."
+    )
+    output_path: Optional[str] = None
+    error_msg: Optional[str] = Field(
+        description="Error message that must be stored if a task failed to complete, or some other issue arose."
+    )
 
 
 class TaskItem(BaseModel):
