@@ -85,7 +85,7 @@ class SupervisorSpec:
         # Pre-format the plan to ensure the LLM sees a clean "Status Board"
         plan_display = "\n".join(
             [
-                f"- [{t.status}] ID: {t.task_id} | Task: {t.task_objective} | Deps: {t.task_dependencies}"
+                f"- Task ID: {t.task_id} | Status: [{t.status}] |Task Objective: {t.task_objective} | Task Dependencies: {t.task_dependencies}"
                 for t in ctx.deps.plan.values()
             ]
         )
@@ -115,11 +115,13 @@ You are the Orchestrator/Supervisor. Your job is to manage the execution of a mu
 {agent_display}
 </capabilities>
 
+Think step by step how you would execute the plan given the current state.
+
 ### OPERATING PROCEDURES
 1. **Dependency Check:** Only move tasks to 'READY' if all their `task_dependencies` are marked 'COMPLETED'.
-2. **Parallel Execution:** You MAY delegate multiple independent 'READY' tasks simultaneously.
+2. **Parallel Execution:** You MAY delegate multiple independent 'READY' tasks simultaneously. You may not set them to 'RUNNING'. That is the job of the sub agent.
 3. **Quality Assurance (QA):**
-   - If a task is in 'REVIEW', check the `TaskQAReport` and verify if the task meets what is needed towards completing the objective. 
+   - If a task is in 'REVIEW', check the `TaskQAReport` and verify if the result meets the requirement for completing the task objective. 
    - If QA passed: Mark task as 'COMPLETED'.
    - If QA failed: Mark task back to 'READY' and include the QA feedback in the task instructions.
 4. **Error Handling:** If a task is 'FAILED', investigate the error and decide if the task needs to be reran or if the plan needs an update via your tools.
@@ -274,10 +276,10 @@ class DeepAgent:
             "2. Call the search tool for each query. "
             "3. Analyze the results from the search tool and extract detailed information."
             "4. Use the think tool to reflect on the information gathered and determine if another search is needed."
-            "5. If enough information has been gathered, summarize the findings into a clear report."
             " Be concise and focus on the most relevant information to the task."
-            " When building the search report, generate a detailed report and a summary."
-            "When genrating the detailed report, include references to sources used with each section written. Write the detailed report to a markdown file and return the file path in the detailed_report_path field of the output.",
+            " When building the search report, generate a summary of what you found and a detailed section that goes in depth."
+            "When genrating the detailed report, include references to sources used with each section written. If the web was used this would be a URL to the information. If it is some other data source cite that."
+            "Write the detailed report to a markdown file and return the file path in the detailed_report_path field of the output.",
             tools=[
                 tavily_search_tool(api_key),
                 think_tool,
@@ -435,11 +437,11 @@ class DeepAgent:
 
                 Instructions:
                 1. If the work is sufficient, respond with TRUE.
-                2. If the work is insufficient, respond with FALSE and provide detailed feedback on what needs to be improved.
-                3. Do not attempt to qa the whole GOAL, just the specific task assigned. The GOAL is meant to provide context only.
+                2. If the work is insufficient, respond with FALSE and provide detailed feedback on what needs to be improved or what work needs to be done further.
+                3. Do not attempt to qa the whole OBJECTIVE, just the specific sub task assigned. The objective is meant to provide context only.
                 4. Use the think tool to reflect on the work done and plan your evaluation carefully.
 
-                Do not make assumptions. Base your evaluation strictly on the worker output and the task description.
+                Do not make assumptions. Base your evaluation strictly on the worker output and the sub task description.
                 """
                 qa_response = await self._critic_agent.run(qa_prompt)
                 qa_response = qa_response.output
@@ -528,7 +530,15 @@ class DeepAgent:
     async def update_task_status(
         self, ctx: RunContext[RuntimeState], step_id: int, status: TaskStatus
     ):
-        """The supervisor uses this for updating a specific step in the plan to a new status."""
+        """The supervisor uses this for updating a specific step in the plan to a new status.
+
+        When to use:
+            - If a task has no dependencies and needs to be set to 'READY' state
+            - If a task has a result which has been QA'd and passed.
+
+        When not to use:
+            - Setting a task to a status to complete the plan before it is actually done.
+        """
         if step_id in ctx.deps.plan:
             ctx.deps.plan.get(step_id).status = status
             return f"Status for {step_id} is now {status}."

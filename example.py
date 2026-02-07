@@ -7,7 +7,8 @@ from pydantic_ai.agent import Agent
 agent_registry = {}
 
 da = DeepAgent(
-    "Explain to me the IRS tax changes for this year and compare them to last year.",
+    "Write a report for me on the Deep Research agent architecture and how it is implemented and works.",
+    model="gpt-5.1",
 )
 result = asyncio.run(da.run())
 
