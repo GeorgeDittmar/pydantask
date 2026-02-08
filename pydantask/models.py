@@ -70,6 +70,9 @@ class TaskItem(BaseModel):
 # Tool Desription Object
 class ToolDescription(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
+    name: str = Field(
+        description="Name of the tool/capability, e.g. 'web_search', 'file_writer', etc."
+    )
     description: str
     tool_func: Any
 

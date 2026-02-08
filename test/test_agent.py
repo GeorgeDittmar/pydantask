@@ -4,7 +4,7 @@ import os
 import unittest
 from unittest.mock import patch, MagicMock
 
-import pydantask.agent as agent_mod
+import pydantask.agents.agent as agent_mod
 
 
 class TestDeepAgent(unittest.TestCase):

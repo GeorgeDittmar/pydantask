@@ -1,8 +1,6 @@
 import asyncio
-from pydantask.agent import DeepAgent
-from pydantic import BaseModel
-from pydantic_ai.agent import Agent
 
+from pydantask.agents import DeepAgent
 
 agent_registry = {}
 
