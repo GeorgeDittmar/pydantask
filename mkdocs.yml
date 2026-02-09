@@ -1,0 +1,18 @@
+site_name: Pydantask Agent Framework
+nav:
+  - Home: index.md
+  - Quickstart: quickstart.md
+  - Agent Concepts: agents.md
+  - Customization: customization.md
+  - API Reference: api.md
+theme:
+  name: material
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: google
+            show_source: true

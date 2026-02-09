@@ -1,0 +1,13 @@
+from pydantask.prompts.prompts import (
+    PLANNER_SYS_PROMPT,
+    CRITIC_SYS_PROMPT,
+    RESEARCH_AGENT_SYS_PROMPT,
+    SUPERVISOR_SYS_PROMPT,
+)
+
+__all__ = [
+    "PLANNER_SYS_PROMPT",
+    "CRITIC_SYS_PROMPT",
+    "RESEARCH_AGENT_SYS_PROMPT",
+    "SUPERVISOR_SYS_PROMPT",
+]

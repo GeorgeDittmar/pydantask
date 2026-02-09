@@ -68,10 +68,10 @@ class TaskItem(BaseModel):
 
 
 # Tool Desription Object
-class ToolDescription(BaseModel):
+class AgentDescription(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     name: str = Field(
-        description="Name of the tool/capability, e.g. 'web_search', 'file_writer', etc."
+        description="Name of the agent/capability, e.g. 'web_search', 'file_writer', etc."
     )
     description: str
     tool_func: Any
@@ -142,7 +142,3 @@ class TaskSpec(BaseModel):
     success_criteria: str
     constraints: list[str]
     overall_objective: str
-
-
-class SelfReflection(BaseModel):
-    reflection: str
