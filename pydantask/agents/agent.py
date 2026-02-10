@@ -492,7 +492,7 @@ class DeepAgent:
 
     @retry(wait=wait_exponential_jitter(), reraise=True, stop=stop_after_attempt(3))
     async def execute(
-        self, tool, step: TaskItem, runtime_state: RunTimeState
+        self, tool, step: TaskItem, runtime_state: RuntimeState
     ) -> TaskItem:
         """Helper to run an agent and capture its output into the step object."""
         await asyncio.sleep(1.0)  # 1 second sleep to not hit throttling limits

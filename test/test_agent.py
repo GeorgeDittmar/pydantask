@@ -1,61 +1,99 @@
-# test/test_agent.py
-
 import os
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
+
+from httpx import AsyncClient
 
 import pydantask.agents.agent as agent_mod
 
 
-class TestDeepAgent(unittest.TestCase):
+class TestDeepAgent(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        # Patch environment variable for API key
+        # Ensure Tavily API key is present so DeepAgent doesn't raise on init
         self.env_patcher = patch.dict(os.environ, {"TAVILY_API_KEY": "fake-key"})
         self.env_patcher.start()
 
-        # Patch Agent to prevent actual network/model calls
-        self.agent_patch = patch("pydantask.agent.Agent", autospec=True)
-        self.mock_agent_cls = self.agent_patch.start()
-        # Patch Planner agent so .run_sync returns a "plan" object as expected
-        mock_plan = MagicMock()
-        task_item = MagicMock()
-        task_item.id = "1"
-        task_item.description = "Test task"
-        task_item.status = "pending"
-        mock_plan.tasks = [task_item]
-        self.mock_agent_cls.return_value.run_sync.return_value.output = mock_plan
-
-        # Patch RuntimeState and TaskItem for initializing the plan
-        self.runtimestate_patch = patch("pydantask.agent.RuntimeState", autospec=True)
-        self.mock_runtimestate = self.runtimestate_patch.start()
-
     def tearDown(self):
         self.env_patcher.stop()
-        self.agent_patch.stop()
-        self.runtimestate_patch.stop()
 
     def test_deep_agent_initialization(self):
-        deep_agent = agent_mod.DeepAgent(prompt="Test Goal")
+        # Avoid creating a custom mock HTTP client; use a real AsyncClient so
+        # OpenAIProvider / AsyncOpenAI accept it without TypeError.
+        with patch.object(
+            agent_mod.DeepAgent,
+            "_create_retrying_client",
+            return_value=AsyncClient(),
+        ):
+            deep_agent = agent_mod.DeepAgent(prompt="Test Goal")
+
         self.assertEqual(deep_agent.prompt, "Test Goal")
         self.assertIsInstance(deep_agent.agent_registry, dict)
-        self.assertIn("researcher", deep_agent.agent_registry)
-        self.assertIn("synthesizer", deep_agent.agent_registry)
-        # Check the planner agent is set up
+
+        # These keys must match the implementation in _setup_default_sub_agents
+        self.assertIn("research_agent", deep_agent.agent_registry)
+        self.assertIn("synthesizer_agent", deep_agent.agent_registry)
+
+        # Planner agent should be created during __init__
         self.assertIsNotNone(deep_agent._planner_agent)
 
-    def test_deep_agent_run(self):
-        # Patch _initialize_runtime_state to use a MagicMock as well
-        with patch.object(agent_mod.DeepAgent, "_initialize_runtime_state", return_value=MagicMock()) as mock_init_state, \
-             patch.object(agent_mod.DeepAgent, "_create_supervisor") as mock_create_supervisor:
-            # Return a supervisor agent mock with run_sync returning a MagicMock for each iteration
-            supervisor_mock = MagicMock()
-            supervisor_mock.run_sync.return_value = "supervisor-response"
-            mock_create_supervisor.return_value = supervisor_mock
-
+    async def test_deep_agent_run_returns_runtime_state(self):
+        """Verify that DeepAgent.run uses the planner and supervisor and
+        returns the initialized runtime state.
+        """
+        with (
+            patch.object(
+                agent_mod.DeepAgent,
+                "_create_retrying_client",
+                return_value=AsyncClient(),
+            ),
+            patch.object(
+                agent_mod.DeepAgent,
+                "_initialize_runtime_state",
+                return_value=MagicMock(name="runtime_state"),
+            ) as mock_init_state,
+        ):
+            # Instantiate DeepAgent with patched dependencies
             deep_agent = agent_mod.DeepAgent(prompt="Test Goal")
-            # Should run its loop and eventually return the supervisor_response
-            result = deep_agent.run()
-            self.assertEqual(result, "supervisor-response")
+
+            # Create async planner and supervisor mocks
+            planner_mock = MagicMock(name="planner_agent")
+            planner_mock.run = AsyncMock(name="planner_run")
+
+            supervisor_mock = MagicMock(name="supervisor_agent")
+            supervisor_mock.run = AsyncMock(name="supervisor_run")
+
+            # Planner should return an object with .output.tasks
+            task_item_mock = MagicMock(name="task_item")
+            task_item_mock.task_id = 1
+
+            plan_output_mock = MagicMock(name="plan_output")
+            plan_output_mock.tasks = [task_item_mock]
+
+            planner_result_mock = MagicMock(name="planner_result")
+            planner_result_mock.output = plan_output_mock
+            planner_mock.run.return_value = planner_result_mock
+
+            # Supervisor should immediately signal all_tasks_completed=True
+            supervisor_output = MagicMock(name="supervisor_output")
+            supervisor_output.all_tasks_completed = True
+
+            supervisor_result_mock = MagicMock(name="supervisor_result")
+            supervisor_result_mock.output = supervisor_output
+            supervisor_mock.run.return_value = supervisor_result_mock
+
+            # Override the internally created agents with our mocks
+            deep_agent._planner_agent = planner_mock
+            deep_agent._supervisor_agent = supervisor_mock
+
+            # Call the async run method
+            runtime_state = await deep_agent.run()
+
+            # Assertions: run was called, runtime_state came from _initialize_runtime_state
+            planner_mock.run.assert_awaited_once()
+            supervisor_mock.run.assert_awaited_once()
+            mock_init_state.assert_called_once()
+
+            self.assertIs(runtime_state, mock_init_state.return_value)
 
 
 if __name__ == "__main__":
