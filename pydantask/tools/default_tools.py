@@ -17,7 +17,7 @@ async def ask_user(ctx: RunContext[RuntimeState], question_for_user: str) -> str
     return input(f"{question_for_user}: ")
 
 
-async def think_tool(reflection: str):
+async def think_tool(reflection: str) -> str:
     """Tool for strategic reflection on progress and decision-making.
 
     When to use:
@@ -33,7 +33,7 @@ async def think_tool(reflection: str):
     4. Strategic decision - Should I continue searching or provide my answer?
 
     Args:
-        reflection: Your detailed reflection on research progress, findings, gaps, and next steps
+        reflection: str Your detailed reflection on research progress, findings, gaps, and next steps
     Returns:
         Confirmation that reflection was recorded for decision-making
     """
@@ -65,7 +65,7 @@ async def delete_from_file_system(path: str) -> str:
     """Delete a file or directory on the file system.
 
     Args: ""
-        path: The path to the file or directory to delete.
+        path: str = The path to the file or directory to delete.
     Returns:
         Confirmation message indicating deletion attempt.
     """
@@ -82,15 +82,15 @@ async def delete_from_file_system(path: str) -> str:
 async def read_from_file_system(
     ctx: RunContext[RuntimeState],
     file_name: str,
-):
-    """Read from a file on the file system. If the file dos not exist, returns a message indicating so.
-    Args:
-        file_to_read: The path to the file to read.
-    Returns:
-        The contents of the file as a string, or a message indicating the file does not exist.
+) -> str:
     """
-    print(f"DEBUG: Context object: {ctx}")
-    print(f"DEBUG: Deps object: {ctx.deps}")
+    Read from a file on the file system. If the file dos not exist, returns a message indicating so.
+
+    Args:
+        file_name: = str The path to the file to read.
+    Returns:
+        String of file contents
+    """
     try:
         if file_name not in ctx.deps.document_store:
             return f"File '{file_name}' not found in document store."
@@ -104,15 +104,18 @@ async def read_from_file_system(
 
 # Tools used by the supervisor or planner agents
 async def get_current_datetime() -> str:
-    """Get the current date and time in ISO 8601 format.
+    """
+    Get the current date and time in ISO 8601 format.
+
     When to use:
-    - When needing to timestamp actions or decisions.
-    - When tracking progress over time.
-    - When scheduling future tasks or deadlines.
+        - Needing to look up current date and time for context to complete a task
+        - Needing to timestamp a step or task
+        - Comparing results between different times
+
     Args: None
     Returns:
         Current date and time as an ISO 8601 formatted string.
     """
     from datetime import datetime
 
-    return datetime.now().isoformat()
+    return str(datetime.now().isoformat())

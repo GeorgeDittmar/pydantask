@@ -6,6 +6,7 @@ agent_registry = {}
 
 da = DeepAgent(
     "Explain to me the IRS tax changes for this year and compare them to last year. Write a single report with your findings and citations",
+    model="gpt-5.1",
 )
 result = asyncio.run(da.run())
 

@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Literal, Any, Dict, Callable, Union, Type
 from tenacity import retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from datetime import datetime
 import asyncio
 from asyncio import TaskGroup
 from pydantic_ai import RunContext
@@ -142,41 +143,32 @@ class DeepAgent:
         _model = OpenAIChatModel(
             model, provider=OpenAIProvider(http_client=self._retry_client)
         )
-        self._planner_agent = (
-            Agent(
-                name="_default_Planner_Agent",
-                model=_model,
-                system_prompt=PLANNER_SYS_PROMPT,
-                output_type=Plan,
-                tools=[get_current_datetime, think_tool],
-                end_strategy="exhaustive",
-            )
-            or planner_agent
+        self._planner_agent = planner_agent or Agent(
+            name="_default_Planner_Agent",
+            model=_model,
+            system_prompt=PLANNER_SYS_PROMPT,
+            output_type=Plan,
+            tools=[think_tool],
+            end_strategy="exhaustive",
         )
 
-        self._critic_agent = (
-            Agent(
-                model=_model,
-                name="_default_Critic_Agent",
-                system_prompt="You are an expert critic. Evaluate the following output from work done on a task. Output a detailed report and if it meets the task requirements.",
-                output_type=TaskQAResult,
-                deps_type=RuntimeState,
-                tools=[read_from_file_system, get_current_datetime, think_tool],
-                end_strategy="exhaustive",
-            )
-            or critic_agent
+        self._critic_agent = critic_agent or Agent(
+            model=_model,
+            name="_default_Critic_Agent",
+            system_prompt=CRITIC_SYS_PROMPT,
+            output_type=TaskQAResult,
+            deps_type=RuntimeState,
+            tools=[read_from_file_system, get_current_datetime, think_tool],
+            end_strategy="exhaustive",
         )
 
-        self._supervisor_agent = (
-            self._create_agent_from_spec(
-                agent_spec=SupervisorSpec(),
-                name="_default_Supervisor_Agent",
-                tools=[self.update_task_status, get_current_datetime, think_tool],
-                output_type=SupervisorDecision,
-                deps_type=RuntimeState,
-                model=self.model,
-            )
-            or supervisor_agent
+        self._supervisor_agent = supervisor_agent or self._create_agent_from_spec(
+            agent_spec=SupervisorSpec(),
+            name="_default_Supervisor_Agent",
+            tools=[self.update_task_status, get_current_datetime, think_tool],
+            output_type=SupervisorDecision,
+            deps_type=RuntimeState,
+            model=self.model,
         )
 
         api_key = os.getenv("TAVILY_API_KEY", None)
@@ -251,7 +243,7 @@ class DeepAgent:
             self.model,
             name="_default_Synthesizer Agent",
             system_prompt=synth_agent_sys_prompt,
-            output_type=str,
+            output_type=TaskResult,
             tools=[
                 write_to_file_system,
                 read_from_file_system,
@@ -348,16 +340,37 @@ class DeepAgent:
         # Logic to initialize and manage the runtime state
         return RuntimeState(plan=plan, objective=objective, agent_registry=registry)
 
+    def _format_capabilities(self) -> str:
+        """Return a human-readable list of available sub-agent capabilities for the planner.
+
+        Each line is of the form:
+        - capability_name: description
+        """
+        lines: list[str] = []
+        for name, desc in self.agent_registry.items():
+            description = getattr(desc, "description", "")
+            lines.append(f"- {name}: {description}")
+        return "\n".join(lines)
+
     @observe
     async def run(self):
         # Start the supervisor agent to manage sub-agents
         # state = RuntimeState(goal=self.prompt)
+        now = await get_current_datetime()
+        current_year = datetime.utcnow().year
+        capabilities_display = self._format_capabilities()
         planner_prompt = f"""
         Goal: {self.prompt}
 
-        Capabilities: {self.agent_registry}
+        AVAILABLE CAPABILITIES:
+        {capabilities_display}
+        
+        Current Datetime (MUST be used verbatim if time is needed as context): {now}
+        CURRENT_YEAR (authoritative numeric year): {current_year}
         
         Come up with a plan for the above goal using the available capabilities.
+        Always include the above datetime in the plan metadata and any date-sensitive instructions.
+        Use CURRENT_YEAR exactly as provided when resolving any relative time expressions.
         """
 
         agent_plan = await self._planner_agent.run(planner_prompt)
@@ -396,28 +409,30 @@ class DeepAgent:
             )
 
             print(f"--- Task Results ---")
+            print(f"Number of tasks executed: {len(task_results)}")
+
             # go through responses and evaluate if they have completed the task
             for task_result in task_results or []:
                 print(f"--- Evaluating Task Result for {task_result.task_id} ---")
                 qa_prompt = f"""
-                Overall Objective: {runtime_state.objective}
+                Overall Objective:
+                {runtime_state.objective}
 
-                Sub Task Result: {task_result.model_dump_json(indent=2)}
+                Sub Task Definition (TaskItem):
+                {runtime_state.plan[task_result.task_id].model_dump_json(indent=2)}
 
-                Based on the objetive and task description, evaluate if the worker output sufficiently completes the task.
-                Provide a detailed analysis and TRUE or FALSE if it passed or not quality check.
+                Worker Output (TaskResult):
+                {task_result.result.model_dump_json(indent=2)}
 
-                Abilities:
-                You have the ability to reflect on the work done and provide feedback for improvement if needed.
-                You have the ability to read the detailed report file if it was generated by the worker. Use that to inform your decision.
+                Evaluate whether the worker's output sufficiently completes this specific sub-task.
 
-                Instructions:
-                1. If the work is sufficient, respond with TRUE.
-                2. If the work is insufficient, respond with FALSE and provide detailed feedback on what needs to be improved or what work needs to be done further.
-                3. Do not attempt to qa the whole OBJECTIVE, just the specific sub task assigned. The objective is meant to provide context only.
-                4. Use the think tool to reflect on the work done and plan your evaluation carefully.
+                Remember: your response MUST be a TaskQAResult object, with:
+                - task_id = {task_result.task_id}
+                - reasoning = detailed explanation of your evaluation
+                - passed = true if the output is sufficient, false otherwise
 
-                Do not make assumptions. Base your evaluation strictly on the worker output and the sub task description.
+                Focus ONLY on this sub-task; the overall objective is for context.
+                Base your evaluation strictly on the task definition and worker output.
                 """
                 qa_response = await self._critic_agent.run(
                     qa_prompt, deps=runtime_state
@@ -447,15 +462,7 @@ class DeepAgent:
         """Finds all tasks that are ready to run and executes them in parallel."""
 
         # 1. Identify "Ready" tasks
-        ready_steps = [
-            ctx.plan[id]
-            for id in tasks.tasks_to_execute
-            # if step.status == TaskStatus.PENDING
-            # and all(
-            #     tasks_to_execute.get(d_id).status == "completed"
-            #     for d_id in step.task_dependencies
-            # )
-        ]
+        ready_steps = [ctx.plan[id] for id in tasks.tasks_to_execute]
 
         print("Ready Steps to Execute:")
         print(ready_steps)
@@ -476,7 +483,7 @@ class DeepAgent:
             if worker:
                 step.status = TaskStatus.RUNNING
                 # We wrap the agent run in a small wrapper to update the step status after
-                ready_tasks.append(self.execute(worker.tool_func, step))
+                ready_tasks.append(self.execute(worker.tool_func, step, ctx))
 
         # 3. Execute tasks and return exceptions to notify the supervisor
         print("--- Executing Ready Tasks ---")
@@ -496,10 +503,12 @@ class DeepAgent:
     ) -> TaskItem:
         """Helper to run an agent and capture its output into the step object."""
         await asyncio.sleep(1.0)  # 1 second sleep to not hit throttling limits
+
         try:
             result = await tool.run(
                 f"""Execute the following task: {step.task_objective}. Make sure to keep in mind the overall objective: {self.prompt}.
-                                    Do not act on the goal act only on the singular task description provided."""
+                                    Do not act on the goal act only on the sub task description provided.""",
+                deps=runtime_state,
             )
             step.result = result.output
             step.status = TaskStatus.NEEDS_REVIEW

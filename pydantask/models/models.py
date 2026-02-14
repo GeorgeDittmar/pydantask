@@ -25,15 +25,59 @@ class TaskQAResult(BaseModel):
 
 
 class TaskResult(BaseModel):
-    task_id: int
-    task_status: TaskStatus
-    work_summary: str = ""
-    output_file_name: Optional[str] = Field(
-        description="Optional output file name if a file was written to the file system."
+    """
+    Canonical result type for any sub-task.
+
+    Works well for research-style tasks (summary + detailed artifacts + sources),
+    but can also be used for other task types that just need a summary.
+    """
+
+    task_id: int = Field(description="ID of the TaskItem this result belongs to.")
+
+    status: TaskStatus = Field(
+        default=TaskStatus.COMPLETED,
+        description="Outcome of this specific task execution.",
     )
-    output_path: Optional[str] = None
+
+    summary: str = Field(
+        default="",
+        description=(
+            "Concise, human-readable summary of what this task produced or concluded. "
+            "For research tasks this should summarize key findings; for other tasks "
+            "it should summarize what was done and the result."
+        ),
+    )
+
+    detailed_report_paths: list[str] = Field(
+        default_factory=list,
+        description=(
+            "List of file paths to any detailed reports or long-form outputs "
+            "generated during this task (e.g. written via write_to_file_system)."
+        ),
+    )
+
+    sources: list[str] = Field(
+        default_factory=list,
+        description=(
+            "List of URLs, document IDs, tool references, or other sources "
+            "used to produce this result."
+        ),
+    )
+
     error_msg: Optional[str] = Field(
-        description="Error message that must be stored if a task failed to complete, or some other issue arose."
+        default=None,
+        description=(
+            "If status is ERRORED or FAILED, a clear explanation of what went "
+            "wrong or what information/tools were missing."
+        ),
+    )
+
+    metadata: dict = Field(
+        default_factory=dict,
+        description=(
+            "Optional free-form metadata (e.g. timestamps, scoring, extra flags) "
+            "specific to this task execution."
+        ),
     )
 
 
@@ -58,6 +102,8 @@ class TaskItem(BaseModel):
     iteration_history: list = (
         []
     )  # Store any answer history if multiple attempts are made
+    time_scope: Optional[str]  # "2026", "2025-2026", "last 7 days", etc.
+    parameters: dict  # you can stash structured temporal params here
     attempt_count: int = 0
     max_attempts: int = 3
     metadata: dict = {}
@@ -75,14 +121,6 @@ class AgentDescription(BaseModel):
     )
     description: str
     tool_func: Any
-
-
-class ResearchResult(BaseModel):
-    task_id: int
-    summary: str = Field(description="Concise summary of findings.")
-    detailed_results_path: list[str] = Field(
-        description="path to detailed report files containing in-depth information."
-    )
 
 
 class RuntimeState(BaseModel):
