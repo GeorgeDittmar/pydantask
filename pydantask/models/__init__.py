@@ -7,7 +7,6 @@ from pydantask.models.models import (
     RuntimeState,
     SupervisorDecision,
     Plan,
-    ResearchResult,
 )
 
 __all__ = [
@@ -19,5 +18,4 @@ __all__ = [
     "RuntimeState",
     "SupervisorDecision",
     "Plan",
-    "ResearchResult",
 ]

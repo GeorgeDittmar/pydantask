@@ -41,7 +41,6 @@ from pydantask.prompts import (
     RESEARCH_AGENT_SYS_PROMPT,
 )
 from pydantask.models import (
-    ResearchResult,
     RuntimeState,
     TaskItem,
     Plan,
@@ -51,7 +50,8 @@ from pydantask.models import (
     AgentDescription,
     TaskResult,
 )
-from ..tools.default_tools import (
+
+from pydantask.tools.default_tools import (
     write_to_file_system,
     read_from_file_system,
     think_tool,
@@ -468,7 +468,7 @@ class DeepAgent:
         print(ready_steps)
 
         if not ready_steps:
-            return None
+            return []
 
         # 2. Prepare the concurrent coroutines
         ready_tasks = []
