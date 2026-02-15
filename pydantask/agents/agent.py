@@ -39,6 +39,7 @@ from pydantask.prompts import (
     PLANNER_SYS_PROMPT,
     CRITIC_SYS_PROMPT,
     RESEARCH_AGENT_SYS_PROMPT,
+    SYNTHESIZER_SYS_PROMPT,
 )
 from pydantask.models import (
     RuntimeState,
@@ -73,39 +74,6 @@ from pprint import pprint
 
 from dotenv import load_dotenv
 
-load_dotenv()
-
-langfuse = get_client()
-
-# Verify connection
-if langfuse.auth_check():
-    print("Langfuse client is authenticated and ready!")
-else:
-    print("Authentication failed. Please check your credentials and host.")
-
-Agent.instrument_all()
-
-
-synth_agent_sys_prompt = """
-Your sole task is to take all the information that has been gathered from research tasks and synthesize it into a coherent answer to the original goal.
-You may not ask for more information. You must answer with the information you have. 
-If you are confused you may use the think tool to reflect on your work and plan next steps or raise any issues you have with the supervisor
-in the return object with a task status of ERROR. You cannot ask the user for more information.
-
-Think through your task 
-
-You have access to the following tools:
-    - write_to_file_system: Use this to write long form answers to the file system for later retrieval. 
-    - read_from_file_system: Use this to read any files that may have been previously saved for context by previous tasks or to read any long term memory you have kept.
-    - think_tool: Use this to reflect on your work and plan next steps.
-    
-When you generate your answer, you must provide both a detailed report and a summary.
-    The detailed report should be long form and include references to any sources used.
-    The summary should be concise and to the point.
-
-When you write the detailed report to the file system, return the file path in the detailed_report_path field of your output.
-"""
-
 
 class DeepAgent:
     """Pydantic AI based DeepAgent that manages sub-agents to achieve complex goals."""
@@ -113,7 +81,7 @@ class DeepAgent:
     def __init__(
         self,
         prompt: str,
-        model: str = "gpt-4.1-mini",
+        model: str = "openai:gpt-4.1-mini",
         critic_agent: Optional[Agent] = None,
         planner_agent: Optional[Agent] = None,
         supervisor_agent: Optional[Agent] = None,
@@ -122,6 +90,7 @@ class DeepAgent:
         set_token_budget: Union[int, None] = None,
         sub_agents: Union[None, list[AgentDescription]] = None,
         human_feedback: bool = False,
+        trace: bool = False,
     ):
         """
         Create DeepAgent instance.
@@ -133,6 +102,7 @@ class DeepAgent:
         :param tools: List of ToolDescription objects representing the agent's capabilities. Defaults to None.
         :param human_feedback: Whether to incorporate human feedback in the agent's decision-making. Defaults to False.
         """
+        # load_dotenv()
         self.model: str = model
         self.prompt: str = prompt  # Objective for the agent
         self._max_steps: int = max_steps  # Max steps to prevent infinite loops
@@ -195,6 +165,16 @@ class DeepAgent:
         )
 
         self.agent_registry = self._setup_default_sub_agents(sub_agents=sub_agents)
+        if trace:
+            langfuse = get_client()
+
+            # Verify connection
+            if langfuse.auth_check():
+                print("Langfuse client is authenticated and ready!")
+            else:
+                print("Authentication failed. Please check your credentials and host.")
+
+            Agent.instrument_all()
 
     def _create_retrying_client(self):
         """Create a client with smart retry handling for multiple error types.
@@ -242,7 +222,7 @@ class DeepAgent:
         synthesizer_agent = Agent(
             self.model,
             name="_default_Synthesizer Agent",
-            system_prompt=synth_agent_sys_prompt,
+            system_prompt=SYNTHESIZER_SYS_PROMPT,
             output_type=TaskResult,
             tools=[
                 write_to_file_system,
@@ -458,7 +438,7 @@ class DeepAgent:
 
     async def _execute_ready_tasks(
         self, tasks: SupervisorDecision, ctx: RuntimeState
-    ) -> Union[None, list]:
+    ) -> Union[None, list[TaskItem]]:
         """Finds all tasks that are ready to run and executes them in parallel."""
 
         # 1. Identify "Ready" tasks
@@ -502,12 +482,20 @@ class DeepAgent:
         self, tool, step: TaskItem, runtime_state: RuntimeState
     ) -> TaskItem:
         """Helper to run an agent and capture its output into the step object."""
-        await asyncio.sleep(1.0)  # 1 second sleep to not hit throttling limits
+        # 1 second sleep to not hit throttling limits
 
         try:
             result = await tool.run(
-                f"""Execute the following task: {step.task_objective}. Make sure to keep in mind the overall objective: {self.prompt}.
-                                    Do not act on the goal act only on the sub task description provided.""",
+                f"""
+                You are executing TaskItem:
+
+                {step.model_dump_json(indent=2)}
+
+                Overall objective:
+                {self.prompt}
+
+                ONLY act on this sub-task. Do not re-plan or change the task.
+                """,
                 deps=runtime_state,
             )
             step.result = result.output

@@ -50,15 +50,14 @@ async def write_to_file_system(
     Args: file_name
         file_name: The name of the file to create or write to.
         content: The content to write into the file."""
-    print(f"DEBUG: Context object: {ctx}")
-    print(f"DEBUG: Deps object: {ctx.deps}")
+
     path = DEFAULT_DIR.joinpath(file_name)
     with open(path, "a") as f:
         f.write(content + "\n")
         ctx.deps.document_store[file_name] = str(
             path
         )  # save file name and path to document
-        return f"Content written to {file_name}."
+        return f"Content written to {path}."
 
 
 async def delete_from_file_system(path: str) -> str:
@@ -81,7 +80,7 @@ async def delete_from_file_system(path: str) -> str:
 
 async def read_from_file_system(
     ctx: RunContext[RuntimeState],
-    file_name: str,
+    path: str,
 ) -> str:
     """
     Read from a file on the file system. If the file dos not exist, returns a message indicating so.
@@ -92,9 +91,9 @@ async def read_from_file_system(
         String of file contents
     """
     try:
-        if file_name not in ctx.deps.document_store:
-            return f"File '{file_name}' not found in document store."
-        path = ctx.deps.document_store[file_name]
+        if path not in ctx.deps.document_store:
+            return f"File '{path}' not found in document store."
+        path = ctx.deps.document_store[path]
         with open(path, "r") as f:
             return f.read()
 

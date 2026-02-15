@@ -3,6 +3,7 @@ from pydantask.prompts.prompts import (
     CRITIC_SYS_PROMPT,
     RESEARCH_AGENT_SYS_PROMPT,
     SUPERVISOR_SYS_PROMPT,
+    SYNTHESIZER_SYS_PROMPT,
 )
 
 __all__ = [
@@ -10,4 +11,5 @@ __all__ = [
     "CRITIC_SYS_PROMPT",
     "RESEARCH_AGENT_SYS_PROMPT",
     "SUPERVISOR_SYS_PROMPT",
+    "SYNTHESIZER_SYS_PROMPT",
 ]
