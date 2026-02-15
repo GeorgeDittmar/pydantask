@@ -1,4 +1,4 @@
-from typing import Literal, List
+from typing import Literal, List, Union
 from enum import Enum
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Literal, Any, Dict, Callable
@@ -113,14 +113,23 @@ class TaskItem(BaseModel):
         return self.iteration_history[-1].output if self.iteration_history else None
 
 
-# Tool Desription Object
-class AgentDescription(BaseModel):
+# Agent/Tool Desription Object
+class CapabilityDescription(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     name: str = Field(
         description="Name of the agent/capability, e.g. 'web_search', 'file_writer', etc."
     )
     description: str
-    tool_func: Any
+    capability: Union[Agent, Callable[..., Any]] = Field(
+        description=(
+            "Either a pydantic_ai Agent instance or a callable function that can be invoked as a tool. This allows for both agent-based capabilities and simple function tools."
+        )
+    )
+    input_schema: Optional[BaseModel] = Field(
+        default=None,
+        description=(
+            "If agent is a callable function, you can optionally provide a Pydantic model here to define the expected input schema for better prompting and validation."
+        ),
 
 
 class RuntimeState(BaseModel):

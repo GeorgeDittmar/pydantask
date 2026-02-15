@@ -34,12 +34,17 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.retries import AsyncTenacityTransport
 from pydantic_ai.common_tools.tavily import tavily_search_tool
 
-from pydantask.agents.spec import BaseSpec, SupervisorSpec
-from pydantask.prompts import (
+from pydantask.agents.spec import (
+    BaseSpec,
+    SupervisorSpec,
+    ProducerSpec,
+    ResearcherSpec,
+    SynthesizerSpec,
+)
+from pydantask.prompts.prompts import (
     PLANNER_SYS_PROMPT,
     CRITIC_SYS_PROMPT,
     RESEARCH_AGENT_SYS_PROMPT,
-    SYNTHESIZER_SYS_PROMPT,
 )
 from pydantask.models import (
     RuntimeState,
@@ -48,7 +53,7 @@ from pydantask.models import (
     TaskQAResult,
     TaskStatus,
     SupervisorDecision,
-    AgentDescription,
+    CapabilityDescription,
     TaskResult,
 )
 
@@ -88,9 +93,10 @@ class DeepAgent:
         researcher_agent: Optional[Agent] = None,
         max_steps: int = 20,
         set_token_budget: Union[int, None] = None,
-        sub_agents: Union[None, list[AgentDescription]] = None,
+        capabilities: Union[None, list[CapabilityDescription]] = None,
         human_feedback: bool = False,
         trace: bool = False,
+        output_type: Type = TaskResult,  # default output type for the producer agent, can be set to a custom pydantic model for better structure and validation of final output
     ):
         """
         Create DeepAgent instance.
@@ -108,8 +114,10 @@ class DeepAgent:
         self._max_steps: int = max_steps  # Max steps to prevent infinite loops
         self.token_budget: Union[int, None] = set_token_budget
 
+        self.output_type = output_type
         self._retry_client = self._create_retrying_client()
 
+        # TODO: support other chatmodels and providers beyond openai by allowing custom model and provider classes to be passed in as arguments and used for each agent. For now we will just use the openai chat model with the retry transport for all agents since it is the most robust for long conversations and has built in support for function calling which is useful for tool use.
         _model = OpenAIChatModel(
             model, provider=OpenAIProvider(http_client=self._retry_client)
         )
@@ -137,6 +145,15 @@ class DeepAgent:
             name="_default_Supervisor_Agent",
             tools=[self.update_task_status, get_current_datetime, think_tool],
             output_type=SupervisorDecision,
+            deps_type=RuntimeState,
+            model=self.model,
+        )
+
+        self._producer_agent = self._create_agent_from_spec(
+            agent_spec=ProducerSpec(),
+            name="_default_Producer_Agent",
+            tools=[write_to_file_system, read_from_file_system, think_tool],
+            output_type=output_type,
             deps_type=RuntimeState,
             model=self.model,
         )
@@ -231,7 +248,7 @@ class DeepAgent:
             ],
         )
 
-        synthesizer = AgentDescription(
+        synthesizer = CapabilityDescription(
             name="synthesizer_agent",
             description="Generate answers based on information from various sources and sub agents.",
             tool_func=synthesizer_agent,
@@ -239,7 +256,7 @@ class DeepAgent:
 
         # A "Thin" Agent that just wraps a tool
 
-        researcher = AgentDescription(
+        researcher = CapabilityDescription(
             name="research_agent",
             description="Tool to research information. This could include searching the web or querying a data source.",
             tool_func=self._researcher_agent,
@@ -256,7 +273,7 @@ class DeepAgent:
             deps_type=RuntimeState,
         )
 
-        file_system = AgentDescription(
+        file_system = CapabilityDescription(
             name="file_system_agent",
             description="Agent to interact with the file system of host machine. Should be used to store information that needs to persist for further use or context.",
             tool_func=file_system_agent,
