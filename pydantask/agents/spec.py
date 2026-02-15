@@ -38,3 +38,12 @@ class SupervisorSpec(BaseSpec):
 class ResearcherSpec(BaseSpec):
     def system_prompt(self, ctx: RunContext[RuntimeState]) -> str:
         return RESEARCH_AGENT_SYS_PROMPT
+
+
+class CoderSpec(BaseSpec):
+    pass
+
+
+class SynthesizerSpec(BaseSpec):
+    def system_prompt(self, ctx: RunContext[RuntimeState]) -> str:
+        return super().system_prompt(ctx)
