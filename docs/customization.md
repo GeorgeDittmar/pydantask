@@ -4,22 +4,22 @@ You can add custom sub-agents to your DeepAgent setup.
 
 ## Adding a Custom Sub-Agent
 
-Your DeepAgent only accepts other **agents** (not simple tools) in its `sub_agents` parameter. Each sub-agent must be described by an `AgentDescription` (see API reference).
+Your DeepAgent only accepts other **agents** (not simple tools) in its `sub_agents` parameter. Each sub-agent must be described by an `CapabilityDescription` (see API reference).
 
 Example sub-agent registration:
 
 ```python
-from pydantask.models import AgentDescription
+from pydantask.models import CapabilityDescription
 from pydantic_ai import Agent
 
 my_sub_agent = Agent(
     ...,
     # include any tools it needs
 )
-custom_description = AgentDescription(
+custom_description = CapabilityDescription(
     name="my_special_agent",
     description="Custom agent for specialized reasoning tasks.",
-    tool_func=my_sub_agent
+    capabilitiy=my_sub_agent
 )
 
 agent = DeepAgent(prompt="...", sub_agents=[custom_description])

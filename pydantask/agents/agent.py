@@ -61,23 +61,13 @@ from pydantask.tools.default_tools import (
     write_to_file_system,
     read_from_file_system,
     think_tool,
-    ask_user,
     get_current_datetime,
 )
 
-from pydantic_ai.common_tools.tavily import (
-    tavily_search_tool,
-)
 from pydantic_ai.retries import AsyncTenacityTransport, RetryConfig, wait_retry_after
 
 
 from pprint import pprint
-
-# =========================
-# Runtime state models
-# =========================
-
-from dotenv import load_dotenv
 
 
 class DeepAgent:
@@ -93,10 +83,11 @@ class DeepAgent:
         researcher_agent: Optional[Agent] = None,
         max_steps: int = 20,
         set_token_budget: Union[int, None] = None,
-        capabilities: Union[None, list[CapabilityDescription]] = None,
+        sub_agents: Union[None, list[CapabilityDescription]] = None,
         human_feedback: bool = False,
         trace: bool = False,
-        output_type: Type = TaskResult,  # default output type for the producer agent, can be set to a custom pydantic model for better structure and validation of final output
+        # default output type for the producer agent, can be set to a custom pydantic model for better structure and validation of final output
+        output_type: Type = TaskResult,
     ):
         """
         Create DeepAgent instance.
@@ -118,6 +109,7 @@ class DeepAgent:
         self._retry_client = self._create_retrying_client()
 
         # TODO: support other chatmodels and providers beyond openai by allowing custom model and provider classes to be passed in as arguments and used for each agent. For now we will just use the openai chat model with the retry transport for all agents since it is the most robust for long conversations and has built in support for function calling which is useful for tool use.
+
         _model = OpenAIChatModel(
             model, provider=OpenAIProvider(http_client=self._retry_client)
         )
@@ -157,7 +149,7 @@ class DeepAgent:
             deps_type=RuntimeState,
             model=self.model,
         )
-
+        # TODO: rework some of these tools
         api_key = os.getenv("TAVILY_API_KEY", None)
 
         if not api_key:
@@ -182,6 +174,7 @@ class DeepAgent:
         )
 
         self.agent_registry = self._setup_default_sub_agents(sub_agents=sub_agents)
+
         if trace:
             langfuse = get_client()
 
@@ -223,7 +216,7 @@ class DeepAgent:
         return AsyncClient(transport=transport)
 
     def _setup_default_sub_agents(
-        self, sub_agents: Union[None, list[AgentDescription]] = None
+        self, sub_agents: Union[None, list[CapabilityDescription]] = None
     ):
         """
         Setup default sub agents along with any custom tools that may be provided by the caller.
@@ -354,7 +347,7 @@ class DeepAgent:
         # Start the supervisor agent to manage sub-agents
         # state = RuntimeState(goal=self.prompt)
         now = await get_current_datetime()
-        current_year = datetime.utcnow().year
+        current_year = datetime.now().year
         capabilities_display = self._format_capabilities()
         planner_prompt = f"""
         Goal: {self.prompt}
@@ -496,13 +489,12 @@ class DeepAgent:
 
     @retry(wait=wait_exponential_jitter(), reraise=True, stop=stop_after_attempt(3))
     async def execute(
-        self, tool, step: TaskItem, runtime_state: RuntimeState
+        self, sub_agent, step: TaskItem, runtime_state: RuntimeState
     ) -> TaskItem:
         """Helper to run an agent and capture its output into the step object."""
-        # 1 second sleep to not hit throttling limits
 
         try:
-            result = await tool.run(
+            result = await sub_agent.run(
                 f"""
                 You are executing TaskItem:
 

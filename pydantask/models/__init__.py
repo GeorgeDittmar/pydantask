@@ -1,7 +1,7 @@
 from pydantask.models.models import (
     TaskItem,
     TaskStatus,
-    AgentDescription,
+    CapabilityDescription,
     TaskResult,
     TaskQAResult,
     RuntimeState,
@@ -12,7 +12,7 @@ from pydantask.models.models import (
 __all__ = [
     "TaskItem",
     "TaskStatus",
-    "AgentDescription",
+    "CapabilityDescription",
     "TaskResult",
     "TaskQAResult",
     "RuntimeState",

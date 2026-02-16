@@ -130,6 +130,7 @@ class CapabilityDescription(BaseModel):
         description=(
             "If agent is a callable function, you can optionally provide a Pydantic model here to define the expected input schema for better prompting and validation."
         ),
+    )
 
 
 class RuntimeState(BaseModel):

@@ -1,17 +1,21 @@
 from abc import ABC, abstractmethod
+from typing import Callable, Any, Union
+from pydantic_ai.agent import Agent
 from pydantic_ai import RunContext
 from pydantask.models import RuntimeState
 from pydantask.prompts import RESEARCH_AGENT_SYS_PROMPT, SUPERVISOR_SYS_PROMPT
 from pydantask.prompts.prompts import PRODUCER_SYS_PROMPT
 
 
-class BaseSpec(ABC):
+class BaseAgentSpec(ABC):
     @abstractmethod
     def system_prompt(self, ctx: RunContext[RuntimeState]) -> str:
         raise NotImplementedError("Must implement system_prompt method in subclass.")
 
+    @abstractmethod
+    def tools(self,)
 
-class SupervisorSpec(BaseSpec):
+class SupervisorSpec(BaseAgentSpec):
     def system_prompt(self, ctx: RunContext[RuntimeState]) -> str:
         # Pre-format the plan to ensure the LLM sees a clean "Status Board"
         plan_display = "\n".join(
@@ -36,20 +40,23 @@ class SupervisorSpec(BaseSpec):
         )
 
 
-class ResearcherSpec(BaseSpec):
+class ResearcherSpec(BaseAgentSpec):
     def system_prompt(self, ctx: RunContext[RuntimeState]) -> str:
         return RESEARCH_AGENT_SYS_PROMPT
 
+    def tools(tools: Union[Agent, Callable[..., Any]]):
+        pass
 
-class CoderSpec(BaseSpec):
+
+class CoderSpec(BaseAgentSpec):
     pass
 
 
-class SynthesizerSpec(BaseSpec):
+class SynthesizerSpec(BaseAgentSpec):
     def system_prompt(self, ctx: RunContext[RuntimeState]) -> str:
         return super().system_prompt(ctx)
 
 
-class ProducerSpec(BaseSpec):
+class ProducerSpec(BaseAgentSpec):
     def system_prompt(self, ctx: RunContext[RuntimeState]) -> str:
         return PRODUCER_SYS_PROMPT

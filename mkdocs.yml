@@ -5,8 +5,22 @@ nav:
   - Agent Concepts: agents.md
   - Customization: customization.md
   - API Reference: api.md
+
 theme:
-  name: material
+ name: material
+ palette:
+   - scheme: default
+     primary: indigo
+     accent: indigo
+     toggle:
+       icon: material/toggle-switch-off-outline
+       name: Switch to dark mode
+   - scheme: slate
+     primary: indigo
+     accent: indigo
+     toggle:
+       icon: material/toggle-switch
+       name: Switch to light mode
 
 plugins:
   - search

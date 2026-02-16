@@ -10,7 +10,7 @@ This section contains the auto-generated API documentation for the main classes 
 
 
 ---
-::: pydantask.models.AgentDescription
+::: pydantask.models.CapabilityDescription
 
 ---
 
