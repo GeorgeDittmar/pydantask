@@ -309,7 +309,7 @@ class DeepAgent:
         name: str = "Agent",
         deps_type: Type[RuntimeState] = RuntimeState,
         output_type=None,
-        tools: list[Callable] = None,
+        tools: list[Callable] = [],
         end_strategy="exhaustive",
     ) -> Agent:
 
@@ -341,10 +341,22 @@ class DeepAgent:
         Each line is of the form:
         - capability_name: description
         """
-        lines: list[str] = []
+        lines = []
         for name, desc in self.agent_registry.items():
             description = getattr(desc, "description", "")
             lines.append(f"- {name}: {description}")
+        return "\n".join(lines)
+
+    def _format_plan(self, plan: Plan):
+        lines = []
+        for task in plan.tasks:
+            id = task.task_id
+            sub_task_obj = task.task_objective
+            task_status = task.status
+            metadata = task.metadata
+            lines.append(
+                f"- Task ID:{id}\n sub_task_obj: {sub_task_obj} \n task_status: {task_status}\n metadata: {metadata}"
+            )
         return "\n".join(lines)
 
     @observe
@@ -369,10 +381,11 @@ class DeepAgent:
         """
 
         agent_plan = await self._planner_agent.run(planner_prompt)
+
         agent_plan_map = {v.task_id: v for v in agent_plan.output.tasks}
 
         logger.info("--- Generated Plan ---")
-        logger.info(agent_plan_map)
+        logger.info(self._format_plan(agent_plan.output))
         logger.info("--- Generated Plan ---")
         # now save the plan to the agent state
         runtime_state = self._initialize_runtime_state(
@@ -406,7 +419,7 @@ class DeepAgent:
 
             logger.info("--- Task Results ---")
             logger.info(f"Number of tasks executed: {len(task_results)}")
-            logger.info()
+            logger.info(f"Results: {task_results}")
             logger.info("--- Task Result ---")
             # go through responses and evaluate if they have completed the task
             for task_result in task_results or []:
@@ -437,7 +450,7 @@ class DeepAgent:
                 qa_response = qa_response.output
 
                 logger.info(f"--- QA Response ---")
-                plogger.info(qa_response.model_dump_json())
+                logger.info(qa_response.model_dump_json())
 
                 # add the qa report to the task result for the supervisor to review
                 runtime_state.plan[task_result.task_id].task_feedback = qa_response
@@ -455,7 +468,7 @@ class DeepAgent:
 
     async def _execute_ready_tasks(
         self, tasks: SupervisorDecision, ctx: RuntimeState
-    ) -> Union[None, list[TaskItem]]:
+    ) -> list[TaskItem]:
         """Finds all tasks that are ready to run and executes them in parallel."""
 
         # 1. Identify "Ready" tasks
@@ -476,7 +489,7 @@ class DeepAgent:
             logger.info(f"  Dependencies: {step.task_dependencies}")
             logger.info(f"  Status: {step.status}")
             logger.info(f"  Result: {step.result}")
-            logger.info()
+            logger.info("\n")
             # grab the tool that the plan or supervisor decides
             worker = self.agent_registry.get(step.capability)
             if worker:
@@ -493,7 +506,7 @@ class DeepAgent:
 
         results = [t.result() for t in task_results]
         logger.info("--- All Ready Tasks Completed ---")
-        plogger.info(results)
+        logger.info(results)
         return results
 
     @retry(wait=wait_exponential_jitter(), reraise=True, stop=stop_after_attempt(3))

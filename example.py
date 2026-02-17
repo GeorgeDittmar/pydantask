@@ -7,7 +7,7 @@ load_dotenv()
 agent_registry = {}
 
 da = DeepAgent(
-    "Explain to me the IRS tax changes for this year and compare them to last year. Write a single report with your findings and citations",
+    "Give me a detailed report on strange paranormal facts about Appalacha. Cite all sources in the final document.",
     model="gpt-5.1",
     trace=True,
 )
