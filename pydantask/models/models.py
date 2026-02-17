@@ -82,6 +82,7 @@ class TaskResult(BaseModel):
 
 
 class TaskItem(BaseModel):
+
     task_id: int = Field(description="Unique task id. Should be an integer value.")
     overall_objective: str = Field(
         description="The overall objective this task is contributing to solving."
@@ -90,7 +91,7 @@ class TaskItem(BaseModel):
         description="Description of the sub task to be executed."
     )
     status: TaskStatus
-    result: Any = None  # Store TaskResult here after execution
+    result: Optional[TaskResult] = None  # Store TaskResult here after execution
     capability: str = Field(
         description="Which sub agent capability should attempt this task."
     )
@@ -103,32 +104,45 @@ class TaskItem(BaseModel):
         []
     )  # Store any answer history if multiple attempts are made
     time_scope: Optional[str]  # "2026", "2025-2026", "last 7 days", etc.
-    parameters: dict  # you can stash structured temporal params here
+    parameters: dict = Field(
+        default=dict
+    )  # you can stash structured temporal params here
     attempt_count: int = 0
     max_attempts: int = 3
-    metadata: dict = {}
+    metadata: dict = Field(default=dict)
 
     @property
     def latest_output(self):
         return self.iteration_history[-1].output if self.iteration_history else None
 
 
-# Agent/Tool Desription Object
+# Agent/Tool Description Object
 class CapabilityDescription(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
     name: str = Field(
         description="Name of the agent/capability, e.g. 'web_search', 'file_writer', etc."
     )
-    description: str
-    capability: Union[Agent, Callable[..., Any]] = Field(
+    description: str = Field(
+        description="Human-readable description of what this capability does."
+    )
+    # We keep this very loose to avoid Pydantic trying to introspect complex
+    # types like `pydantic_ai.Agent` (which can reference optional imports
+    # and cause schema generation issues). At runtime this will typically be
+    # either a pydantic_ai Agent instance or a callable tool.
+    tool_func: Any = Field(
         description=(
-            "Either a pydantic_ai Agent instance or a callable function that can be invoked as a tool. This allows for both agent-based capabilities and simple function tools."
+            "Concrete implementation of the capability. Usually a pydantic_ai Agent "
+            "instance or an async/sync callable used as a tool."
         )
     )
-    input_schema: Optional[BaseModel] = Field(
+    # Optional Pydantic model *class* describing structured input, if you
+    # want to be explicit about what this capability expects.
+    input_schema: Optional[type[BaseModel]] = Field(
         default=None,
         description=(
-            "If agent is a callable function, you can optionally provide a Pydantic model here to define the expected input schema for better prompting and validation."
+            "Optional Pydantic model class that defines the expected input schema "
+            "for this capability, for better prompting and validation."
         ),
     )
 

@@ -33,17 +33,19 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.retries import AsyncTenacityTransport
 from pydantic_ai.common_tools.tavily import tavily_search_tool
-
+from loguru import logger
 from pydantask.agents.spec import (
-    BaseSpec,
+    BaseAgentSpec,
     SupervisorSpec,
     ProducerSpec,
     ResearcherSpec,
     SynthesizerSpec,
 )
+from pydantic_ai.models import Model
 from pydantask.prompts.prompts import (
     PLANNER_SYS_PROMPT,
     CRITIC_SYS_PROMPT,
+    PRODUCER_SYS_PROMPT,
     RESEARCH_AGENT_SYS_PROMPT,
 )
 from pydantask.models import (
@@ -76,7 +78,7 @@ class DeepAgent:
     def __init__(
         self,
         prompt: str,
-        model: str = "openai:gpt-4.1-mini",
+        model: str | Model = "gpt-4.1-mini",
         critic_agent: Optional[Agent] = None,
         planner_agent: Optional[Agent] = None,
         supervisor_agent: Optional[Agent] = None,
@@ -86,7 +88,7 @@ class DeepAgent:
         sub_agents: Union[None, list[CapabilityDescription]] = None,
         human_feedback: bool = False,
         trace: bool = False,
-        # default output type for the producer agent, can be set to a custom pydantic model for better structure and validation of final output
+        # default output type for the producer agent, can be set to a default type or custom pydantic model for better structure and validation of final output
         output_type: Type = TaskResult,
     ):
         """
@@ -100,7 +102,20 @@ class DeepAgent:
         :param human_feedback: Whether to incorporate human feedback in the agent's decision-making. Defaults to False.
         """
         # load_dotenv()
-        self.model: str = model
+
+        if trace:
+            langfuse = get_client()
+            logger.info("Enabling Langfuse tracing...")
+            # Verify connection
+            if langfuse.auth_check():
+                logger.info("Langfuse client is authenticated and ready!")
+                Agent.instrument_all()
+            else:
+                logger.error(
+                    "Authentication failed. Could not find TAVILY_API_KEY in environment variables."
+                )
+
+        self.model_name: str = model
         self.prompt: str = prompt  # Objective for the agent
         self._max_steps: int = max_steps  # Max steps to prevent infinite loops
         self.token_budget: Union[int, None] = set_token_budget
@@ -110,12 +125,12 @@ class DeepAgent:
 
         # TODO: support other chatmodels and providers beyond openai by allowing custom model and provider classes to be passed in as arguments and used for each agent. For now we will just use the openai chat model with the retry transport for all agents since it is the most robust for long conversations and has built in support for function calling which is useful for tool use.
 
-        _model = OpenAIChatModel(
+        self._retry_model = OpenAIChatModel(
             model, provider=OpenAIProvider(http_client=self._retry_client)
         )
         self._planner_agent = planner_agent or Agent(
             name="_default_Planner_Agent",
-            model=_model,
+            model=self._retry_model,
             system_prompt=PLANNER_SYS_PROMPT,
             output_type=Plan,
             tools=[think_tool],
@@ -123,7 +138,7 @@ class DeepAgent:
         )
 
         self._critic_agent = critic_agent or Agent(
-            model=_model,
+            model=self._retry_model,
             name="_default_Critic_Agent",
             system_prompt=CRITIC_SYS_PROMPT,
             output_type=TaskQAResult,
@@ -138,7 +153,7 @@ class DeepAgent:
             tools=[self.update_task_status, get_current_datetime, think_tool],
             output_type=SupervisorDecision,
             deps_type=RuntimeState,
-            model=self.model,
+            model=self._retry_model,
         )
 
         self._producer_agent = self._create_agent_from_spec(
@@ -147,8 +162,9 @@ class DeepAgent:
             tools=[write_to_file_system, read_from_file_system, think_tool],
             output_type=output_type,
             deps_type=RuntimeState,
-            model=self.model,
+            model=self._retry_model,
         )
+
         # TODO: rework some of these tools
         api_key = os.getenv("TAVILY_API_KEY", None)
 
@@ -158,7 +174,7 @@ class DeepAgent:
             )
 
         self._researcher_agent = researcher_agent or Agent(
-            self.model,
+            model=self._retry_model,
             name="_default_Research_Agent",  # Use a cheap model for simple tasks
             system_prompt=RESEARCH_AGENT_SYS_PROMPT,
             tools=[
@@ -174,17 +190,6 @@ class DeepAgent:
         )
 
         self.agent_registry = self._setup_default_sub_agents(sub_agents=sub_agents)
-
-        if trace:
-            langfuse = get_client()
-
-            # Verify connection
-            if langfuse.auth_check():
-                print("Langfuse client is authenticated and ready!")
-            else:
-                print("Authentication failed. Please check your credentials and host.")
-
-            Agent.instrument_all()
 
     def _create_retrying_client(self):
         """Create a client with smart retry handling for multiple error types.
@@ -219,8 +224,8 @@ class DeepAgent:
         self, sub_agents: Union[None, list[CapabilityDescription]] = None
     ):
         """
-        Setup default sub agents along with any custom tools that may be provided by the caller.
-        Default tools available are synthesizer, researcher, and file_system agents
+        Setup default sub agents along with any additional sub atgents that may be provided by the caller.
+        Default suba gents available are producer, critic, researcher, and file_system.
 
         Args:
             tools (Union[None, list[ToolDescription]], optional): Any custom tools to include in the agent. Defaults to None.
@@ -229,10 +234,10 @@ class DeepAgent:
             dict[str, ToolDescription]: Mapping of toolId's to the tool description and function
         """
 
-        synthesizer_agent = Agent(
-            self.model,
+        producer_agent = Agent(
+            model=self._retry_model,
             name="_default_Synthesizer Agent",
-            system_prompt=SYNTHESIZER_SYS_PROMPT,
+            system_prompt=PRODUCER_SYS_PROMPT,
             output_type=TaskResult,
             tools=[
                 write_to_file_system,
@@ -241,14 +246,13 @@ class DeepAgent:
             ],
         )
 
-        synthesizer = CapabilityDescription(
-            name="synthesizer_agent",
+        producer = CapabilityDescription(
+            name="producer_agent",
             description="Generate answers based on information from various sources and sub agents.",
-            tool_func=synthesizer_agent,
+            tool_func=producer_agent,
         )
 
         # A "Thin" Agent that just wraps a tool
-
         researcher = CapabilityDescription(
             name="research_agent",
             description="Tool to research information. This could include searching the web or querying a data source.",
@@ -256,7 +260,7 @@ class DeepAgent:
         )
 
         file_system_agent = Agent(
-            self.model,
+            model=self._retry_model,
             name="_default_File_System_Agent",
             system_prompt="You have access to a file system to use for tasks that need to be completed. \
             Use the file system to store long term information. \
@@ -264,6 +268,7 @@ class DeepAgent:
             You also have an addtional think tool that you can use to reflect on your work and plan next steps.",
             tools=[write_to_file_system, read_from_file_system, think_tool],
             deps_type=RuntimeState,
+            output_type=TaskItem,
         )
 
         file_system = CapabilityDescription(
@@ -285,9 +290,9 @@ class DeepAgent:
         #     tool_func=ask_user_agent,
         # )
 
-        _sub_agents_list = [synthesizer, researcher, file_system]
+        _sub_agents_list = [producer, researcher, file_system]
 
-        # if additional tools ahve been supplied then add those to the tool list
+        # if additional sub agents been supplied then add those to the registry
         if sub_agents:
             _sub_agents_list.extend(sub_agents)
 
@@ -299,12 +304,12 @@ class DeepAgent:
 
     def _create_agent_from_spec(
         self,
-        agent_spec: BaseSpec,
+        model: Model,
+        agent_spec: BaseAgentSpec,
         name: str = "Agent",
         deps_type: Type[RuntimeState] = RuntimeState,
-        tools=None,
         output_type=None,
-        model="openai:gpt-4.1-mini",
+        tools: list[Callable] = None,
         end_strategy="exhaustive",
     ) -> Agent:
 
@@ -313,8 +318,8 @@ class DeepAgent:
             model=model,
             name=name,
             deps_type=deps_type,
-            tools=tools,
             output_type=output_type,
+            tools=tools,
             end_strategy=end_strategy,
         )
 
@@ -366,8 +371,9 @@ class DeepAgent:
         agent_plan = await self._planner_agent.run(planner_prompt)
         agent_plan_map = {v.task_id: v for v in agent_plan.output.tasks}
 
-        print("--- Generated Plan ---")
-
+        logger.info("--- Generated Plan ---")
+        logger.info(agent_plan_map)
+        logger.info("--- Generated Plan ---")
         # now save the plan to the agent state
         runtime_state = self._initialize_runtime_state(
             plan=agent_plan_map, objective=self.prompt, registry=self.agent_registry
@@ -377,7 +383,7 @@ class DeepAgent:
         stop_execution = False
         while step_count < self._max_steps and not stop_execution:
 
-            print(f"\n--- DeepAgent Cycle {step_count} ---")
+            logger.info(f"\n--- DeepAgent Cycle {step_count} ---")
 
             supervisor_response = await self._supervisor_agent.run(
                 "Execute the plan given the current runtime plan state and status of tasks. Be sure to check if any tasks are ready for review for final acceptance or if a task is needing to be reran.",
@@ -386,24 +392,25 @@ class DeepAgent:
             supervisor_response = supervisor_response.output
 
             if supervisor_response.all_tasks_completed:
-                print(
+                logger.info(
                     f"--- All tasks completed according to supervisor. Ending execution loop. ---"
                 )
                 stop_execution = True
-                break
+                continue
 
-            print(f"--- Executing Tasks ---")
+            logger.info(f"--- Executing Tasks ---")
             # execute tasks that are ready to run and await responses
             task_results = await self._execute_ready_tasks(
                 supervisor_response, runtime_state
             )
 
-            print(f"--- Task Results ---")
-            print(f"Number of tasks executed: {len(task_results)}")
-
+            logger.info("--- Task Results ---")
+            logger.info(f"Number of tasks executed: {len(task_results)}")
+            logger.info()
+            logger.info("--- Task Result ---")
             # go through responses and evaluate if they have completed the task
             for task_result in task_results or []:
-                print(f"--- Evaluating Task Result for {task_result.task_id} ---")
+                logger.info(f"--- Evaluating Task Result for {task_result.task_id} ---")
                 qa_prompt = f"""
                 Overall Objective:
                 {runtime_state.objective}
@@ -429,8 +436,8 @@ class DeepAgent:
                 )
                 qa_response = qa_response.output
 
-                print(f"--- QA Response ---")
-                pprint(qa_response.model_dump_json())
+                logger.info(f"--- QA Response ---")
+                plogger.info(qa_response.model_dump_json())
 
                 # add the qa report to the task result for the supervisor to review
                 runtime_state.plan[task_result.task_id].task_feedback = qa_response
@@ -454,8 +461,8 @@ class DeepAgent:
         # 1. Identify "Ready" tasks
         ready_steps = [ctx.plan[id] for id in tasks.tasks_to_execute]
 
-        print("Ready Steps to Execute:")
-        print(ready_steps)
+        logger.info("Ready Steps to Execute:")
+        logger.info(ready_steps)
 
         if not ready_steps:
             return []
@@ -463,11 +470,13 @@ class DeepAgent:
         # 2. Prepare the concurrent coroutines
         ready_tasks = []
         for step in ready_steps:
-            print(f"- {step.task_id}: {step.task_objective} using {step.capability}")
-            print(f"  Dependencies: {step.task_dependencies}")
-            print(f"  Status: {step.status}")
-            print(f"  Result: {step.result}")
-            print()
+            logger.info(
+                f"- {step.task_id}: {step.task_objective} using {step.capability}"
+            )
+            logger.info(f"  Dependencies: {step.task_dependencies}")
+            logger.info(f"  Status: {step.status}")
+            logger.info(f"  Result: {step.result}")
+            logger.info()
             # grab the tool that the plan or supervisor decides
             worker = self.agent_registry.get(step.capability)
             if worker:
@@ -476,15 +485,15 @@ class DeepAgent:
                 ready_tasks.append(self.execute(worker.tool_func, step, ctx))
 
         # 3. Execute tasks and return exceptions to notify the supervisor
-        print("--- Executing Ready Tasks ---")
+        logger.info("--- Executing Ready Tasks ---")
         task_results = []
         async with TaskGroup() as tg:
             for task in ready_tasks:
                 task_results.append(tg.create_task(task))
 
         results = [t.result() for t in task_results]
-        print("--- All Ready Tasks Completed ---")
-        pprint(results)
+        logger.info("--- All Ready Tasks Completed ---")
+        plogger.info(results)
         return results
 
     @retry(wait=wait_exponential_jitter(), reraise=True, stop=stop_after_attempt(3))

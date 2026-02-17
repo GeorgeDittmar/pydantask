@@ -12,8 +12,6 @@ class BaseAgentSpec(ABC):
     def system_prompt(self, ctx: RunContext[RuntimeState]) -> str:
         raise NotImplementedError("Must implement system_prompt method in subclass.")
 
-    @abstractmethod
-    def tools(self,)
 
 class SupervisorSpec(BaseAgentSpec):
     def system_prompt(self, ctx: RunContext[RuntimeState]) -> str:
@@ -43,9 +41,6 @@ class SupervisorSpec(BaseAgentSpec):
 class ResearcherSpec(BaseAgentSpec):
     def system_prompt(self, ctx: RunContext[RuntimeState]) -> str:
         return RESEARCH_AGENT_SYS_PROMPT
-
-    def tools(tools: Union[Agent, Callable[..., Any]]):
-        pass
 
 
 class CoderSpec(BaseAgentSpec):
