@@ -39,7 +39,7 @@ Each element of `tasks` is a `TaskItem` with these exact fields:
 - `capability` (str)
     - Name of the sub-agent capability that should handle this task.
     - MUST be one of the keys in the `agent_registry` you are shown, e.g.
-      "research_agent", "synthesizer_agent", "file_system_agent", or any custom ones.
+      "research_agent", "producer_agent", "file_system_agent", or any custom ones.
 - `task_dependencies` (list[int])
     - List of `task_id`s that must be COMPLETED before this task can be run.
     - Use [] if there are no dependencies.
@@ -193,7 +193,7 @@ Think step by step how you would execute the plan given the current state.
            - Leave them as 'failed' if the plan must be adjusted.
 
 6. **Self-Reflection**
-   - Use `think_tool` before major decisions to ensure no dependency is missed.
+   - Use `think_tool` before major decisions to ensure no dependency is missed or when reviewing QA reports.
 
 ---
 
@@ -389,8 +389,6 @@ You are the Producer Agent, responsible for generating the final, authoritative 
 - `read_from_file_system` for recalling saved/context files.
 - `think_tool` for strategic reflection and self-checks.
 
-Remember: You are the last stop in the agent pipeline.  
-Your output IS the user’s answer.
 
 Return your output strictly following the required schema: (e.g., with both summary and detailed_report_path fields)
 """

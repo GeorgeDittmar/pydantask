@@ -236,8 +236,9 @@ class DeepAgent:
 
         producer_agent = Agent(
             model=self._retry_model,
-            name="_default_Synthesizer Agent",
+            name="_default_Producer_agent",
             system_prompt=PRODUCER_SYS_PROMPT,
+            deps_type=RuntimeState,
             output_type=TaskResult,
             tools=[
                 write_to_file_system,
@@ -347,6 +348,34 @@ class DeepAgent:
             lines.append(f"- {name}: {description}")
         return "\n".join(lines)
 
+    def _build_producer_prompt(state: RuntimeState) -> str:
+        completed = [t for t in state.plan.values() if t.status == TaskStatus.COMPLETED]
+        lines = []
+        for t in sorted(completed, key=lambda x: x.task_id):
+            result = t.result
+            summary = (
+                getattr(result, "summary", str(result)) if result else "<no result>"
+            )
+            paths = getattr(result, "detailed_report_paths", []) if result else []
+            lines.append(
+                f"- Task {t.task_id} ({t.capability})\n"
+                f"  objective: {t.task_objective}\n"
+                f"  summary: {summary}\n"
+                f"  report_paths: {paths}\n"
+            )
+        completed_display = "\n".join(lines) or "<no completed tasks>"
+
+        return f"""
+    Overall objective:
+    {state.objective}
+
+    Completed sub-tasks (source material):
+    {completed_display}
+
+    Using only these results (and any files they point to), synthesize the final answer
+    to the overall objective. Do not perform new research.
+    """
+
     def _format_plan(self, plan: Plan):
         lines = []
         for task in plan.tasks:
@@ -367,7 +396,7 @@ class DeepAgent:
         current_year = datetime.now().year
         capabilities_display = self._format_capabilities()
         planner_prompt = f"""
-        Goal: {self.prompt}
+        Objective: {self.prompt}
 
         AVAILABLE CAPABILITIES:
         {capabilities_display}
@@ -375,7 +404,7 @@ class DeepAgent:
         Current Datetime (MUST be used verbatim if time is needed as context): {now}
         CURRENT_YEAR (authoritative numeric year): {current_year}
         
-        Come up with a plan for the above goal using the available capabilities.
+        Come up with a plan for the above objective using the available capabilities.
         Always include the above datetime in the plan metadata and any date-sensitive instructions.
         Use CURRENT_YEAR exactly as provided when resolving any relative time expressions.
         """
@@ -399,7 +428,7 @@ class DeepAgent:
             logger.info(f"\n--- DeepAgent Cycle {step_count} ---")
 
             supervisor_response = await self._supervisor_agent.run(
-                "Execute the plan given the current runtime plan state and status of tasks. Be sure to check if any tasks are ready for review for final acceptance or if a task is needing to be reran.",
+                "Decide which tasks to execute next and update statuses as needed.",
                 deps=runtime_state,
             )
             supervisor_response = supervisor_response.output
@@ -425,6 +454,9 @@ class DeepAgent:
             for task_result in task_results or []:
                 logger.info(f"--- Evaluating Task Result for {task_result.task_id} ---")
                 qa_prompt = f"""
+                
+                Evaluate if the following worker output completed its task.
+                
                 Overall Objective:
                 {runtime_state.objective}
 
@@ -433,16 +465,6 @@ class DeepAgent:
 
                 Worker Output (TaskResult):
                 {task_result.result.model_dump_json(indent=2)}
-
-                Evaluate whether the worker's output sufficiently completes this specific sub-task.
-
-                Remember: your response MUST be a TaskQAResult object, with:
-                - task_id = {task_result.task_id}
-                - reasoning = detailed explanation of your evaluation
-                - passed = true if the output is sufficient, false otherwise
-
-                Focus ONLY on this sub-task; the overall objective is for context.
-                Base your evaluation strictly on the task definition and worker output.
                 """
                 qa_response = await self._critic_agent.run(
                     qa_prompt, deps=runtime_state
@@ -554,15 +576,15 @@ class DeepAgent:
             return f"Status for {task_id} is now {status}."
         return f"Error: No task with {task_id} found in plan. Be sure task_id actually exists."
 
-    async def call_worker(
-        self, ctx: RunContext[RuntimeState], capability: str, instruction: str
-    ):
-        """The Supervisor calls this to hand off a task to one of the sub agent workers."""
-        # Find the agent in the registry
-        worker_agent = ctx.deps.agent_registry.get(capability, None)
+    # async def call_worker(
+    #     self, ctx: RunContext[RuntimeState], capability: str, instruction: str
+    # ):
+    #     """The Supervisor calls this to hand off a task to one of the sub agent workers."""
+    #     # Find the agent in the registry
+    #     worker_agent = ctx.deps.agent_registry.get(capability, None)
 
-        if not worker_agent:
-            return f"Error: No specialist found for '{capability}'."
-        # Trigger the deep reasoning loop of the sub-agent
-        result = await worker_agent.run(instruction)
-        return result
+    #     if not worker_agent:
+    #         return f"Error: No specialist found for '{capability}'."
+    #     # Trigger the deep reasoning loop of the sub-agent
+    #     result = await worker_agent.run(instruction)
+    #     return result

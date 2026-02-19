@@ -7,7 +7,7 @@ load_dotenv()
 agent_registry = {}
 
 da = DeepAgent(
-    "Give me a detailed report on strange paranormal facts about Appalacha. Cite all sources in the final document.",
+    "Give me a detailed report on strange paranormal facts about Appalacha.",
     model="gpt-5.1",
     trace=True,
 )
