@@ -1,0 +1,32 @@
+site_name: Pydantask Agent Framework
+nav:
+  - Home: index.md
+  - Quickstart: quickstart.md
+  - Agent Concepts: agents.md
+  - Customization: customization.md
+  - API Reference: api.md
+
+theme:
+ name: material
+ palette:
+   - scheme: default
+     primary: indigo
+     accent: indigo
+     toggle:
+       icon: material/toggle-switch-off-outline
+       name: Switch to dark mode
+   - scheme: slate
+     primary: indigo
+     accent: indigo
+     toggle:
+       icon: material/toggle-switch
+       name: Switch to light mode
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: google
+            show_source: true

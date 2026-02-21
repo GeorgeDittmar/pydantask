@@ -1,13 +1,16 @@
-from pydantask.agent import DeepAgent
-from pydantic import BaseModel
-from pydantic_ai.agent import Agent
+import asyncio
 
+from pydantask.agents import DeepAgent
+from dotenv import load_dotenv
 
+load_dotenv()
 agent_registry = {}
 
 da = DeepAgent(
-    "I need help planning a trip to scotland. please provide a compiled trip plan itinerary."
+    "Give me a detailed report on the mothman creature. Be sure that when you write the report that it is citing its sources correctly.",
+    model="gpt-5.1",
+    trace=True,
 )
-result = da.run()
+result = asyncio.run(da.run())
 
-print(result)
+# print(result)
