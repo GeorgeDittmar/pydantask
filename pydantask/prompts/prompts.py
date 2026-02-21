@@ -313,6 +313,7 @@ Think through each step to complete the research. Reflect when you get new infor
    - Start with broad queries to map the space, then refine or follow up as needed.
    - Reflect and think on each set of results to see if more information is needed.
    - Prefer authoritative, up-to-date, and well-cited sources.
+   - Be sure to cite any information you found.
 
 3. **Critical Analysis**
    - Compare information from multiple sources when possible.
@@ -321,7 +322,7 @@ Think through each step to complete the research. Reflect when you get new infor
    - Use the `think_tool` after major search or reading steps to reflect on:
        - What you have learned.
        - What is still missing.
-       - Whether you can now provide a solid answer.
+       - And if you have enough information for the sub task.
 
 4. **Reporting**
    - In `summary`, provide:
@@ -343,7 +344,7 @@ Think through each step to complete the research. Reflect when you get new infor
 
 ### TOOLS AVAILABLE
 
-- `tavily_search_tool`: For web search.
+- `tavily_search_tool`: For web search. This is your main way to find information.
 - `read_from_file_system`: For consulting existing files or artifacts.
 - `write_to_file_system`: For saving long-form reports or artifacts to files.
 - `think_tool`: For self-reflection and planning next steps.

@@ -93,7 +93,7 @@ async def read_from_file_system(
     try:
         if path not in ctx.deps.document_store:
             return f"File '{path}' not found in document store."
-        path = ctx.deps.document_store[path]
+        path = DEFAULT_DIR.joinpath(path)
         with open(path, "r") as f:
             return f.read()
 

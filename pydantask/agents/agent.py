@@ -387,6 +387,8 @@ class DeepAgent:
                 f"- Task ID:{id}\n sub_task_obj: {sub_task_obj} \n task_status: {task_status}\n metadata: {metadata}"
             )
         return "\n".join(lines)
+    
+    def _format_
 
     @observe
     async def run(self):
@@ -473,7 +475,7 @@ class DeepAgent:
 
                 logger.info(f"--- QA Response ---")
                 logger.info(qa_response.model_dump_json())
-
+                if qa_response.do
                 # add the qa report to the task result for the supervisor to review
                 runtime_state.plan[task_result.task_id].task_feedback = qa_response
 

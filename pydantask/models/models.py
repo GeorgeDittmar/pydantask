@@ -84,18 +84,16 @@ class TaskResult(BaseModel):
 class TaskItem(BaseModel):
 
     task_id: int = Field(description="Unique task id. Should be an integer value.")
-    overall_objective: str = Field(
-        description="The overall objective this task is contributing to solving."
-    )
-    task_objective: str = Field(
-        description="Description of the sub task to be executed."
-    )
+    # overall_objective: str = Field(
+    #     description="The overall objective this task is contributing to solving."
+    # )
+    sub_task: str = Field(description="Description of the sub task to be executed.")
     status: TaskStatus
     result: Optional[TaskResult] = None  # Store TaskResult here after execution
     capability: str = Field(
         description="Which sub agent capability should attempt this task."
     )
-    task_dependencies: Optional[List[int]] = Field(
+    sub_task_dependencies: Optional[List[int]] = Field(
         description="Put task dependency IDs here", default_factory=list
     )
     task_feedback: Optional[TaskQAResult] = None  # Store the Eval "critique" here
