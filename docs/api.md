@@ -6,7 +6,7 @@ This section contains the auto-generated API documentation for the main classes 
 
 ---
 
-::: pydantask.agents.agent.DeepAgent
+::: pydantask.agents.DeepAgent
 
 
 ---
