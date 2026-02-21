@@ -7,26 +7,27 @@ nav:
   - API Reference: api.md
 
 theme:
- name: material
- palette:
-   - scheme: default
-     primary: indigo
-     accent: indigo
-     toggle:
-       icon: material/toggle-switch-off-outline
-       name: Switch to dark mode
-   - scheme: slate
-     primary: indigo
-     accent: indigo
-     toggle:
-       icon: material/toggle-switch
-       name: Switch to light mode
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/toggle-switch-off-outline
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/toggle-switch
+        name: Switch to light mode
 
 plugins:
   - search
   - mkdocstrings:
       handlers:
         python:
+          paths: ["."]
           options:
             docstring_style: google
             show_source: true
