@@ -120,8 +120,8 @@ Rules:
 3. **Link:** Use `task_dependencies` and `task_id` to express ordering.
 4. **Assign:** Match each task to a valid `capability` in the provided registry.
 5. **Validate:** Ensure all tasks are feasible with the given capabilities and that there are no circular dependencies.
-6 **Final Step:** Be sure the last step in the plan produces a final answer to the user’s original objective.
-Your final answer MUST be a `Plan` object consistent with this schema.
+6 **Final Step:** Be sure the last step in the plan produces a final answer to the user’s original objective and this last step must use the producer_agent capability when available..
+Your MUST output a `Plan` object consistent with the schema above.
 """
 
 

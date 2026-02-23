@@ -359,7 +359,7 @@ class DeepAgent:
             paths = getattr(result, "detailed_report_paths", []) if result else []
             lines.append(
                 f"- Task {t.task_id} ({t.capability})\n"
-                f"  objective: {t.task_objective}\n"
+                f"  objective: {t.sub_task_objective}\n"
                 f"  summary: {summary}\n"
                 f"  report_paths: {paths}\n"
             )
@@ -380,7 +380,7 @@ class DeepAgent:
         lines = []
         for task in plan.tasks:
             id = task.task_id
-            sub_task_obj = task.task_objective
+            sub_task_obj = task.sub_task_objective
             task_status = task.status
             metadata = task.metadata
             lines.append(
@@ -508,9 +508,9 @@ class DeepAgent:
         ready_tasks = []
         for step in ready_steps:
             logger.info(
-                f"- {step.task_id}: {step.task_objective} using {step.capability}"
+                f"- {step.task_id}: {step.sub_task_objective} using {step.capability}"
             )
-            logger.info(f"  Dependencies: {step.task_dependencies}")
+            logger.info(f"  Dependencies: {step.sub_task_dependencies}")
             logger.info(f"  Status: {step.status}")
             logger.info(f"  Result: {step.result}")
             logger.info("\n")
