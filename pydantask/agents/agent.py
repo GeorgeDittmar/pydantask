@@ -125,6 +125,7 @@ class DeepAgent:
 
         # TODO: support other chatmodels and providers beyond openai by allowing custom model and provider classes to be passed in as arguments and used for each agent. For now we will just use the openai chat model with the retry transport for all agents since it is the most robust for long conversations and has built in support for function calling which is useful for tool use.
 
+        # have a ChatModel factory or something so we can support full set of models
         self._retry_model = OpenAIChatModel(
             model, provider=OpenAIProvider(http_client=self._retry_client)
         )
@@ -159,7 +160,12 @@ class DeepAgent:
         self._producer_agent = self._create_agent_from_spec(
             agent_spec=ProducerSpec(),
             name="_default_Producer_Agent",
-            tools=[write_to_file_system, read_from_file_system, think_tool],
+            tools=[
+                write_to_file_system,
+                read_from_file_system,
+                think_tool,
+                get_current_datetime,
+            ],
             output_type=output_type,
             deps_type=RuntimeState,
             model=self._retry_model,
@@ -359,7 +365,7 @@ class DeepAgent:
             paths = getattr(result, "detailed_report_paths", []) if result else []
             lines.append(
                 f"- Task {t.task_id} ({t.capability})\n"
-                f"  objective: {t.task_objective}\n"
+                f"  objective: {t.sub_task_objective}\n"
                 f"  summary: {summary}\n"
                 f"  report_paths: {paths}\n"
             )
@@ -380,7 +386,7 @@ class DeepAgent:
         lines = []
         for task in plan.tasks:
             id = task.task_id
-            sub_task_obj = task.task_objective
+            sub_task_obj = task.sub_task_objective
             task_status = task.status
             metadata = task.metadata
             lines.append(
@@ -448,6 +454,11 @@ class DeepAgent:
                 supervisor_response, runtime_state
             )
 
+            if len(task_results) == 0:
+                # handle case if task_results are empty
+                stop_execution = True
+                continue
+
             logger.info("--- Task Results ---")
             logger.info(f"Number of tasks executed: {len(task_results)}")
             logger.info(f"Results: {task_results}")
@@ -467,6 +478,9 @@ class DeepAgent:
 
                 Worker Output (TaskResult):
                 {task_result.result.model_dump_json(indent=2)}
+                
+                Any documents to review:
+                {runtime_state.document_store}
                 """
                 qa_response = await self._critic_agent.run(
                     qa_prompt, deps=runtime_state
@@ -498,6 +512,10 @@ class DeepAgent:
         # 1. Identify "Ready" tasks
         ready_steps = [ctx.plan[id] for id in tasks.tasks_to_execute]
 
+        # if no ready steps return empty list
+        if len(ready_steps) == 0:
+            return []
+
         logger.info("Ready Steps to Execute:")
         logger.info(ready_steps)
 
@@ -508,9 +526,9 @@ class DeepAgent:
         ready_tasks = []
         for step in ready_steps:
             logger.info(
-                f"- {step.task_id}: {step.task_objective} using {step.capability}"
+                f"- {step.task_id}: {step.sub_task_objective} using {step.capability}"
             )
-            logger.info(f"  Dependencies: {step.task_dependencies}")
+            logger.info(f"  Dependencies: {step.sub_task_dependencies}")
             logger.info(f"  Status: {step.status}")
             logger.info(f"  Result: {step.result}")
             logger.info("\n")
@@ -539,27 +557,27 @@ class DeepAgent:
     ) -> TaskItem:
         """Helper to run an agent and capture its output into the step object."""
 
-        try:
-            result = await sub_agent.run(
-                f"""
-                You are executing TaskItem:
+        # try:
+        result = await sub_agent.run(
+            f"""
+            You are executing TaskItem:
 
-                {step.model_dump_json(indent=2)}
+            {step.model_dump_json(indent=2)}
 
-                Overall objective:
-                {self.prompt}
+            Overall objective:
+            {self.prompt}
 
-                ONLY act on this sub-task. Do not re-plan or change the task.
-                """,
-                deps=runtime_state,
-            )
-            step.result = result.output
-            step.status = TaskStatus.NEEDS_REVIEW
-            return step
-        except Exception as e:
-            step.status = TaskStatus.ERRORED
-            step.error_msg = str(e)
-            return step
+            ONLY act on this sub-task. Do not re-plan or change the task.
+            """,
+            deps=runtime_state,
+        )
+        step.result = result.output
+        step.status = TaskStatus.NEEDS_REVIEW
+        return step
+        # except Exception as e:
+        #     step.status = TaskStatus.ERRORED
+        #     step.error_msg = str(e)
+        #     return step
 
     async def update_task_status(
         self, ctx: RunContext[RuntimeState], task_id: int, status: TaskStatus
@@ -577,16 +595,3 @@ class DeepAgent:
             ctx.deps.plan.get(task_id).status = status
             return f"Status for {task_id} is now {status}."
         return f"Error: No task with {task_id} found in plan. Be sure task_id actually exists."
-
-    # async def call_worker(
-    #     self, ctx: RunContext[RuntimeState], capability: str, instruction: str
-    # ):
-    #     """The Supervisor calls this to hand off a task to one of the sub agent workers."""
-    #     # Find the agent in the registry
-    #     worker_agent = ctx.deps.agent_registry.get(capability, None)
-
-    #     if not worker_agent:
-    #         return f"Error: No specialist found for '{capability}'."
-    #     # Trigger the deep reasoning loop of the sub-agent
-    #     result = await worker_agent.run(instruction)
-    #     return result

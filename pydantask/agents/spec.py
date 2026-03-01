@@ -18,7 +18,7 @@ class SupervisorSpec(BaseAgentSpec):
         # Pre-format the plan to ensure the LLM sees a clean "Status Board"
         plan_display = "\n".join(
             [
-                f"- Task ID: {t.task_id} | Status: [{t.status}] |Task Objective: {t.task_objective} | Task Dependencies: {t.task_dependencies}"
+                f"- Task ID: {t.task_id} | Status: [{t.status}] |Task Objective: {t.sub_task_objective} | Task Dependencies: {t.sub_task_dependencies}"
                 for t in ctx.deps.plan.values()
             ]
         )
