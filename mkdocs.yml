@@ -6,20 +6,30 @@ nav:
   - Customization: customization.md
   - API Reference: api.md
 
+# theme:
+#   name: material
+#   palette:
+#     - scheme: default
+#       primary: indigo
+#       accent: indigo
+#     - scheme: slate
+#       primary: black
+#       accent: black
+
 theme:
   name: material
   palette:
-    - scheme: default
-      primary: indigo
-      accent: indigo
+    - scheme: default        # light mode
+      primary: blue grey     # calm, professional neutral
+      accent: teal           # clear but not loud accent
       toggle:
-        icon: material/toggle-switch-off-outline
+        icon: material/weather-night
         name: Switch to dark mode
-    - scheme: slate
-      primary: indigo
-      accent: indigo
+    - scheme: slate          # dark mode
+      primary: blue grey
+      accent: teal
       toggle:
-        icon: material/toggle-switch
+        icon: material/weather-sunny
         name: Switch to light mode
 
 plugins:
