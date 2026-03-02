@@ -266,23 +266,23 @@ class DeepAgent:
             tool_func=self._researcher_agent,
         )
 
-        file_system_agent = Agent(
-            model=self._retry_model,
-            name="_default_File_System_Agent",
-            system_prompt="You have access to a file system to use for tasks that need to be completed. \
-            Use the file system to store long term information. \
-            You may also write output for the user to the file system. \
-            You also have an addtional think tool that you can use to reflect on your work and plan next steps.",
-            tools=[write_to_file_system, read_from_file_system, think_tool],
-            deps_type=RuntimeState,
-            output_type=TaskItem,
-        )
+        # file_system_agent = Agent(
+        #     model=self._retry_model,
+        #     name="_default_File_System_Agent",
+        #     system_prompt="You have access to a file system to use for tasks that need to be completed. \
+        #     Use the file system to store long term information. \
+        #     You may also write output for the user to the file system. \
+        #     You also have an addtional think tool that you can use to reflect on your work and plan next steps.",
+        #     tools=[write_to_file_system, read_from_file_system, think_tool],
+        #     deps_type=RuntimeState,
+        #     output_type=TaskItem,
+        # )
 
-        file_system = CapabilityDescription(
-            name="file_system_agent",
-            description="Agent to interact with the file system of host machine. Should be used to store information that needs to persist for further use or context.",
-            tool_func=file_system_agent,
-        )
+        # file_system = CapabilityDescription(
+        #     name="file_system_agent",
+        #     description="Agent to interact with the file system of host machine. Should be used to store information that needs to persist for further use or context.",
+        #     tool_func=file_system_agent,
+        # )
 
         # ask_user_agent = Agent(
         #     self.model,
@@ -297,7 +297,7 @@ class DeepAgent:
         #     tool_func=ask_user_agent,
         # )
 
-        _sub_agents_list = [producer, researcher, file_system]
+        _sub_agents_list = [producer, researcher]
 
         # if additional sub agents been supplied then add those to the registry
         if sub_agents:
@@ -456,6 +456,7 @@ class DeepAgent:
 
             if len(task_results) == 0:
                 # handle case if task_results are empty
+                logger.info("NO TASK RESULTS")
                 stop_execution = True
                 continue
 
