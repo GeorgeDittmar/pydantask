@@ -144,21 +144,6 @@ Your output will be parsed into the `SupervisorDecision` model:
 - `all_tasks_completed` (bool)
     - Set to true ONLY when all tasks in the plan have `status == COMPLETED`.
 
----
-
-### MISSION OBJECTIVE
-{objective}
-
-### CURRENT MISSION CONTROL BOARD
-{plan_display}
-
-### AVAILABLE SUB-AGENT CAPABILITIES
-{agent_display}
-
-Think step by step how you would execute the plan given the current state.
-
----
-
 ### OPERATING PROCEDURES
 
 1. **Dependency Check**
@@ -207,6 +192,21 @@ Think step by step how you would execute the plan given the current state.
 4. Return a `SupervisorDecision` object consistent with the schema above.
 """
 
+SUPERVISOR_INPUT_PROMPT = """
+---
+
+### MISSION OBJECTIVE
+{objective}
+
+### CURRENT MISSION CONTROL BOARD
+{plan_display}
+
+### AVAILABLE SUB-AGENT CAPABILITIES
+{agent_display}
+
+Think step by step how you would execute the plan given the current state of all the tasks.
+
+---"""
 
 SUB_AGENT_SYS_PROMPT = """
 You are a sub-agent in a deep agent system.

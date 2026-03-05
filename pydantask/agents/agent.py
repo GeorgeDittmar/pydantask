@@ -47,6 +47,8 @@ from pydantask.prompts.prompts import (
     CRITIC_SYS_PROMPT,
     PRODUCER_SYS_PROMPT,
     RESEARCH_AGENT_SYS_PROMPT,
+    SUPERVISOR_SYS_PROMPT,
+    SUPERVISOR_INPUT_PROMPT,
 )
 from pydantask.models import (
     RuntimeState,
@@ -359,7 +361,7 @@ class DeepAgent:
             lines.append(f"- {name}: {description}")
         return "\n".join(lines)
 
-    def _build_producer_prompt(state: RuntimeState) -> str:
+    def _build_producer_prompt(self, state: RuntimeState) -> str:
         completed = [t for t in state.plan.values() if t.status == TaskStatus.COMPLETED]
         lines = []
         for t in sorted(completed, key=lambda x: x.task_id):
@@ -400,6 +402,44 @@ class DeepAgent:
         return "\n".join(lines)
 
     # def _format_
+    def format_input_prompt(self, ctx: RuntimeState) -> str:
+        # Pre-format the plan to ensure the LLM sees a clean "Status Board"
+        plan_display_lines = []
+        for t in ctx.plan.values():
+            line = (
+                f"- Task ID: {t.task_id} | Status: [{t.status}] "
+                f"| Objective: {t.sub_task_objective} "
+                f"| Dependencies: {t.sub_task_dependencies}"
+            )
+
+            fb = getattr(t, "task_feedback", None)
+            if fb is not None:
+                # Adjust these fields to match TaskQAResult
+                # verdict = getattr(fb, "passed", None)
+                verdict = getattr(fb, "passed", None)
+                summary = getattr(fb, "reasoning", None)
+
+                line += "\n  QA: "
+                if verdict is not None:
+                    line += f"verdict={verdict} "
+                if summary:
+                    line += f"\n    summary: {summary}"
+
+            plan_display_lines.append(line)
+
+        plan_display = "\n".join(plan_display_lines)
+        # Simplify the registry so the Supervisor sees "Tools" not "Agent Objects"
+        agent_display = "\n".join(
+            [
+                f"- {uuid}: {info.description}"
+                for uuid, info in ctx.agent_registry.items()
+            ]
+        )
+        return SUPERVISOR_INPUT_PROMPT.format(
+            objective=ctx.objective,
+            plan_display=plan_display,
+            agent_display=agent_display,
+        )
 
     @observe
     async def run(self):
@@ -441,7 +481,7 @@ class DeepAgent:
             logger.info(f"\n--- DeepAgent Cycle {step_count} ---")
 
             supervisor_response = await self._supervisor_agent.run(
-                "Decide which tasks to execute next and update statuses as needed.",
+                self.format_input_prompt(runtime_state),
                 deps=runtime_state,
             )
             supervisor_response = supervisor_response.output
