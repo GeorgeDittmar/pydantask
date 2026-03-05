@@ -151,7 +151,12 @@ class DeepAgent:
         self._supervisor_agent = supervisor_agent or self._create_agent_from_spec(
             agent_spec=SupervisorSpec(),
             name="_default_Supervisor_Agent",
-            tools=[self.update_task_status, get_current_datetime, think_tool],
+            tools=[
+                self.update_task_status,
+                get_current_datetime,
+                think_tool,
+                self.view_qa_report,
+            ],
             output_type=SupervisorDecision,
             deps_type=RuntimeState,
             model=self._retry_model,
@@ -596,3 +601,21 @@ class DeepAgent:
             ctx.deps.plan.get(task_id).status = status
             return f"Status for {task_id} is now {status}."
         return f"Error: No task with {task_id} found in plan. Be sure task_id actually exists."
+
+    async def view_qa_report(self, ctx: RunContext[RuntimeState], task_id: int) -> str:
+        """
+        Tool Name: View QA Report
+        Desription: Tool to view the specific detailed QA report for a given task_id.
+        When to use:
+            - If you need to review the full QA report from the critic.
+        """
+        task = ctx.deps.plan.get(task_id)
+        if task is None:
+            return f"No task with id {task_id}."
+
+        fb = getattr(task, "task_feedback", None)
+        if fb is None:
+            return f"No QA feedback found for task {task_id}."
+
+        # Return either a summary or full JSON depending on your needs
+        return fb.model_dump_json(indent=2)

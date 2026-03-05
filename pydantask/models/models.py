@@ -14,7 +14,7 @@ class TaskStatus(Enum):
     COMPLETED = "completed"
     ERRORED = "errored"  # Execution error occurred
     FAILED = "failed"  # Evaluator rejected it
-    NEEDS_REVIEW = "review"  # Needs Evaluator review
+    NEEDS_REVIEW = "needs_review"  # Needs Evaluator review
     RERUN = "rerun"
 
 
