@@ -66,6 +66,9 @@ from pydantask.tools.default_tools import (
     read_from_file_system,
     think_tool,
     get_current_datetime,
+    list_completed_tasks,
+    list_documents,
+    get_task_result,
 )
 
 from pydantic_ai.retries import AsyncTenacityTransport, RetryConfig, wait_retry_after
@@ -172,6 +175,9 @@ class DeepAgent:
                 read_from_file_system,
                 think_tool,
                 get_current_datetime,
+                list_documents,
+                list_completed_tasks,
+                get_task_result,
             ],
             output_type=output_type,
             deps_type=RuntimeState,
@@ -196,6 +202,7 @@ class DeepAgent:
                 write_to_file_system,
                 read_from_file_system,
                 get_current_datetime,
+                list_documents,
             ],
             deps_type=RuntimeState,
             output_type=TaskResult,
@@ -550,13 +557,27 @@ class DeepAgent:
         """Updates the knowledge runtime state with any new knowledge that is needed to answer a goal or task"""
         pass
 
+    def _dependencies_satisfied(self, step: TaskItem, ctx: RuntimeState) -> bool:
+        # Consider a dependency satisfied only if it's COMPLETED (or whatever set you like)
+        required_statuses = {TaskStatus.COMPLETED}
+        for dep_id in step.sub_task_dependencies or []:
+            dep_task = ctx.plan.get(dep_id)
+            if dep_task is None:
+                # Be conservative: if the dependency is missing, treat it as unsatisfied
+                return False
+            if dep_task.status not in required_statuses:
+                return False
+        return True
+
     async def _execute_ready_tasks(
         self, tasks: SupervisorDecision, ctx: RuntimeState
     ) -> list[TaskItem]:
         """Finds all tasks that are ready to run and executes them in parallel."""
+        candidate_steps = [ctx.plan[id] for id in tasks.tasks_to_execute]
 
-        # 1. Identify "Ready" tasks
-        ready_steps = [ctx.plan[id] for id in tasks.tasks_to_execute]
+        ready_steps = [
+            step for step in candidate_steps if self._dependencies_satisfied(step, ctx)
+        ]
 
         # if no ready steps return empty list
         if len(ready_steps) == 0:

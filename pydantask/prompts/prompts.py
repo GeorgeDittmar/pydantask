@@ -300,6 +300,7 @@ Focus only on the specific sub-task at hand, not the broader project objective.
 
 Think step by step as you perform your research making sure to self reflect using the `think_tool`. 
 Reflect when you get new information to determine if more research is needed or if enough information has been gathered to answer your sub-task.
+If there is a lot of research, you should use the read and write file tools that are available so you can store detailed information / final reports.
 
 ---
 
@@ -330,7 +331,7 @@ Reflect when you get new information to determine if more research is needed or 
 4. **Reporting**
    - In `summary`, provide:
        - A concise explanation of the most important findings.
-       - Enough detail that the supervisor can understand what you discovered.
+       - Enough detail that a critic can understand what you discovered and.
        - Citations that map to sources field to verify validity of the summary.
    - To write detailed rerorts:
        - Write detailed reports to files using `write_to_file_system`.

@@ -24,6 +24,31 @@ class TaskQAResult(BaseModel):
     passed: bool = False
 
 
+class KnowledgeRecord(BaseModel):
+    id: str = Field(description="Logical identifier (what tools use as key).")
+    path: Optional[str] = Field(
+        default=None, description="Filesystem path if this is backed by a file."
+    )
+    task_ids: list[int] = Field(
+        description="which TaskItems this relates to (if any)", default=[]
+    )
+    summary: Optional[str] = Field(
+        default=None, description="Short human-readable description of the content."
+    )
+    source_task_ids: List[int] = Field(
+        default_factory=list,
+        description="Tasks that produced or updated this document.",
+    )
+    created_at: datetime = Field(
+        default_factory=datetime.now,
+        description="When this knowledge item was created.",
+    )
+    metadata: dict = Field(
+        default_factory=dict,
+        description="Arbitrary extra info (tags, type=research/plan/etc).",
+    )
+
+
 class TaskResult(BaseModel):
     """
     Canonical result type for any sub-task.
@@ -152,20 +177,33 @@ class CapabilityDescription(BaseModel):
 class RuntimeState(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    plan: Dict[int, TaskItem]
-    objective: str
-    agent_registry: Dict[str, Any] = Field(default_factory=dict, exclude=True)
-    completed_steps: set[int] = Field(default_factory=set)
-    accumulated_knowledge_store: Dict[str, str] = Field(
-        default_factory=dict
-    )  # store for accumulated knowledge
+    plan: Dict[int, TaskItem] = Field(
+        description="The plan that was generated to solve the objective."
+    )
+    objective: str = Field(description="The overall objective to solve for.")
+    agent_registry: Dict[str, Any] = Field(
+        description="Agents available to perform tasks.",
+        default_factory=dict,
+        exclude=True,
+    )
+    completed_steps: set[int] = Field(
+        description="Steps from the plan that have been completed.", default_factory=set
+    )
     runtime_steps: int = 0
     tokens_used: int = 0
     task_queue: List[TaskItem] = Field(default_factory=list)
-    document_store: Dict[str, str] = Field(
+    knowledge_store: Dict[str, KnowledgeRecord] = Field(
         default_factory=dict,
-        description="A simple in-memory document store for storing and retrieving documents by ID.",
+        description=(
+            "Knowledge Store: maps logical IDs to  "
+            "(files, summaries, notes, etc.)."
+            "Accumulated information is stored here for other agents to use if needed."
+        ),
     )  # simple in-memory document store
+    document_store: Dict[str, str] = Field(
+        description="Documents that are written to the file system if needed for review.",
+        default={},
+    )
 
 
 class SupervisorDecision(BaseModel):
