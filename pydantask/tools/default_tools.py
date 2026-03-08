@@ -2,14 +2,16 @@ import os
 import json
 
 import asyncio
-
+from loguru import logger
 from pydantic import BaseModel
 from pydantic_ai import Agent, RunContext
 from pathlib import Path
 
 from pydantask.models import RuntimeState
 
-DEFAULT_DIR = Path("tmp_files/")
+BASE_DIR = Path(__file__).parent.resolve()  # Directory where this script is
+DEFAULT_DIR = BASE_DIR / "tmp_files"  # TODO: make this configurable
+DEFAULT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 async def ask_user(ctx: RunContext[RuntimeState], question_for_user: str) -> str:
@@ -41,27 +43,37 @@ async def think_tool(reflection: str) -> str:
 
 
 async def write_to_file_system(
-    ctx: RunContext[RuntimeState], file_name: str, content: str
+    ctx: RunContext[RuntimeState],
+    file_name: str,
+    content: str,
+    overwrite: bool = False,
 ) -> str:
     """
-    Read from a file in the document store.
+    Write content to a file in the agent's workspace file system.
+    write_to_file_system: Tool for saving content to a file in the agent's workspace.
 
     IMPORTANT:
-      - file_name must be the logical name used when writing
+        - `file_name` must be the logical name used when writing
         (e.g. 'agent_frameworks_survey_task2.md'), *not* the full filesystem path.
-
+        - This function appends to the file by default. If you want to overwrite, set overwrite=True.
     Args:
         file_name: Logical file name key used in write_to_file_system.
+        content: The string content to write to the file.
+        overwrite: If True, overwrite the file instead of appending.
+    Returns:
+        Confirmation message indicating where the content was written and how to read it back.
     """
     # Ensure the base directory exists
-    DEFAULT_DIR.mkdir(parents=True, exist_ok=True)
-    cwd = os.getcwd()
-    path = os.path.join(cwd, DEFAULT_DIR, file_name)
-    with open(path, "a", encoding="utf-8") as f:
+    # At top:
+
+    path = DEFAULT_DIR / file_name
+    mode = "w" if overwrite else "a"
+    logger.info(f"Writing to file system at {path} with content: {content}")
+    with open(path, mode, encoding="utf-8") as f:
         f.write(content + "\n")
 
     # Store by the logical file_name key so agents can read it back with that name
-    ctx.deps.document_store[file_name] = str(path)
+    ctx.deps.document_store[file_name] = file_name
 
     return (
         f"Content written to {path}.\n"
@@ -101,15 +113,24 @@ async def read_from_file_system(
         String of file contents
     """
     try:
-        stored_path = ctx.deps.document_store.get(file_name)
-        if stored_path is None:
-            return f"File '{file_name}' not found in document store."
-        full_path = Path(stored_path)
-        with open(full_path, "r") as f:
+        # First try lookup in doc store, fallback to the file_name
+        logical_file = ctx.deps.document_store.get(file_name, file_name)
+        path = DEFAULT_DIR / logical_file
+        logger.info(
+            f"Attempting to read file with logical name '{file_name}' from document store. Found path: {path}"
+        )
+
+        full_path = Path(path)
+        with open(full_path, "r", encoding="utf-8") as f:
             return f.read()
 
     except FileNotFoundError as e:
-        return f"File does not exist. If you were expencting it to be, create the file. \n{e}"
+        existing = ", ".join(ctx.deps.document_store.keys()) or "<none>"
+        return (
+            f"File '{file_name}' not found at path '{path}'.\n"
+            f"Known document keys: {existing}\n"
+            f"If you expected this to exist, you must first write it using write_to_file_system."
+        )
 
 
 # Tools used by the supervisor or planner agents
@@ -140,7 +161,8 @@ async def list_documents(ctx: RunContext[RuntimeState]) -> str:
         return "No documents have been written yet."
 
     lines: list[str] = []
-    for name, path in ctx.deps.document_store.items():
+    for name, logical in ctx.deps.document_store.items():
+        path = DEFAULT_DIR / logical  # Convert logical name to full path for display
         lines.append(f"- name: {name}\n  path: {path}")
     return "\n".join(lines)
 
@@ -171,6 +193,60 @@ async def list_completed_tasks(ctx: RunContext[RuntimeState]) -> str:
         return "No completed tasks yet."
 
     return "\n".join(lines)
+
+
+async def save_task_context(
+    ctx: RunContext[RuntimeState],
+    task_id: int,
+    content: str,
+    kind: str = "notes",
+    overwrite: bool = False,
+) -> str:
+    """Save contextual information for a specific task to a canonical file.
+
+    FILENAME CONVENTION (IMPORTANT):
+      - The file name will always be ``task-{task_id}-{kind}.md``.
+      - Agents should NOT invent their own names when saving task context.
+
+    When to use:
+      - After completing a task, to save detailed notes or results for that task.
+      - When you want to offload information from memory but keep it accessible by task_id.
+      - To create a record of your thought process and findings for each task.
+
+    Args:
+        task_id: The ID of the task whose context you want to save.
+        content: The string content to save, such as notes, findings, or detailed results.
+        kind: A short label like "notes", "research", or "final"; it becomes part of the file name.
+        overwrite: If True, overwrite the file instead of appending. Default is False (append).
+
+    Returns:
+    Confirmation message indicating where the content was saved and how to read it back.
+    """
+    file_name = f"task-{task_id}-{kind}.md"
+    return await write_to_file_system(
+        ctx, file_name=file_name, content=content, overwrite=overwrite
+    )
+
+
+async def read_task_context(
+    ctx: RunContext[RuntimeState],
+    task_id: int,
+    kind: str = "notes",
+) -> str:
+    """Read contextual information for a specific task from its canonical file.
+
+    This uses the same convention as ``save_task_context``:
+      - file_name = ``task-{task_id}-{kind}.md``.
+
+    Args:
+        task_id: The task id whose context file you want to read.
+        kind: The same kind string that was used when saving (e.g. "notes", "research", "final").
+
+    Returns:
+        File contents as a string, or an informative error message if it does not exist.
+    """
+    file_name = f"task-{task_id}-{kind}.md"
+    return await read_from_file_system(ctx, file_name=file_name)
 
 
 async def get_task_result(ctx: RunContext[RuntimeState], task_id: int) -> str:
