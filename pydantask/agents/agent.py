@@ -69,6 +69,8 @@ from pydantask.tools.default_tools import (
     list_completed_tasks,
     list_documents,
     get_task_result,
+    save_task_context,
+    read_task_context,
 )
 
 from pydantic_ai.retries import AsyncTenacityTransport, RetryConfig, wait_retry_after
@@ -171,8 +173,12 @@ class DeepAgent:
             agent_spec=ProducerSpec(),
             name="_default_Producer_Agent",
             tools=[
+                # Core FS and context tools
                 write_to_file_system,
                 read_from_file_system,
+                save_task_context,
+                read_task_context,
+                # Reasoning / time / plan-inspection tools
                 think_tool,
                 get_current_datetime,
                 list_documents,
@@ -199,8 +205,11 @@ class DeepAgent:
             tools=[
                 tavily_search_tool(api_key),
                 think_tool,
+                # File-system and context tools; prefer save_task_context for reports
                 write_to_file_system,
                 read_from_file_system,
+                save_task_context,
+                read_task_context,
                 get_current_datetime,
                 list_documents,
             ],
@@ -261,8 +270,16 @@ class DeepAgent:
             deps_type=RuntimeState,
             output_type=TaskResult,
             tools=[
+                # FS & context tools for canonical final reports
                 write_to_file_system,
                 read_from_file_system,
+                save_task_context,
+                read_task_context,
+                # Plan / history inspection
+                list_documents,
+                list_completed_tasks,
+                get_task_result,
+                # Reflection
                 think_tool,
             ],
         )
