@@ -49,6 +49,7 @@ from pydantask.prompts.prompts import (
     RESEARCH_AGENT_SYS_PROMPT,
     SUPERVISOR_SYS_PROMPT,
     SUPERVISOR_INPUT_PROMPT,
+    WORKER_AGENT_SYS_PROMPT,
 )
 from pydantask.models import (
     RuntimeState,
@@ -286,15 +287,43 @@ class DeepAgent:
 
         producer = CapabilityDescription(
             name="producer_agent",
-            description="Generate answers based on information from various sources and sub agents.",
+            description="Produces output based on information from various sources and sub agents.",
             tool_func=producer_agent,
         )
 
-        # A "Thin" Agent that just wraps a tool
         researcher = CapabilityDescription(
             name="research_agent",
             description="Tool to research information. This could include searching the web or querying a data source.",
             tool_func=self._researcher_agent,
+        )
+
+        general_worker_agent = Agent(
+            model=self._retry_model,
+            name="_default_General_Worker_Agent",
+            system_prompt=WORKER_AGENT_SYS_PROMPT,
+            deps_type=RuntimeState,
+            output_type=TaskResult,
+            tools=[
+                write_to_file_system,
+                read_from_file_system,
+                save_task_context,
+                read_task_context,
+                list_documents,
+                list_completed_tasks,
+                get_task_result,
+                think_tool,
+                get_current_datetime,
+            ],
+        )
+
+        worker = CapabilityDescription(
+            name="worker_agent",
+            description=(
+                "General-purpose worker for analysis, summarization, document editing, "
+                "code or log interpretation, and other non-web tasks that operate on "
+                "existing context and files."
+            ),
+            tool_func=general_worker_agent,
         )
 
         # file_system_agent = Agent(
@@ -394,11 +423,13 @@ class DeepAgent:
                 getattr(result, "summary", str(result)) if result else "<no result>"
             )
             paths = getattr(result, "detailed_report_paths", []) if result else []
+            sources = getattr(result, "sources", []) if result else []
             lines.append(
                 f"- Task {t.task_id} ({t.capability})\n"
                 f"  objective: {t.sub_task_objective}\n"
                 f"  summary: {summary}\n"
                 f"  report_paths: {paths}\n"
+                f"  sources: {sources}"
             )
         completed_display = "\n".join(lines) or "<no completed tasks>"
 
@@ -477,6 +508,12 @@ class DeepAgent:
 
         AVAILABLE CAPABILITIES:
         {capabilities_display}
+        
+        Example of what capabilities could be used for:
+            -   "research_agent" → needs web/external info.
+            -   "worker_agent" → general reasoning/transformation on existing info.
+            -   "producer_agent" → only final answer step.
+        
         
         Current Datetime (MUST be used verbatim if time is needed as context): {now}
         CURRENT_YEAR (authoritative numeric year): {current_year}
@@ -609,6 +646,18 @@ class DeepAgent:
         # 2. Prepare the concurrent coroutines
         ready_tasks = []
         for step in ready_steps:
+            # get supervisor feedback if any for this task
+            if (
+                tasks.feedback_to_subagents
+                and step.task_id in tasks.feedback_to_subagents
+            ):
+                if step.parameters is None:
+                    # create if None
+                    step.parameters = {}
+                step.parameters["supervisor_feedback"] = (
+                    tasks.feedback_to_subagents.get(step.task_id)
+                )
+
             logger.info(
                 f"- {step.task_id}: {step.sub_task_objective} using {step.capability}"
             )
@@ -616,7 +665,8 @@ class DeepAgent:
             logger.info(f"  Status: {step.status}")
             logger.info(f"  Result: {step.result}")
             logger.info("\n")
-            # grab the tool that the plan or supervisor decides
+
+            # grab the tool that the plan or supervisor  decides
             worker = self.agent_registry.get(step.capability)
             if worker:
                 step.status = TaskStatus.RUNNING
@@ -641,18 +691,62 @@ class DeepAgent:
     ) -> TaskItem:
         """Helper to run an agent and capture its output into the step object."""
 
-        # try:
-        result = await sub_agent.run(
-            f"""
-            You are executing TaskItem:
+        _feedback_for_agent = None
+        if isinstance(step.parameters, dict):
+            _feedback_for_agent = step.parameters.get("supervisor_feedback")
 
-            {step.model_dump_json(indent=2)}
+        if step.capability == "producer_agent":
+            # Build a synthesis-oriented prompt that summarizes all completed tasks,
+            # including their summaries, report_paths, and sources.
+            producer_context = self._build_producer_prompt(runtime_state)
 
-            Overall objective:
-            {self.prompt}
+            user_prompt = f"""
+                        {producer_context}
+
+                        You are now executing the FINAL synthesis TaskItem:
+
+                        {step.model_dump_json(indent=2)}
+                        """
+
+            if _feedback_for_agent:
+
+                user_prompt += f"""
+
+                    Supervisor feedback / additional insturctions for this execution:
+                    
+                    {_feedback_for_agent}
+                    """
+            user_prompt += """
+                    Your job:
+                    - Use ONLY the completed sub-task results and any files they point to.
+                    - Combine their findings into a single, coherent final answer.
+                    - Follow your system prompt instructions for citations and final TaskResult structure.
+                    - Do NOT request new research or create new sub-tasks.
+                    """
+        else:
+            user_prompt = f"""
+                You are executing TaskItem:
+
+                {step.model_dump_json(indent=2)}
+
+                Overall objective:
+                {self.prompt}
+
+                """
+            if _feedback_for_agent:
+                user_prompt += f"""
+
+                Supervisor feedback for this execution:
+                {_feedback_for_agent}
+                """
+
+            user_prompt += """
 
             ONLY act on this sub-task. Do not re-plan or change the task.
-            """,
+            """
+        # try:
+        result = await sub_agent.run(
+            user_prompt,
             deps=runtime_state,
         )
         step.result = result.output

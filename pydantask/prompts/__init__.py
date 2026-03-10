@@ -5,6 +5,7 @@ from pydantask.prompts.prompts import (
     SUPERVISOR_SYS_PROMPT,
     SUPERVISOR_INPUT_PROMPT,
     PRODUCER_SYS_PROMPT,
+    WORKER_AGENT_SYS_PROMPT,
 )
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "SUPERVISOR_SYS_PROMPT",
     "SUPERVISOR_INPUT_PROMPT",
     "PRODUCER_SYS_PROMPT",
+    "WORKER_AGENT_SYS_PROMPT",
 ]

@@ -30,7 +30,7 @@ class KnowledgeRecord(BaseModel):
         default=None, description="Filesystem path if this is backed by a file."
     )
     task_ids: list[int] = Field(
-        description="which TaskItems this relates to (if any)", default=[]
+        description="which TaskItems this relates to (if any)", default_factory=list
     )
     summary: Optional[str] = Field(
         default=None, description="Short human-readable description of the content."
@@ -73,7 +73,11 @@ class TaskResult(BaseModel):
         ),
     )
 
-    detailed_report_paths: list[str] = Field(
+    notes: List[str] = Field(
+        default_factory=list,
+        description="All notes or scratch file paths that were used.",
+    )
+    detailed_report_paths: List[str] = Field(
         default_factory=list,
         description=(
             "List of file paths to any detailed reports or long-form outputs "
@@ -81,13 +85,13 @@ class TaskResult(BaseModel):
         ),
     )
 
-    sources: list[str] = Field(
-        default_factory=list,
-        description=(
-            "List of URLs, document IDs, tool references, or other sources "
-            "used to produce this result."
-        ),
-    )
+    # sources: list[str] = Field(
+    #     default_factory=list,
+    #     description=(
+    #         "List of URLs, document IDs, tool references, or other sources "
+    #         "used to produce this result."
+    #     ),
+    # )
 
     error_msg: Optional[str] = Field(
         default=None,
@@ -127,16 +131,19 @@ class TaskItem(BaseModel):
     )
     task_feedback: Optional[TaskQAResult] = None  # Store the Eval "critique" here
     error_msg: Optional[str] = None  # Store any error messages here
-    iteration_history: list = (
-        []
+    iteration_history: List = Field(
+        default_factory=list,
+        description="Store any answer history if multiple attempts are made.",
     )  # Store any answer history if multiple attempts are made
     time_scope: Optional[str]  # "2026", "2025-2026", "last 7 days", etc.
     parameters: dict = Field(
-        default=dict
+        default_factory=dict
     )  # you can stash structured temporal params here
     attempt_count: int = 0
     max_attempts: int = 3
-    metadata: dict = Field(default=dict)
+    metadata: dict = Field(
+        default_factory=dict, description="Optional metadata for this task."
+    )
 
     @property
     def latest_output(self):
@@ -202,22 +209,23 @@ class RuntimeState(BaseModel):
     )  # simple in-memory document store
     document_store: Dict[str, str] = Field(
         description="Documents that are written to the file system if needed for review.",
-        default={},
+        default_factory=dict,
     )
 
 
 class SupervisorDecision(BaseModel):
     # status: Literal["DELEGATE", "REPLAN", "COMPLETE", "ERROR"]
     reasoning: str = Field(
-        description="Reasoning for why these tasks need to be completed next."
+        description="Reasoning for why these tasks need to be completed next or the reasoning for when we are done executing."
     )
     tasks_to_execute: List[int] = Field(description="List of task id's to execute.")
-    feedback_to_subagent: Optional[str] = Field(
+    feedback_to_subagents: Optional[Dict[int, str]] = Field(
         default=None,
-        description="Any feedback to the sub-agent if a task has become blocked, errored, or failed critic review.",
+        description="Any feedback to the sub-agents if additional context or instructions needs to be given to the sub agent for a particular task. Dict is key: task_id, value: feedback for subagent for the given task.",
     )
     all_tasks_completed: bool = Field(
-        default=False, description="Indicates if all tasks are completed or not."
+        default=False,
+        description="Set this to true if all tasks in the plan have been completed OR there are too many errors that the plan cannot be completed.",
     )
 
 
