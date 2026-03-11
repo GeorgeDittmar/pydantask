@@ -50,10 +50,10 @@ class KnowledgeRecord(BaseModel):
 
 
 class SourceRef(BaseModel):
-    id: str = Field(
+    id: int = Field(
         description=(
-            "Short identifier used in inline citations, e.g. 'S1', 'S2'. "
-            "The agent should use these IDs inside the text like [S1], [S2]."
+            "Short identifier used in inline citations, e.g. '1', '2'. "
+            "The agent should use these IDs inside the text like [1], [2]."
         )
     )
     kind: Literal["web", "document", "code", "data", "other"] = Field(
@@ -113,19 +113,21 @@ class TaskResult(BaseModel):
         default_factory=list,
         description="All notes or scratch file paths that were used.",
     )
-    detailed_report_paths: List[str] = Field(
+
+    output_paths: List[str] = Field(
         default_factory=list,
         description=(
-            "List of file paths to any detailed reports or long-form outputs "
+            "List of file paths to any output that was "
             "generated during this task (e.g. written via write_to_file_system)."
         ),
     )
 
-    sources: list[SourceRef] = Field(
+    sources: List[SourceRef] = Field(
         default_factory=list,
         description=(
-            "List of URLs, document IDs, tool references, or other sources "
-            "used to produce this result."
+            "Structured list of sources used to produce this result. "
+            "Inline citations in summaries should reference SourceRef.id values, "
+            "e.g. [1], [2]."
         ),
     )
 

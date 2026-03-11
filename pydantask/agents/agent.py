@@ -422,15 +422,23 @@ class DeepAgent:
             summary = (
                 getattr(result, "summary", str(result)) if result else "<no result>"
             )
-            paths = getattr(result, "detailed_report_paths", []) if result else []
+            paths = getattr(result, "output_path_paths", []) if result else []
             sources = getattr(result, "sources", []) if result else []
-            lines.append(
-                f"- Task {t.task_id} ({t.capability})\n"
-                f"  objective: {t.sub_task_objective}\n"
-                f"  summary: {summary}\n"
-                f"  report_paths: {paths}\n"
-                f"  sources: {sources}"
+
+        src_lines = []
+        for s in sources or []:
+            src_lines.append(
+                f"    - [{s.id}] title={getattr(s, 'title', None)} "
+                f"url={getattr(s, 'url', None)} path={getattr(s, 'path', None)}"
             )
+        src_block = "\n".join(src_lines) or "    - <no sources>"
+        lines.append(
+            f"- Task {t.task_id} ({t.capability})\n"
+            f"  objective: {t.sub_task_objective}\n"
+            f"  summary: {summary}\n"
+            f"  report_paths: {paths}\n"
+            f"  sources: {src_block}"
+        )
         completed_display = "\n".join(lines) or "<no completed tasks>"
 
         return f"""
