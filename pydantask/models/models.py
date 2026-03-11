@@ -49,6 +49,42 @@ class KnowledgeRecord(BaseModel):
     )
 
 
+class SourceRef(BaseModel):
+    id: str = Field(
+        description=(
+            "Short identifier used in inline citations, e.g. 'S1', 'S2'. "
+            "The agent should use these IDs inside the text like [S1], [S2]."
+        )
+    )
+    kind: Literal["web", "document", "code", "data", "other"] = Field(
+        description="Type of source (web page, file, code snippet, etc.)."
+    )
+    title: Optional[str] = Field(
+        default=None,
+        description="Human-readable title of the source, if available.",
+    )
+    url: Optional[str] = Field(
+        default=None,
+        description="URL if this is an online source.",
+    )
+    path: Optional[str] = Field(
+        default=None,
+        description="Filesystem path / doc ID if this is a local artifact.",
+    )
+    snippet: Optional[str] = Field(
+        default=None,
+        description="Short excerpt of the key evidence used from this source. No more than 2-3 sentences",
+    )
+    accessed_at: Optional[datetime] = Field(
+        default=None,
+        description="When this source was accessed (for web/date-sensitive content).",
+    )
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Any extra structured info (author, publisher, etc.).",
+    )
+
+
 class TaskResult(BaseModel):
     """
     Canonical result type for any sub-task.
@@ -85,13 +121,13 @@ class TaskResult(BaseModel):
         ),
     )
 
-    # sources: list[str] = Field(
-    #     default_factory=list,
-    #     description=(
-    #         "List of URLs, document IDs, tool references, or other sources "
-    #         "used to produce this result."
-    #     ),
-    # )
+    sources: list[SourceRef] = Field(
+        default_factory=list,
+        description=(
+            "List of URLs, document IDs, tool references, or other sources "
+            "used to produce this result."
+        ),
+    )
 
     error_msg: Optional[str] = Field(
         default=None,

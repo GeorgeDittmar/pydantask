@@ -528,7 +528,7 @@ If you found no substantial information, do not write a file. Only save a file i
    - In `summary`, provide:
        - A concise explanation of the most important findings.
        - Enough detail that a critic can understand what you discovered.
-       - Citations that map to entries in the `sources` field to verify the summary.
+       - Inline citation markers in the form [1], [2], that correspond to entries in the `sources` field.
    - To write detailed reports for this task:
        - Call `save_task_context` with this task's `task_id`, for example:
          `save_task_context(task_id=<this task_id>, content=<your detailed report>, kind="research", overwrite=True or False)`.
@@ -587,8 +587,6 @@ If you found no substantial information, do not write a file. Only save a file i
       or any information that is important for the overall objective.
     - Do NOT invent filenames. Always rely on the canonical `task-<task_id>-<kind>.md` convention implied by `save_task_context`.
     - Do NOT write empty or trivial files just to have something in the file system.
-
-Again, think critically step by step to verify if you have enough information to solve your research task; if not, continue research.
 """
 
 # RESEARCH_AGENT_SYS_PROMPT = """
