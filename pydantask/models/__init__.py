@@ -8,6 +8,9 @@ from pydantask.models.models import (
     SupervisorDecision,
     Plan,
     KnowledgeRecord,
+    SourceRef,
+    SubAgentInstruction,
+    TaskSpec,
 )
 
 __all__ = [
@@ -20,4 +23,7 @@ __all__ = [
     "SupervisorDecision",
     "KnowledgeRecord",
     "Plan",
+    "SourceRef",
+    "SubAgentInstruction",
+    "TaskSpec",
 ]
