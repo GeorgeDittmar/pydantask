@@ -14,7 +14,7 @@ class TaskStatus(Enum):
     COMPLETED = "completed"
     ERRORED = "errored"  # Execution error occurred
     FAILED = "failed"  # Evaluator rejected it
-    NEEDS_REVIEW = "review"  # Needs Evaluator review
+    NEEDS_REVIEW = "needs_review"  # Needs Evaluator review
     RERUN = "rerun"
 
 
@@ -22,6 +22,67 @@ class TaskQAResult(BaseModel):
     task_id: int
     reasoning: str
     passed: bool = False
+
+
+class KnowledgeRecord(BaseModel):
+    id: str = Field(description="Logical identifier (what tools use as key).")
+    path: Optional[str] = Field(
+        default=None, description="Filesystem path if this is backed by a file."
+    )
+    task_ids: list[int] = Field(
+        description="which TaskItems this relates to (if any)", default_factory=list
+    )
+    summary: Optional[str] = Field(
+        default=None, description="Short human-readable description of the content."
+    )
+    source_task_ids: List[int] = Field(
+        default_factory=list,
+        description="Tasks that produced or updated this document.",
+    )
+    created_at: datetime = Field(
+        default_factory=datetime.now,
+        description="When this knowledge item was created.",
+    )
+    metadata: dict = Field(
+        default_factory=dict,
+        description="Arbitrary extra info (tags, type=research/plan/etc).",
+    )
+
+
+class SourceRef(BaseModel):
+    id: int = Field(
+        description=(
+            "Short identifier used in inline citations, e.g. '1', '2'. "
+            "The agent should use these IDs inside the text like [1], [2]."
+        )
+    )
+    kind: Literal["web", "document", "code", "data", "other"] = Field(
+        description="Type of source (web page, file, code snippet, etc.)."
+    )
+    title: Optional[str] = Field(
+        default=None,
+        description="Human-readable title of the source, if available.",
+    )
+    url: Optional[str] = Field(
+        default=None,
+        description="URL if this is an online source.",
+    )
+    path: Optional[str] = Field(
+        default=None,
+        description="Filesystem path / doc ID if this is a local artifact.",
+    )
+    snippet: Optional[str] = Field(
+        default=None,
+        description="Short excerpt of the key evidence used from this source. No more than 2-3 sentences",
+    )
+    accessed_at: Optional[datetime] = Field(
+        default=None,
+        description="When this source was accessed (for web/date-sensitive content).",
+    )
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Any extra structured info (author, publisher, etc.).",
+    )
 
 
 class TaskResult(BaseModel):
@@ -48,19 +109,25 @@ class TaskResult(BaseModel):
         ),
     )
 
-    detailed_report_paths: list[str] = Field(
+    notes: List[str] = Field(
+        default_factory=list,
+        description="All notes or scratch file paths that were used to help complete this task.",
+    )
+
+    output_paths: List[str] = Field(
         default_factory=list,
         description=(
-            "List of file paths to any detailed reports or long-form outputs "
+            "List of file paths to any output that was "
             "generated during this task (e.g. written via write_to_file_system)."
         ),
     )
 
-    sources: list[str] = Field(
+    sources: List[SourceRef] = Field(
         default_factory=list,
         description=(
-            "List of URLs, document IDs, tool references, or other sources "
-            "used to produce this result."
+            "Structured list of sources used to produce this result. "
+            "Inline citations in summaries should reference SourceRef.id values, "
+            "e.g. [1], [2]."
         ),
     )
 
@@ -102,16 +169,19 @@ class TaskItem(BaseModel):
     )
     task_feedback: Optional[TaskQAResult] = None  # Store the Eval "critique" here
     error_msg: Optional[str] = None  # Store any error messages here
-    iteration_history: list = (
-        []
+    iteration_history: List = Field(
+        default_factory=list,
+        description="Store any answer history if multiple attempts are made.",
     )  # Store any answer history if multiple attempts are made
     time_scope: Optional[str]  # "2026", "2025-2026", "last 7 days", etc.
     parameters: dict = Field(
-        default=dict
+        default_factory=dict
     )  # you can stash structured temporal params here
     attempt_count: int = 0
     max_attempts: int = 3
-    metadata: dict = Field(default=dict)
+    metadata: dict = Field(
+        default_factory=dict, description="Optional metadata for this task."
+    )
 
     @property
     def latest_output(self):
@@ -152,34 +222,48 @@ class CapabilityDescription(BaseModel):
 class RuntimeState(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    plan: Dict[int, TaskItem]
-    objective: str
-    agent_registry: Dict[str, Any] = Field(default_factory=dict, exclude=True)
-    completed_steps: set[int] = Field(default_factory=set)
-    accumulated_knowledge_store: Dict[str, str] = Field(
-        default_factory=dict
-    )  # store for accumulated knowledge
+    plan: Dict[int, TaskItem] = Field(
+        description="The plan that was generated to solve the objective."
+    )
+    objective: str = Field(description="The overall objective to solve for.")
+    agent_registry: Dict[str, Any] = Field(
+        description="Agents available to perform tasks.",
+        default_factory=dict,
+        exclude=True,
+    )
+    completed_steps: set[int] = Field(
+        description="Steps from the plan that have been completed.", default_factory=set
+    )
     runtime_steps: int = 0
     tokens_used: int = 0
     task_queue: List[TaskItem] = Field(default_factory=list)
-    document_store: Dict[str, str] = Field(
+    knowledge_store: Dict[str, KnowledgeRecord] = Field(
         default_factory=dict,
-        description="A simple in-memory document store for storing and retrieving documents by ID.",
+        description=(
+            "Knowledge Store: maps logical IDs to  "
+            "(files, summaries, notes, etc.)."
+            "Accumulated information is stored here for other agents to use if needed."
+        ),
     )  # simple in-memory document store
+    document_store: Dict[str, str] = Field(
+        description="Documents that are written to the file system if needed for review.",
+        default_factory=dict,
+    )
 
 
 class SupervisorDecision(BaseModel):
     # status: Literal["DELEGATE", "REPLAN", "COMPLETE", "ERROR"]
     reasoning: str = Field(
-        description="Reasoning for why these tasks need to be completed next."
+        description="Reasoning for why these tasks need to be completed next or the reasoning for when we are done executing."
     )
     tasks_to_execute: List[int] = Field(description="List of task id's to execute.")
-    feedback_to_subagent: Optional[str] = Field(
+    feedback_to_subagents: Optional[Dict[int, str]] = Field(
         default=None,
-        description="Any feedback to the sub-agent if a task has become blocked, errored, or failed critic review.",
+        description="Any feedback to the sub-agents if additional context or instructions needs to be given to the sub agent for a particular task. Dict is key: task_id, value: feedback for subagent for the given task.",
     )
     all_tasks_completed: bool = Field(
-        default=False, description="Indicates if all tasks are completed or not."
+        default=False,
+        description="Set this to true if all tasks in the plan have been completed OR there are too many errors that the plan cannot be completed.",
     )
 
 

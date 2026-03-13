@@ -3,7 +3,6 @@ from email import errors
 from json import tool
 import json
 from multiprocessing.connection import wait
-import uuid
 import os
 
 from httpx import AsyncClient, HTTPStatusError
@@ -47,6 +46,9 @@ from pydantask.prompts.prompts import (
     CRITIC_SYS_PROMPT,
     PRODUCER_SYS_PROMPT,
     RESEARCH_AGENT_SYS_PROMPT,
+    SUPERVISOR_SYS_PROMPT,
+    SUPERVISOR_INPUT_PROMPT,
+    WORKER_AGENT_SYS_PROMPT,
 )
 from pydantask.models import (
     RuntimeState,
@@ -64,6 +66,11 @@ from pydantask.tools.default_tools import (
     read_from_file_system,
     think_tool,
     get_current_datetime,
+    list_completed_tasks,
+    list_documents,
+    get_task_result,
+    save_task_context,
+    read_task_context,
 )
 
 from pydantic_ai.retries import AsyncTenacityTransport, RetryConfig, wait_retry_after
@@ -151,7 +158,12 @@ class DeepAgent:
         self._supervisor_agent = supervisor_agent or self._create_agent_from_spec(
             agent_spec=SupervisorSpec(),
             name="_default_Supervisor_Agent",
-            tools=[self.update_task_status, get_current_datetime, think_tool],
+            tools=[
+                self.update_task_status,
+                get_current_datetime,
+                think_tool,
+                self.view_qa_report,
+            ],
             output_type=SupervisorDecision,
             deps_type=RuntimeState,
             model=self._retry_model,
@@ -161,10 +173,17 @@ class DeepAgent:
             agent_spec=ProducerSpec(),
             name="_default_Producer_Agent",
             tools=[
+                # Core FS and context tools
                 write_to_file_system,
                 read_from_file_system,
+                save_task_context,
+                read_task_context,
+                # Reasoning / time / plan-inspection tools
                 think_tool,
                 get_current_datetime,
+                list_documents,
+                list_completed_tasks,
+                get_task_result,
             ],
             output_type=output_type,
             deps_type=RuntimeState,
@@ -186,9 +205,13 @@ class DeepAgent:
             tools=[
                 tavily_search_tool(api_key),
                 think_tool,
+                # File-system and context tools; prefer save_task_context for reports
                 write_to_file_system,
                 read_from_file_system,
+                save_task_context,
+                read_task_context,
                 get_current_datetime,
+                list_documents,
             ],
             deps_type=RuntimeState,
             output_type=TaskResult,
@@ -247,42 +270,78 @@ class DeepAgent:
             deps_type=RuntimeState,
             output_type=TaskResult,
             tools=[
+                # FS & context tools for canonical final reports
                 write_to_file_system,
                 read_from_file_system,
+                save_task_context,
+                read_task_context,
+                # Plan / history inspection
+                list_documents,
+                list_completed_tasks,
+                get_task_result,
+                # Reflection
                 think_tool,
             ],
         )
 
         producer = CapabilityDescription(
             name="producer_agent",
-            description="Generate answers based on information from various sources and sub agents.",
+            description="Produces output based on information from various sources and sub agents.",
             tool_func=producer_agent,
         )
 
-        # A "Thin" Agent that just wraps a tool
         researcher = CapabilityDescription(
             name="research_agent",
             description="Tool to research information. This could include searching the web or querying a data source.",
             tool_func=self._researcher_agent,
         )
 
-        file_system_agent = Agent(
+        general_worker_agent = Agent(
             model=self._retry_model,
-            name="_default_File_System_Agent",
-            system_prompt="You have access to a file system to use for tasks that need to be completed. \
-            Use the file system to store long term information. \
-            You may also write output for the user to the file system. \
-            You also have an addtional think tool that you can use to reflect on your work and plan next steps.",
-            tools=[write_to_file_system, read_from_file_system, think_tool],
+            name="_default_General_Worker_Agent",
+            system_prompt=WORKER_AGENT_SYS_PROMPT,
             deps_type=RuntimeState,
-            output_type=TaskItem,
+            output_type=TaskResult,
+            tools=[
+                write_to_file_system,
+                read_from_file_system,
+                save_task_context,
+                read_task_context,
+                list_documents,
+                list_completed_tasks,
+                get_task_result,
+                think_tool,
+                get_current_datetime,
+            ],
         )
 
-        file_system = CapabilityDescription(
-            name="file_system_agent",
-            description="Agent to interact with the file system of host machine. Should be used to store information that needs to persist for further use or context.",
-            tool_func=file_system_agent,
+        worker = CapabilityDescription(
+            name="worker_agent",
+            description=(
+                "General-purpose worker for analysis, summarization, document editing, "
+                "code or log interpretation, and other non-web tasks that operate on "
+                "existing context and files."
+            ),
+            tool_func=general_worker_agent,
         )
+
+        # file_system_agent = Agent(
+        #     model=self._retry_model,
+        #     name="_default_File_System_Agent",
+        #     system_prompt="You have access to a file system to use for tasks that need to be completed. \
+        #     Use the file system to store long term information. \
+        #     You may also write output for the user to the file system. \
+        #     You also have an addtional think tool that you can use to reflect on your work and plan next steps.",
+        #     tools=[write_to_file_system, read_from_file_system, think_tool],
+        #     deps_type=RuntimeState,
+        #     output_type=TaskItem,
+        # )
+
+        # file_system = CapabilityDescription(
+        #     name="file_system_agent",
+        #     description="Agent to interact with the file system of host machine. Should be used to store information that needs to persist for further use or context.",
+        #     tool_func=file_system_agent,
+        # )
 
         # ask_user_agent = Agent(
         #     self.model,
@@ -297,7 +356,7 @@ class DeepAgent:
         #     tool_func=ask_user_agent,
         # )
 
-        _sub_agents_list = [producer, researcher, file_system]
+        _sub_agents_list = [producer, researcher]
 
         # if additional sub agents been supplied then add those to the registry
         if sub_agents:
@@ -354,7 +413,7 @@ class DeepAgent:
             lines.append(f"- {name}: {description}")
         return "\n".join(lines)
 
-    def _build_producer_prompt(state: RuntimeState) -> str:
+    def _build_producer_prompt(self, state: RuntimeState) -> str:
         completed = [t for t in state.plan.values() if t.status == TaskStatus.COMPLETED]
         lines = []
         for t in sorted(completed, key=lambda x: x.task_id):
@@ -362,13 +421,23 @@ class DeepAgent:
             summary = (
                 getattr(result, "summary", str(result)) if result else "<no result>"
             )
-            paths = getattr(result, "detailed_report_paths", []) if result else []
-            lines.append(
-                f"- Task {t.task_id} ({t.capability})\n"
-                f"  objective: {t.sub_task_objective}\n"
-                f"  summary: {summary}\n"
-                f"  report_paths: {paths}\n"
+            paths = getattr(result, "output_path_paths", []) if result else []
+            sources = getattr(result, "sources", []) if result else []
+
+        src_lines = []
+        for s in sources or []:
+            src_lines.append(
+                f"    - [{s.id}] title={getattr(s, 'title', None)} "
+                f"url={getattr(s, 'url', None)} path={getattr(s, 'path', None)}"
             )
+        src_block = "\n".join(src_lines) or "    - <no sources>"
+        lines.append(
+            f"- Task {t.task_id} ({t.capability})\n"
+            f"  objective: {t.sub_task_objective}\n"
+            f"  summary: {summary}\n"
+            f"  report_paths: {paths}\n"
+            f"  sources: {src_block}"
+        )
         completed_display = "\n".join(lines) or "<no completed tasks>"
 
         return f"""
@@ -394,7 +463,65 @@ class DeepAgent:
             )
         return "\n".join(lines)
 
-    # def _format_
+    def _format_supervisor_input_prompt(self, ctx: RuntimeState) -> str:
+        """Function to format input prompt to the supervisor agent."""
+        # Pre-format the plan to ensure the LLM sees a clean "Status Board"
+        plan_display_lines = []
+        for t in ctx.plan.values():
+            line = (
+                f"- Task ID: {t.task_id} | Status: [{t.status}] "
+                f"| Objective: {t.sub_task_objective} "
+                f"| Dependencies: {t.sub_task_dependencies}"
+            )
+
+            fb = getattr(t, "task_feedback", None)
+            if fb is not None:
+                # Adjust these fields to match TaskQAResult
+                # verdict = getattr(fb, "passed", None)
+                verdict = getattr(fb, "passed", None)
+                summary = getattr(fb, "reasoning", None)
+
+                line += "\n  QA: "
+                if verdict is not None:
+                    line += f"verdict={verdict} "
+                if summary:
+                    line += f"\n    summary: {summary}"
+
+            plan_display_lines.append(line)
+
+        plan_display = "\n".join(plan_display_lines)
+        # Simplify the registry so the Supervisor sees "Tools" not "Agent Objects"
+        agent_display = "\n".join(
+            [
+                f"- {uuid}: {info.description}"
+                for uuid, info in ctx.agent_registry.items()
+            ]
+        )
+        return SUPERVISOR_INPUT_PROMPT.format(
+            objective=ctx.objective,
+            plan_display=plan_display,
+            agent_display=agent_display,
+        )
+
+    def _format_critic_input_prompt(self, task_result: TaskResult, ctx: RuntimeState):
+        _prompt = f"""
+            
+            Evaluate if the following worker output completed the specified task task.
+            
+            Overall Objective:
+            {ctx.objective}
+
+            Sub Task Definition (TaskItem):
+            {ctx.plan[task_result.task_id].model_dump_json(indent=2)}
+
+            Worker Output (TaskResult):
+            {task_result.result.model_dump_json(indent=2)}
+            
+            Any documents to review:
+            {ctx.document_store}
+            
+            """
+        return _prompt
 
     @observe
     async def run(self):
@@ -408,6 +535,12 @@ class DeepAgent:
 
         AVAILABLE CAPABILITIES:
         {capabilities_display}
+        
+        Example of what capabilities could be used for:
+            -   "research_agent" → needs web/external info.
+            -   "worker_agent" → general reasoning/transformation on existing info.
+            -   "producer_agent" → only final answer step.
+        
         
         Current Datetime (MUST be used verbatim if time is needed as context): {now}
         CURRENT_YEAR (authoritative numeric year): {current_year}
@@ -436,7 +569,7 @@ class DeepAgent:
             logger.info(f"\n--- DeepAgent Cycle {step_count} ---")
 
             supervisor_response = await self._supervisor_agent.run(
-                "Decide which tasks to execute next and update statuses as needed.",
+                self._format_supervisor_input_prompt(runtime_state),
                 deps=runtime_state,
             )
             supervisor_response = supervisor_response.output
@@ -456,6 +589,7 @@ class DeepAgent:
 
             if len(task_results) == 0:
                 # handle case if task_results are empty
+                logger.info("NO TASK RESULTS")
                 stop_execution = True
                 continue
 
@@ -466,52 +600,51 @@ class DeepAgent:
             # go through responses and evaluate if they have completed the task
             for task_result in task_results or []:
                 logger.info(f"--- Evaluating Task Result for {task_result.task_id} ---")
-                qa_prompt = f"""
-                
-                Evaluate if the following worker output completed its task.
-                
-                Overall Objective:
-                {runtime_state.objective}
 
-                Sub Task Definition (TaskItem):
-                {runtime_state.plan[task_result.task_id].model_dump_json(indent=2)}
-
-                Worker Output (TaskResult):
-                {task_result.result.model_dump_json(indent=2)}
-                
-                Any documents to review:
-                {runtime_state.document_store}
-                """
                 qa_response = await self._critic_agent.run(
-                    qa_prompt, deps=runtime_state
+                    self._format_critic_input_prompt(task_result, runtime_state),
+                    deps=runtime_state,
                 )
                 qa_response = qa_response.output
 
                 logger.info(f"--- QA Response ---")
                 logger.info(qa_response.model_dump_json())
+
+                task = runtime_state.plan[task_result.task_id]
+
+                # deterministic transition based on critic
+                self.handle_critic_result(task, qa_response)
+
                 # if qa_response.do
                 # add the qa report to the task result for the supervisor to review
-                runtime_state.plan[task_result.task_id].task_feedback = qa_response
+                # runtime_state.plan[task_result.task_id].task_feedback = qa_response
 
             runtime_state.runtime_steps += 1
 
             step_count += 1
         return runtime_state
 
-    async def update_knowledge(
-        self, capabiliity, answer, ctx: RunContext[RuntimeState]
-    ):
-        """Updates the knowledge runtime state with any new knowledge that is needed to answer a goal or task"""
-        pass
+    def _dependencies_satisfied(self, step: TaskItem, ctx: RuntimeState) -> bool:
+        # Consider a dependency satisfied only if it's COMPLETED (or whatever set you like)
+        required_statuses = {TaskStatus.COMPLETED}
+        for dep_id in step.sub_task_dependencies or []:
+            dep_task = ctx.plan.get(dep_id)
+            if dep_task is None:
+                # Be conservative: if the dependency is missing, treat it as unsatisfied
+                return False
+            if dep_task.status not in required_statuses:
+                return False
+        return True
 
     async def _execute_ready_tasks(
         self, tasks: SupervisorDecision, ctx: RuntimeState
     ) -> list[TaskItem]:
         """Finds all tasks that are ready to run and executes them in parallel."""
+        candidate_steps = [ctx.plan[id] for id in tasks.tasks_to_execute]
 
-        # 1. Identify "Ready" tasks
-        ready_steps = [ctx.plan[id] for id in tasks.tasks_to_execute]
-
+        ready_steps = [
+            step for step in candidate_steps if self._dependencies_satisfied(step, ctx)
+        ]
         # if no ready steps return empty list
         if len(ready_steps) == 0:
             return []
@@ -525,6 +658,18 @@ class DeepAgent:
         # 2. Prepare the concurrent coroutines
         ready_tasks = []
         for step in ready_steps:
+            # get supervisor feedback if any for this task
+            if (
+                tasks.feedback_to_subagents
+                and step.task_id in tasks.feedback_to_subagents
+            ):
+                if step.parameters is None:
+                    # create if None
+                    step.parameters = {}
+                step.parameters["supervisor_feedback"] = (
+                    tasks.feedback_to_subagents.get(step.task_id)
+                )
+
             logger.info(
                 f"- {step.task_id}: {step.sub_task_objective} using {step.capability}"
             )
@@ -532,7 +677,8 @@ class DeepAgent:
             logger.info(f"  Status: {step.status}")
             logger.info(f"  Result: {step.result}")
             logger.info("\n")
-            # grab the tool that the plan or supervisor decides
+
+            # grab the tool that the plan or supervisor  decides
             worker = self.agent_registry.get(step.capability)
             if worker:
                 step.status = TaskStatus.RUNNING
@@ -557,18 +703,62 @@ class DeepAgent:
     ) -> TaskItem:
         """Helper to run an agent and capture its output into the step object."""
 
-        # try:
-        result = await sub_agent.run(
-            f"""
-            You are executing TaskItem:
+        _feedback_for_agent = None
+        if isinstance(step.parameters, dict):
+            _feedback_for_agent = step.parameters.get("supervisor_feedback")
+
+        if step.capability == "producer_agent":
+            # Build a synthesis-oriented prompt that summarizes all completed tasks,
+            # including their summaries, report_paths, and sources.
+            producer_context = self._build_producer_prompt(runtime_state)
+
+            user_prompt = f"""
+                        {producer_context}
+
+                        You are now executing the FINAL synthesis TaskItem:
+
+                        {step.model_dump_json(indent=2)}
+                        """
+
+            if _feedback_for_agent:
+
+                user_prompt += f"""
+
+                    Supervisor feedback / additional insturctions for this execution:
+                    
+                    {_feedback_for_agent}
+                    """
+            user_prompt += """
+                    Your job:
+                    - Use ONLY the completed sub-task results and any files they point to.
+                    - Combine their findings into a single, coherent final answer.
+                    - Follow your system prompt instructions for citations and final TaskResult structure.
+                    - Do NOT request new research or create new sub-tasks.
+                    """
+        else:
+            user_prompt = f"""
+                You are executing TaskItem:
 
             {step.model_dump_json(indent=2)}
 
-            Overall objective:
-            {self.prompt}
+                Overall objective:
+                {self.prompt}
+
+                """
+            if _feedback_for_agent:
+                user_prompt += f"""
+
+                Supervisor feedback for this execution:
+                {_feedback_for_agent}
+                """
+
+            user_prompt += """
 
             ONLY act on this sub-task. Do not re-plan or change the task.
-            """,
+            """
+        # try:
+        result = await sub_agent.run(
+            user_prompt,
             deps=runtime_state,
         )
         step.result = result.output
@@ -595,3 +785,40 @@ class DeepAgent:
             ctx.deps.plan.get(task_id).status = status
             return f"Status for {task_id} is now {status}."
         return f"Error: No task with {task_id} found in plan. Be sure task_id actually exists."
+
+    def handle_critic_result(self, task: TaskItem, review: TaskQAResult):
+        """Deterministic transition logic to be used after critic run."""
+        if review.passed:
+            task.status = TaskStatus.COMPLETED
+        else:
+            if task.attempt_count < task.max_attempts:
+                # THE TRANSITION
+                task.status = TaskStatus.READY  # Or a specific RERUN status
+                task.attempt_count += 1
+
+                # THE CONTEXT INJECTION (Crucial!)
+                # We must force the agent to see the failure so it doesn't repeat it
+                task.sub_task_objective += f"\n\n[RETRY {task.attempt_count}] Previous attempt failed review: {review.reasoning}"
+            else:
+                task.status = TaskStatus.FAILED
+                task.error_msg = (
+                    f"Max retries reached. Critic feedback: {review.reasoning}"
+                )
+
+    async def view_qa_report(self, ctx: RunContext[RuntimeState], task_id: int) -> str:
+        """
+        Tool Name: View QA Report
+        Desription: Tool to view the specific detailed QA report for a given task_id.
+        When to use:
+            - If you need to review the full QA report from the critic.
+        """
+        task = ctx.deps.plan.get(task_id)
+        if task is None:
+            return f"No task with id {task_id}."
+
+        fb = getattr(task, "task_feedback", None)
+        if fb is None:
+            return f"No QA feedback found for task {task_id}."
+
+        # Return either a summary or full JSON depending on your needs
+        return fb.model_dump_json(indent=2)

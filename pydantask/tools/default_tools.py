@@ -2,14 +2,16 @@ import os
 import json
 
 import asyncio
-
+from loguru import logger
 from pydantic import BaseModel
 from pydantic_ai import Agent, RunContext
 from pathlib import Path
 
 from pydantask.models import RuntimeState
 
-DEFAULT_DIR = Path("tmp_files/")
+BASE_DIR = Path(__file__).parent.resolve()  # Directory where this script is
+DEFAULT_DIR = BASE_DIR / "tmp_files"  # TODO: make this configurable
+DEFAULT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 async def ask_user(ctx: RunContext[RuntimeState], question_for_user: str) -> str:
@@ -41,23 +43,43 @@ async def think_tool(reflection: str) -> str:
 
 
 async def write_to_file_system(
-    ctx: RunContext[RuntimeState], file_name: str, content: str
+    ctx: RunContext[RuntimeState],
+    file_name: str,
+    content: str,
+    overwrite: bool = False,
 ) -> str:
-    """Create or write to a file on the file system.
+    """
+    Write content to a file in the agent's workspace file system.
+    write_to_file_system: Tool for saving content to a file in the agent's workspace.
 
-    Used to offload context, or write files that may need to be consumed at a later time for execution.
+    IMPORTANT:
+        - `file_name` must be the logical name used when writing
+        (e.g. 'agent_frameworks_survey_task2.md'), *not* the full filesystem path.
+        - This function appends to the file by default. If you want to overwrite, set overwrite=True.
+    Args:
+        file_name: Logical file name key used in write_to_file_system.
+        content: The string content to write to the file.
+        overwrite: If True, overwrite the file instead of appending.
+    Returns:
+        Confirmation message indicating where the content was written and how to read it back.
+    """
+    # Ensure the base directory exists
+    # At top:
 
-    Args: file_name
-        file_name: The name of the file to create or write to.
-        content: The content to write into the file."""
-
-    path = DEFAULT_DIR.joinpath(file_name)
-    with open(path, "a") as f:
+    path = DEFAULT_DIR / file_name
+    mode = "w" if overwrite else "a"
+    logger.info(f"Writing to file system at {path} with content: {content}")
+    with open(path, mode, encoding="utf-8") as f:
         f.write(content + "\n")
-        ctx.deps.document_store[file_name] = str(
-            path
-        )  # save file name and path to document
-        return f"Content written to {path}."
+
+    # Store by the logical file_name key so agents can read it back with that name
+    ctx.deps.document_store[file_name] = file_name
+
+    return (
+        f"Content written to {path}.\n"
+        f"To read this file later, call read_from_file_system with file_name='{file_name}'. "
+        f"Use exactly this file_name, not the full path."
+    )
 
 
 async def delete_from_file_system(path: str) -> str:
@@ -80,7 +102,7 @@ async def delete_from_file_system(path: str) -> str:
 
 async def read_from_file_system(
     ctx: RunContext[RuntimeState],
-    path: str,
+    file_name: str,
 ) -> str:
     """
     Read from a file on the file system. If the file dos not exist, returns a message indicating so.
@@ -91,14 +113,24 @@ async def read_from_file_system(
         String of file contents
     """
     try:
-        if path not in ctx.deps.document_store:
-            return f"File '{path}' not found in document store."
-        path = DEFAULT_DIR.joinpath(path)
-        with open(path, "r") as f:
+        # First try lookup in doc store, fallback to the file_name
+        logical_file = ctx.deps.document_store.get(file_name, file_name)
+        path = DEFAULT_DIR / logical_file
+        logger.info(
+            f"Attempting to read file with logical name '{file_name}' from document store. Found path: {path}"
+        )
+
+        full_path = Path(path)
+        with open(full_path, "r", encoding="utf-8") as f:
             return f.read()
 
     except FileNotFoundError as e:
-        return f"File does not exist. If you were expencting it to be, create the file. \n{e}"
+        existing = ", ".join(ctx.deps.document_store.keys()) or "<none>"
+        return (
+            f"File '{file_name}' not found at path '{path}'.\n"
+            f"Known document keys: {existing}\n"
+            f"If you expected this to exist, you must first write it using write_to_file_system."
+        )
 
 
 # Tools used by the supervisor or planner agents
@@ -118,3 +150,137 @@ async def get_current_datetime() -> str:
     from datetime import datetime
 
     return str(datetime.now().isoformat())
+
+
+async def list_documents(ctx: RunContext[RuntimeState]) -> str:
+    """List all documents that have been written in this run.
+
+    Returns a human-readable list of logical names and their filesystem paths.
+    """
+    if not ctx.deps.document_store:
+        return "No documents have been written yet."
+
+    lines: list[str] = []
+    for name, logical in ctx.deps.document_store.items():
+        path = DEFAULT_DIR / logical  # Convert logical name to full path for display
+        lines.append(f"- name: {name}\n  path: {path}")
+    return "\n".join(lines)
+
+
+async def list_completed_tasks(ctx: RunContext[RuntimeState]) -> str:
+    """List all tasks that have completed, with brief summaries.
+
+    Useful for agents that need to review prior work before deciding next steps.
+    """
+    if not ctx.deps.plan:
+        return "No tasks in plan."
+
+    from pydantask.models import TaskStatus  # local import to avoid cycles
+
+    lines: list[str] = []
+    for task_id, task in sorted(ctx.deps.plan.items(), key=lambda kv: kv[0]):
+        if task.status != TaskStatus.COMPLETED:
+            continue
+        summary = task.result.summary if task.result is not None else "<no result>"
+        lines.append(
+            f"- task_id: {task_id}\n"
+            f"  capability: {task.capability}\n"
+            f"  objective: {task.sub_task_objective}\n"
+            f"  summary: {summary}"
+        )
+
+    if not lines:
+        return "No completed tasks yet."
+
+    return "\n".join(lines)
+
+
+async def save_task_context(
+    ctx: RunContext[RuntimeState],
+    task_id: int,
+    content: str,
+    kind: str = "notes",
+    overwrite: bool = False,
+) -> str:
+    """Save contextual information for a specific task to a canonical file.
+
+    FILENAME CONVENTION (IMPORTANT):
+      - The file name will always be ``task-{task_id}-{kind}.md``.
+      - Agents should NOT invent their own names when saving task context.
+
+    When to use:
+      - After completing a task, to save detailed notes or results for that task.
+      - When you want to offload information from memory but keep it accessible by task_id.
+      - To create a record of your thought process and findings for each task.
+
+    Args:
+        task_id: The ID of the task whose context you want to save.
+        content: The string content to save, such as notes, findings, or detailed results.
+        kind: A short label like "notes", "research", or "final"; it becomes part of the file name.
+        overwrite: If True, overwrite the file instead of appending. Default is False (append).
+
+    Returns:
+    Confirmation message indicating where the content was saved and how to read it back.
+    """
+    file_name = f"task-{task_id}-{kind}.md"
+    return await write_to_file_system(
+        ctx, file_name=file_name, content=content, overwrite=overwrite
+    )
+
+
+async def read_task_context(
+    ctx: RunContext[RuntimeState],
+    task_id: int,
+    kind: str = "notes",
+) -> str:
+    """Read contextual information for a specific task from its canonical file.
+
+    This uses the same convention as ``save_task_context``:
+      - file_name = ``task-{task_id}-{kind}.md``.
+
+    Args:
+        task_id: The task id whose context file you want to read.
+        kind: The same kind string that was used when saving (e.g. "notes", "research", "final").
+
+    Returns:
+        File contents as a string, or an informative error message if it does not exist.
+    """
+    file_name = f"task-{task_id}-{kind}.md"
+    return await read_from_file_system(ctx, file_name=file_name)
+
+
+async def get_task_result(ctx: RunContext[RuntimeState], task_id: int) -> str:
+    """Return the full TaskResult for a given task_id as JSON.
+
+    When to use:
+        - When you need to inspect the detailed output of a prior task.
+        - Before synthesizing or critiquing based on earlier work.
+    """
+    task = ctx.deps.plan.get(task_id)
+    if task is None:
+        return f"No task with id {task_id}."
+
+    if task.result is None:
+        return f"Task {task_id} has no result yet. Current status: {task.status}."
+
+    return task.result.model_dump_json(indent=2)
+
+
+async def append_scratch_note(
+    ctx: RunContext[RuntimeState],
+    task_id: int,
+    note: str,
+) -> str:
+    """
+    Tool: Append Scratch Note
+    Description: Append a short note to the in-memory scratchpad for this task.
+
+    When to use:
+        - You want to store intermediate notes or thoughts about your work and any.
+    When not to use:
+        - Writing final full reports / analysis or answers.
+    """
+    key = f"scratch_task_{task_id}"
+    existing = ctx.deps.document_store.get(key, "")
+    ctx.deps.document_store[key] = existing + f"\n\n{note}"
+    return f"Appended note to scratchpad {key}"
