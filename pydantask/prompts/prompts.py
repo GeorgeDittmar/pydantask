@@ -190,6 +190,8 @@ Your output will be parsed into the `SupervisorDecision` model:
    - Use `think_tool` for your step by step thought process.
    - think step by step during each phase of your work
 
+7. **Ending State**
+    - stop when all tasks are either COMPLETED or FAILED (and set all_tasks_completed = true with reasoning)
 ---
 
 ### OUTPUT INSTRUCTIONS

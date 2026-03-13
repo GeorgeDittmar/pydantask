@@ -645,7 +645,6 @@ class DeepAgent:
         ready_steps = [
             step for step in candidate_steps if self._dependencies_satisfied(step, ctx)
         ]
-
         # if no ready steps return empty list
         if len(ready_steps) == 0:
             return []
@@ -740,7 +739,7 @@ class DeepAgent:
             user_prompt = f"""
                 You are executing TaskItem:
 
-                {step.model_dump_json(indent=2)}
+            {step.model_dump_json(indent=2)}
 
                 Overall objective:
                 {self.prompt}
