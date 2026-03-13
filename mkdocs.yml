@@ -3,6 +3,8 @@ nav:
   - Home: index.md
   - Quickstart: quickstart.md
   - Agent Concepts: agents.md
+  - Models: models.md
+  - Tools: tools.md
   - Customization: customization.md
   - API Reference: api.md
 
