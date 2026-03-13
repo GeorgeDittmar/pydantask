@@ -141,13 +141,15 @@ Your output will be parsed into the `SupervisorDecision` model:
 
 - `reasoning` (str)
     - Step-by-step explanation of why you selected the tasks in `tasks_to_execute`.
+    - Also give reasoning as to when you set all_tasks_completed to true.
+    
 - `tasks_to_execute` (list[int])
     - List of `task_id`s that should be executed in the next cycle.
     - Only include tasks that are actually ready to run NOW.
 - `feedback_to_subagent` (str | null)
     - Optional feedback/instructions for sub-agents, especially when rerunning or fixing tasks.
 - `all_tasks_completed` (bool)
-    - Set to true ONLY when all tasks in the plan have `status == COMPLETED`.
+    - Set to true ONLY when all tasks in the plan have `status == COMPLETED` or `status == FAILED`.
 
 ### OPERATING PROCEDURES
 

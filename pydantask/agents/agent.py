@@ -3,7 +3,6 @@ from email import errors
 from json import tool
 import json
 from multiprocessing.connection import wait
-import uuid
 import os
 
 from httpx import AsyncClient, HTTPStatusError
@@ -464,8 +463,8 @@ class DeepAgent:
             )
         return "\n".join(lines)
 
-    # def _format_
-    def format_input_prompt(self, ctx: RuntimeState) -> str:
+    def _format_supervisor_input_prompt(self, ctx: RuntimeState) -> str:
+        """Function to format input prompt to the supervisor agent."""
         # Pre-format the plan to ensure the LLM sees a clean "Status Board"
         plan_display_lines = []
         for t in ctx.plan.values():
@@ -503,6 +502,26 @@ class DeepAgent:
             plan_display=plan_display,
             agent_display=agent_display,
         )
+
+    def _format_critic_input_prompt(self, task_result: TaskResult, ctx: RuntimeState):
+        _prompt = f"""
+            
+            Evaluate if the following worker output completed the specified task task.
+            
+            Overall Objective:
+            {ctx.objective}
+
+            Sub Task Definition (TaskItem):
+            {ctx.plan[task_result.task_id].model_dump_json(indent=2)}
+
+            Worker Output (TaskResult):
+            {task_result.result.model_dump_json(indent=2)}
+            
+            Any documents to review:
+            {ctx.document_store}
+            
+            """
+        return _prompt
 
     @observe
     async def run(self):
@@ -550,7 +569,7 @@ class DeepAgent:
             logger.info(f"\n--- DeepAgent Cycle {step_count} ---")
 
             supervisor_response = await self._supervisor_agent.run(
-                self.format_input_prompt(runtime_state),
+                self._format_supervisor_input_prompt(runtime_state),
                 deps=runtime_state,
             )
             supervisor_response = supervisor_response.output
@@ -581,43 +600,29 @@ class DeepAgent:
             # go through responses and evaluate if they have completed the task
             for task_result in task_results or []:
                 logger.info(f"--- Evaluating Task Result for {task_result.task_id} ---")
-                qa_prompt = f"""
-                
-                Evaluate if the following worker output completed its task.
-                
-                Overall Objective:
-                {runtime_state.objective}
 
-                Sub Task Definition (TaskItem):
-                {runtime_state.plan[task_result.task_id].model_dump_json(indent=2)}
-
-                Worker Output (TaskResult):
-                {task_result.result.model_dump_json(indent=2)}
-                
-                Any documents to review:
-                {runtime_state.document_store}
-                """
                 qa_response = await self._critic_agent.run(
-                    qa_prompt, deps=runtime_state
+                    self._format_critic_input_prompt(task_result, runtime_state),
+                    deps=runtime_state,
                 )
                 qa_response = qa_response.output
 
                 logger.info(f"--- QA Response ---")
                 logger.info(qa_response.model_dump_json())
+
+                task = runtime_state.plan[task_result.task_id]
+
+                # deterministic transition based on critic
+                self.handle_critic_result(task, qa_response)
+
                 # if qa_response.do
                 # add the qa report to the task result for the supervisor to review
-                runtime_state.plan[task_result.task_id].task_feedback = qa_response
+                # runtime_state.plan[task_result.task_id].task_feedback = qa_response
 
             runtime_state.runtime_steps += 1
 
             step_count += 1
         return runtime_state
-
-    async def update_knowledge(
-        self, capabiliity, answer, ctx: RunContext[RuntimeState]
-    ):
-        """Updates the knowledge runtime state with any new knowledge that is needed to answer a goal or task"""
-        pass
 
     def _dependencies_satisfied(self, step: TaskItem, ctx: RuntimeState) -> bool:
         # Consider a dependency satisfied only if it's COMPLETED (or whatever set you like)
@@ -781,6 +786,25 @@ class DeepAgent:
             ctx.deps.plan.get(task_id).status = status
             return f"Status for {task_id} is now {status}."
         return f"Error: No task with {task_id} found in plan. Be sure task_id actually exists."
+
+    def handle_critic_result(self, task: TaskItem, review: TaskQAResult):
+        """Deterministic transition logic to be used after critic run."""
+        if review.passed:
+            task.status = TaskStatus.COMPLETED
+        else:
+            if task.attempt_count < task.max_attempts:
+                # THE TRANSITION
+                task.status = TaskStatus.READY  # Or a specific RERUN status
+                task.attempt_count += 1
+
+                # THE CONTEXT INJECTION (Crucial!)
+                # We must force the agent to see the failure so it doesn't repeat it
+                task.sub_task_objective += f"\n\n[RETRY {task.attempt_count}] Previous attempt failed review: {review.reasoning}"
+            else:
+                task.status = TaskStatus.FAILED
+                task.error_msg = (
+                    f"Max retries reached. Critic feedback: {review.reasoning}"
+                )
 
     async def view_qa_report(self, ctx: RunContext[RuntimeState], task_id: int) -> str:
         """

@@ -264,3 +264,23 @@ async def get_task_result(ctx: RunContext[RuntimeState], task_id: int) -> str:
         return f"Task {task_id} has no result yet. Current status: {task.status}."
 
     return task.result.model_dump_json(indent=2)
+
+
+async def append_scratch_note(
+    ctx: RunContext[RuntimeState],
+    task_id: int,
+    note: str,
+) -> str:
+    """
+    Tool: Append Scratch Note
+    Description: Append a short note to the in-memory scratchpad for this task.
+
+    When to use:
+        - You want to store intermediate notes or thoughts about your work and any.
+    When not to use:
+        - Writing final full reports / analysis or answers.
+    """
+    key = f"scratch_task_{task_id}"
+    existing = ctx.deps.document_store.get(key, "")
+    ctx.deps.document_store[key] = existing + f"\n\n{note}"
+    return f"Appended note to scratchpad {key}"

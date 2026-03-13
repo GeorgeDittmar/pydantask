@@ -111,7 +111,7 @@ class TaskResult(BaseModel):
 
     notes: List[str] = Field(
         default_factory=list,
-        description="All notes or scratch file paths that were used.",
+        description="All notes or scratch file paths that were used to help complete this task.",
     )
 
     output_paths: List[str] = Field(
