@@ -12,6 +12,8 @@ It builds on top of [Pydantic AI](https://ai.pydantic.dev/) and adds:
 
 The goal is to give you a solid “agentic backbone” you can adapt, without having to reinvent multi‑step planning and control logic yourself.
 
+For the most up‑to‑date implementation details and API docs, see the hosted documentation: **[PydanTask Documentation](https://pydantask.readthedocs.io/en/latest/)**.
+
 ---
 
 ## High-Level Architecture
@@ -97,7 +99,6 @@ If `TAVILY_API_KEY` is missing, `DeepAgent.__init__` will raise a `ValueError`.
 Minimal example that creates a `DeepAgent` and runs it on a single objective:
 
 ```python
-from httpx import AsyncClient
 import asyncio
 
 from pydantask.agents.agent import DeepAgent
@@ -116,7 +117,7 @@ async def main() -> None:
         print(f"Task {task_id} [{task.status}]: {task.sub_task_objective}")
         if task.result is not None:
             print("  Summary:", task.result.summary)
-            print("  Reports:", task.result.detailed_report_paths)
+            print("  Outputs:", task.result.output_paths)
             print()
 
 if __name__ == "__main__":
@@ -198,36 +199,26 @@ For more customization details, see:
 
 ## Running Unit Tests
 
-This project uses `unittest` (with `IsolatedAsyncioTestCase`) and lives under the `test/` directory.
+Tests live under the `test/` directory and are written to be compatible with both `pytest` and the standard library `unittest`.
 
-From the repository root, you can run all tests with:
+### Recommended: pytest
 
-```bash
-python -m unittest discover -s test -p "test_*.py"
-```
-
-or simply:
-
-```bash
-python -m unittest
-```
-
-If you prefer `pytest`, it can also run these tests:
+From the repository root:
 
 ```bash
 pip install pytest
 pytest
 ```
 
-Make sure required environment variables (e.g. `TAVILY_API_KEY`) are set, or that tests patch them appropriately (as in `test/test_agent.py`).
+### Using unittest directly
+
+If you prefer `unittest`, you can still run the suite with:
+
+```bash
+python -m unittest discover -s test -p "test_*.py"
+```
+
+Make sure required environment variables (e.g. `TAVILY_API_KEY`, `OPENAI_API_KEY`) are set, or that tests patch them appropriately (as in `test/test_agent.py`).
 
 ---
 
-## Further Documentation
-
-- [docs/agents.md](docs/agents.md): in‑depth description of `DeepAgent`, Planner, Supervisor, Critic, Producer, and Researcher.
-- [docs/models.md](docs/models.md): detailed model definitions for `TaskItem`, `TaskResult`, `RuntimeState`, etc.
-- [docs/tools.md](docs/tools.md): built‑in tools and how to write your own.
-- [docs/api.md](docs/api.md): API reference generated from docstrings.
-
-Explore the `pydantask/agents/agent.py` and `pydantask/models/models.py` modules for the most up‑to‑date implementation details.
