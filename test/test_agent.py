@@ -8,9 +8,10 @@ import pydantask.agents.agent as agent_mod
 
 
 @pytest.fixture(autouse=True)
-def tavily_env(monkeypatch):
-    """Ensure Tavily API key is present so DeepAgent doesn't raise on init."""
-    monkeypatch.setenv("TAVILY_API_KEY", "fake-key")
+def env_vars(monkeypatch):
+    """Ensure required API keys are present so DeepAgent doesn't raise on init."""
+    monkeypatch.setenv("TAVILY_API_KEY", "fake-tavily-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "fake-openai-key")
 
 
 @pytest.fixture
