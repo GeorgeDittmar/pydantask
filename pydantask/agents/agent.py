@@ -71,6 +71,7 @@ from pydantask.tools.default_tools import (
     get_task_result,
     save_task_context,
     read_task_context,
+    append_scratch_note,
 )
 
 from pydantic_ai.retries import AsyncTenacityTransport, RetryConfig, wait_retry_after
@@ -205,6 +206,7 @@ class DeepAgent:
             tools=[
                 tavily_search_tool(api_key),
                 think_tool,
+                append_scratch_note,
                 # File-system and context tools; prefer save_task_context for reports
                 write_to_file_system,
                 read_from_file_system,
@@ -311,6 +313,7 @@ class DeepAgent:
                 list_completed_tasks,
                 get_task_result,
                 think_tool,
+                append_scratch_note,
                 get_current_datetime,
             ],
         )
@@ -421,7 +424,7 @@ class DeepAgent:
             summary = (
                 getattr(result, "summary", str(result)) if result else "<no result>"
             )
-            paths = getattr(result, "output_path_paths", []) if result else []
+            paths = getattr(result, "output_paths", []) if result else []
             sources = getattr(result, "sources", []) if result else []
 
         src_lines = []
