@@ -290,3 +290,26 @@ class TaskSpec(BaseModel):
     success_criteria: str
     constraints: list[str]
     overall_objective: str
+
+
+class DeepAgentRunResult(BaseModel):
+    objective: str = Field(..., description="The original user objective.")
+    final_result: Optional[TaskResult] = Field(
+        default=None,
+        description="The final TaskResult synthesized by the producer_agent, if any.",
+    )
+    status: Literal["success", "partial", "failed"] = Field(
+        ..., description="High-level outcome of the run."
+    )
+    plan: Dict[int, TaskItem] = Field(
+        ...,
+        description="The final plan state (all TaskItems after execution).",
+    )
+    runtime_steps: int = Field(
+        ...,
+        description="Number of DeepAgent control-loop cycles executed.",
+    )
+    errors: list[str] = Field(
+        default_factory=list,
+        description="Any top-level errors or important warnings.",
+    )
