@@ -208,9 +208,9 @@ class DeepAgent:
                 think_tool,
                 append_scratch_note,
                 # File-system and context tools; prefer save_task_context for reports
-                write_to_file_system,
-                read_from_file_system,
-                save_task_context,
+                # write_to_file_system,
+                # read_from_file_system,
+                # save_task_context,
                 read_task_context,
                 get_current_datetime,
                 list_documents,

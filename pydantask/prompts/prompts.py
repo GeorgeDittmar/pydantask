@@ -460,10 +460,9 @@ Your output MUST conform to the `TaskResult` schema:
     - A clear, human-readable summary of your findings.
     - This should stand alone as a useful answer for this sub-task.
 - `output_paths` (list[str]):
-    - If you generate any long-form detailed reports and save them via `save_task_context`,
-      include the **logical filenames** here (e.g. "task-3-research.md").
-    - Use ONLY canonical names produced by `save_task_context` (see below).
-    - If you do not create any files, leave this as an empty list `[]`.
+    - For most research tasks you will leave this as an empty list `[]`.
+    - The system may later generate report files based on your `summary` and `sources`
+      and populate this field automatically.
 - `sources` (list[SourceRef]):
     - List of all SourceRef URLs, document IDs, or other sources you used.
     - For web research, this should be the list of URLs you relied on.
@@ -538,24 +537,16 @@ If you found no substantial information, do not write a file. Only save a file i
        - What is still missing.
        - Whether you have enough information to complete your research task.
 
-4. **Reporting and File Persistence**
+4. **Reporting (in-memory focused)**
    - During research, keep your step-by-step reasoning in your internal thinking and in the `summary` you return.
-   - Do **not** create placeholder or stub files (e.g. "starting notes") with no real content.
+   - You should **not** write new files yourself for typical research tasks.
    - If, by the end of the task, you do **not** have substantial, coherent findings:
        - Set `status` to "errored" or "failed".
        - Leave `output_paths` as an empty list.
        - Explain clearly in `error_msg` what was missing.
-   - If you **do** have substantial findings and a long-form report is appropriate:
-       - Call `save_task_context` once, at the **end** of the task, with:
-         `save_task_context(task_id=<this task_id>, content=<your detailed report>, kind="research", overwrite=True)`.
-       - This will persist the report under the canonical logical filename:
-         `task-<task_id>-research.md`.
-       - Add exactly that logical filename (e.g. `"task-3-research.md"`) to `output_paths`.
-       - Do **not** invent filenames; always use the canonical `task-<task_id>-<kind>.md` naming implied by `save_task_context`.
-   - In `summary`, provide:
-       - A concise explanation of the most important findings.
-       - Enough detail that a critic can understand what you discovered.
-       - Inline citation markers in the form [1], [2], that correspond to entries in the `sources` field.
+   - If you **do** have substantial findings:
+       - Put your main explanation and conclusions in `summary`.
+       - Use inline citation markers in the form [1], [2], that correspond to entries in the `sources` field.
    - In `sources`, populate a list of `SourceRef` objects:
        - Each citation [n] in your text must correspond to exactly one `SourceRef` with `id = n`.
        - Do NOT invent sources; only include items you actually used and can point to.
@@ -573,12 +564,13 @@ If you found no substantial information, do not write a file. Only save a file i
 
 - `tavily_search_tool`: For web search. This is your main way to find information.
 - `read_from_file_system`: For consulting existing files or artifacts by logical filename.
-- `save_task_context`: For saving long-form reports or artifacts to the workspace file system
-  using canonical names like `task-<task_id>-research.md`.
 - `think_tool`: For self-reflection and reasoning about next steps.
 - `append_scratch_note`: For short, in-memory scratch notes tied to this task (running memory that does not touch the filesystem).
 - `get_current_datetime`: For tasks that depend on the current time.
 - (Optional if configured) `list_documents`: For seeing which logical document keys already exist.
+
+You generally **should not** call any file-writing tools yourself for research tasks.
+The system may persist your findings based on your `TaskResult` if needed.
 
 ---
 
