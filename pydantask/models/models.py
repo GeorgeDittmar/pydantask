@@ -176,14 +176,6 @@ class TaskResult(BaseModel):
         description="All notes or scratch file paths that were used to help complete this task.",
     )
 
-    output_paths: List[str] = Field(
-        default_factory=list,
-        description=(
-            "List of file paths to any output that was "
-            "generated during this task (e.g. written via write_to_file_system)."
-        ),
-    )
-
     sources: List[SourceRef] = Field(
         default_factory=list,
         description=(

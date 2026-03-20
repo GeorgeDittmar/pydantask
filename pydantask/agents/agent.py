@@ -273,9 +273,9 @@ class DeepAgent:
             output_type=TaskResult,
             tools=[
                 # FS & context tools for canonical final reports
-                write_to_file_system,
+                # write_to_file_system,
                 read_from_file_system,
-                save_task_context,
+                # save_task_context,
                 read_task_context,
                 # Plan / history inspection
                 list_documents,
@@ -405,7 +405,8 @@ class DeepAgent:
         return RuntimeState(plan=plan, objective=objective, agent_registry=registry)
 
     def _format_capabilities(self) -> str:
-        """Return a human-readable list of available sub-agent capabilities for the planner.
+        """
+        Return a human-readable list of available sub-agent capabilities for the planner.
 
         Each line is of the form:
         - capability_name: description
@@ -417,6 +418,7 @@ class DeepAgent:
         return "\n".join(lines)
 
     def _build_producer_prompt(self, state: RuntimeState) -> str:
+        """Build a context prompt for the producer agent that summarizes all completed tasks, their results, and sources."""
         completed = [t for t in state.plan.values() if t.status == TaskStatus.COMPLETED]
         lines = []
         for t in sorted(completed, key=lambda x: x.task_id):
@@ -427,20 +429,20 @@ class DeepAgent:
             paths = getattr(result, "output_paths", []) if result else []
             sources = getattr(result, "sources", []) if result else []
 
-        src_lines = []
-        for s in sources or []:
-            src_lines.append(
-                f"    - [{s.id}] title={getattr(s, 'title', None)} "
-                f"url={getattr(s, 'url', None)} path={getattr(s, 'path', None)}"
+            src_lines = []
+            for s in sources or []:
+                src_lines.append(
+                    f"    - [{s.id}] title={getattr(s, 'title', None)} "
+                    f"url={getattr(s, 'url', None)} path={getattr(s, 'path', None)}"
+                )
+            src_block = "\n".join(src_lines) or "    - <no sources>"
+            lines.append(
+                f"- Task {t.task_id} ({t.capability})\n"
+                f"  objective: {t.sub_task_objective}\n"
+                f"  summary: {summary}\n"
+                f"  report_paths: {paths}\n"
+                f"  sources: {src_block}"
             )
-        src_block = "\n".join(src_lines) or "    - <no sources>"
-        lines.append(
-            f"- Task {t.task_id} ({t.capability})\n"
-            f"  objective: {t.sub_task_objective}\n"
-            f"  summary: {summary}\n"
-            f"  report_paths: {paths}\n"
-            f"  sources: {src_block}"
-        )
         completed_display = "\n".join(lines) or "<no completed tasks>"
 
         return f"""
@@ -450,8 +452,8 @@ class DeepAgent:
     Completed sub-tasks (source material):
     {completed_display}
 
-    Using only these results (and any files they point to), synthesize the final answer
-    to the overall objective. Do not perform new research.
+    Using only these results (and any files they point to), synthesize the final output according
+    to the overall objective. Do not perform new research or work.
     """
 
     def _format_plan(self, plan: Plan):
@@ -542,8 +544,7 @@ class DeepAgent:
         Example of what capabilities could be used for:
             -   "research_agent" → needs web/external info.
             -   "worker_agent" → general reasoning/transformation on existing info.
-            -   "producer_agent" → only final answer step.
-        
+            -   "producer_agent" → generate final output or results.
         
         Current Datetime (MUST be used verbatim if time is needed as context): {now}
         CURRENT_YEAR (authoritative numeric year): {current_year}
@@ -557,9 +558,10 @@ class DeepAgent:
 
         agent_plan_map = {v.task_id: v for v in agent_plan.output.tasks}
 
-        logger.info("--- Generated Plan ---")
+        logger.info("--- Generated Plan ---\n")
         logger.info(self._format_plan(agent_plan.output))
-        logger.info("--- Generated Plan ---")
+        logger.info("--- Generated Plan ---\n")
+
         # now save the plan to the agent state
         runtime_state = self._initialize_runtime_state(
             plan=agent_plan_map, objective=self.prompt, registry=self.agent_registry
@@ -625,6 +627,7 @@ class DeepAgent:
             runtime_state.runtime_steps += 1
 
             step_count += 1
+
         return runtime_state
 
     def _dependencies_satisfied(self, step: TaskItem, ctx: RuntimeState) -> bool:

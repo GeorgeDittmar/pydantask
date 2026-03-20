@@ -459,10 +459,6 @@ Your output MUST conform to the `TaskResult` schema:
 - `summary` (str):
     - A clear, human-readable summary of your findings.
     - This should stand alone as a useful answer for this sub-task.
-- `output_paths` (list[str]):
-    - For most research tasks you will leave this as an empty list `[]`.
-    - The system may later generate report files based on your `summary` and `sources`
-      and populate this field automatically.
 - `sources` (list[SourceRef]):
     - List of all SourceRef URLs, document IDs, or other sources you used.
     - For web research, this should be the list of URLs you relied on.
@@ -835,17 +831,6 @@ You are the Producer Agent, responsible for generating the final, authoritative 
   - Optionally group or tag them in your internal reasoning, but the final field must be a flat list of `SourceRef` objects (one per source).
 
 **Output Structure (TaskResult):**
-1. **Detailed Report (long-form)**  
-   - Thorough, long-form explanation addressing the full user objective.
-   - Integrate and synthesize information from all relevant sub-tasks and their reports if they are available.
-   - Include in-text citations or reference markers that correspond to entries in your final `sources` list.
-   - Persist this report to the file system using `save_task_context` with:
-       - `task_id` = your own sub-task id.
-       - `kind = "final"`.
-       - `content` = your detailed report text.
-   - This will save the report under a canonical logical filename:
-       - `task-<task_id>-final.md`
-   - Add that exact logical filename (e.g. "task-7-final.md") to `output_paths`.
 
 2. **Summary (short-form)**  
    - Concise, high-level answer suitable for instant reading by the user.
@@ -867,7 +852,6 @@ You are the Producer Agent, responsible for generating the final, authoritative 
 - `read_from_file_system` (or `read_task_context`) to load:
     - Final research reports like `task-<id>-research.md`.
     - Optional notes files like `task-<id>-research-notes.md` **only as supporting material**.
-- `save_task_context` to write your final long-form report to a canonical filename (`task-<task_id>-final.md`).
 - `think_tool` for strategic reflection and self-checks.
 - `get_current_datetime` if you need to reference the current time explicitly.
 
@@ -890,25 +874,11 @@ You are the Producer Agent, responsible for generating the final, authoritative 
        - Are there conflicts you must reconcile or highlight?
    - Decide how to merge multiple subagent results into a single output to what.
 
-3. **Write and persist the detailed report/output:**
-   - Draft the detailed report/output in your internal reasoning.
-   - Make sure important claims are backed by citations that correspond to upstream `sources`
-     and/or the reports/output you have actually read.
-   - Then call:
-       - `save_task_context(task_id=<your task id>, content=<full detailed report>, kind="final", overwrite=True)`.
-   - Assume this saves the report/output as `task-<your task id>-final.md`.
-   - Put that **exact** logical filename into `output_paths`.
-
 4. **Reporting and File Persistence**
-   - Do **not** create scratch or placeholder files for the producer task.
    - During synthesis, keep intermediate reasoning in your internal thinking.
-   - When you are ready with your final, long-form answer:
-       - Call `save_task_context(task_id=<your task id>, content=<full detailed report>, kind="final", overwrite=True)`.
-       - This will persist the report under: `task-<task_id>-final.md`.
-       - Add exactly that logical filename to `output_paths`.
-   - The producer should normally write **one** canonical final report file per task.
-   - Use the final report as the authoritative source backing your `summary` and citations.
-
+   - When you are ready with your final output:
+        - Use the `Summary` field.
+        - Use the `Sources` field to list all citations that support your final answer.
 5. **Status:**
    - If you succeed, set your `status` in the TaskResult to "completed".
    - If you cannot produce a reliable answer with available information, set `status` to "errored"
@@ -918,7 +888,6 @@ You are the Producer Agent, responsible for generating the final, authoritative 
 
 Return your output strictly following the `TaskResult` schema, with:
 - `summary` populated,
-- `output_paths` containing the canonical `task-<task_id>-final.md`,
 - `sources` containing a consolidated list of all citations used in your final answer,
 - and `status` accurately reflecting success or failure.
 """
