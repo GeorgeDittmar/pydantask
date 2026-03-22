@@ -1,5 +1,6 @@
 from typing import Literal, List, Union
 from enum import Enum
+from attr import field
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Literal, Any, Dict, Callable
 from datetime import datetime
@@ -473,9 +474,9 @@ class DeepAgentRunResult(BaseModel):
         default=None,
         description="The final TaskResult synthesized by the producer_agent, if any.",
     )
-    status: Literal["success", "partial", "failed"] = Field(
-        ..., description="High-level outcome of the run."
-    )
+    # status: Literal["success", "partial", "failed"] = Field(
+    #     ..., description="High-level outcome of the run."
+    # )
     plan: Dict[int, TaskItem] = Field(
         ...,
         description="The final plan state (all TaskItems after execution).",
@@ -483,6 +484,9 @@ class DeepAgentRunResult(BaseModel):
     runtime_steps: int = Field(
         ...,
         description="Number of DeepAgent control-loop cycles executed.",
+    )
+    runtime_state: RuntimeState = Field(
+        default=None, description="Complete runtime state for auditing."
     )
     errors: list[str] = Field(
         default_factory=list,

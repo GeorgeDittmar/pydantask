@@ -59,6 +59,7 @@ from pydantask.models import (
     SupervisorDecision,
     CapabilityDescription,
     TaskResult,
+    DeepAgentRunResult,
 )
 
 from pydantask.tools.default_tools import (
@@ -273,10 +274,6 @@ class DeepAgent:
             deps_type=RuntimeState,
             output_type=TaskResult,
             tools=[
-                # FS & context tools for canonical final reports
-                # write_to_file_system,
-                # read_from_file_system,
-                # save_task_context,
                 read_task_context,
                 # Plan / history inspection
                 list_documents,
@@ -408,11 +405,11 @@ class DeepAgent:
                 )
             src_block = "\n".join(src_lines) or "    - <no sources>"
             lines.append(
-                f"- Task {t.task_id} ({t.capability})\n"
+                f"- Task id: {t.task_id} ({t.capability})\n"
                 f"  objective: {t.sub_task_objective}\n"
-                f"  summary: {summary}\n"
-                f"  report_paths: {paths}\n"
-                f"  sources: {src_block}"
+                # f"  summary: {summary}\n"
+                # f"  report_paths: {paths}\n"
+                # f"  sources: {src_block}"
             )
         completed_display = "\n".join(lines) or "<no completed tasks>"
 
@@ -523,7 +520,6 @@ class DeepAgent:
             sub_task_dependencies=dependencies or [],
             metadata=metadata or {},
             status=TaskStatus.READY,
-            # ... any other required fields / defaults
         )
         plan[new_id] = task
         return new_id
@@ -532,9 +528,6 @@ class DeepAgent:
     async def run(self):
         # Start the supervisor agent to manage sub-agents
         # state = RuntimeState(goal=self.prompt)
-        now = await get_current_datetime()
-        current_year = datetime.now().year
-        capabilities_display = self._format_capabilities()
         # planner_prompt = f"""
         # Objective: {self.prompt}
 
@@ -626,8 +619,13 @@ class DeepAgent:
             runtime_state.runtime_steps += 1
 
             step_count += 1
-
-        return runtime_state
+        return_result = DeepAgentRunResult(
+            objective=self.prompt,
+            final_result=task,
+            plan=runtime_state.plan,
+            runtime_state=runtime_state,
+        )
+        return return_result
 
     def _dependencies_satisfied(self, step: TaskItem, ctx: RuntimeState) -> bool:
         # Consider a dependency satisfied only if it's COMPLETED (or whatever set you like)
