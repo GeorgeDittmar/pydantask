@@ -238,7 +238,7 @@ class TaskItem(BaseModel):
     )
     status: TaskStatus
     result: Optional[TaskResult] = Field(
-        description="Where to put the task result if completed."
+        description="Where to put the task result if completed.", default=None
     )
     capability: str = Field(
         description="Which sub agent capability should attempt this task."
@@ -252,7 +252,9 @@ class TaskItem(BaseModel):
         default_factory=list,
         description="Store any answer history if multiple attempts are made.",
     )  # Store any answer history if multiple attempts are made
-    time_scope: Optional[str]  # "2026", "2025-2026", "last 7 days", etc.
+    time_scope: Optional[str] = Field(
+        default=None, description="2026, 2021-2025, two days ago"
+    )  # "2026", "2025-2026", "last 7 days", etc.
     parameters: dict = Field(
         default_factory=dict
     )  # you can stash structured temporal params here
@@ -348,7 +350,7 @@ class RuntimeState(BaseModel):
         description="Steps from the plan that have been completed.", default_factory=set
     )
     next_task_id: int = Field(
-        description="The next valid id value that could be added to a running plan"
+        description="The next valid Task id value that could be added to a running plan"
     )
     runtime_steps: int = 0
     tokens_used: int = 0

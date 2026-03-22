@@ -157,20 +157,6 @@ class DeepAgent:
             end_strategy="exhaustive",
         )
 
-        # self._supervisor_agent = supervisor_agent or self._create_agent_from_spec(
-        #     agent_spec=SupervisorSpec(),
-        #     name="_dynammic_Supervisor_Agent",
-        #     tools=[
-        #         self.update_task_status,
-        #         get_current_datetime,
-        #         think_tool,
-        #         self.view_qa_report,
-        #         self.add_task,
-        #     ],
-        #     output_type=SupervisorDecision,
-        #     deps_type=RuntimeState,
-        #     model=self._retry_model,
-        # )
         self._supervisor_agent = supervisor_agent or Agent(
             model=self._retry_model,
             name="_dynamic_Supervisor_Agent",
@@ -384,7 +370,9 @@ class DeepAgent:
 
     def _initialize_runtime_state(self, objective: str, registry: dict) -> RuntimeState:
         # Logic to initialize and manage the runtime state
-        return RuntimeState(objective=objective, agent_registry=registry, next_id_val=1)
+        return RuntimeState(
+            objective=objective, agent_registry=registry, next_task_id=1
+        )
 
     def _format_capabilities(self) -> str:
         """
@@ -524,11 +512,12 @@ class DeepAgent:
         Must add any `sub_task_dependencies` that may be needed to complete the new task.
         """
         plan = ctx.deps.plan
-        new_id = ctx.deps.new_task_id
+        new_id = ctx.deps.next_task_id
         ctx.deps.next_task_id += 1
 
         task = TaskItem(
             task_id=new_id,
+            overall_objective=ctx.deps.objective,
             sub_task_objective=sub_task_objective,
             capability=capability,
             sub_task_dependencies=dependencies or [],
