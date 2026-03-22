@@ -26,9 +26,13 @@ These models define the task/plan structure, runtime state, and capability descr
 
 ### Task and Plan Models
 
+## TaskStatus
+
 ::: pydantask.models.TaskStatus
 
 ---
+
+## TaskItem
 
 ::: pydantask.models.TaskItem
 

@@ -46,9 +46,9 @@ from pydantask.prompts.prompts import (
     CRITIC_SYS_PROMPT,
     PRODUCER_SYS_PROMPT,
     RESEARCH_AGENT_SYS_PROMPT,
-    SUPERVISOR_SYS_PROMPT,
     SUPERVISOR_INPUT_PROMPT,
     WORKER_AGENT_SYS_PROMPT,
+    DYNAMIC_SUPERVISOR_SYS_PROMPT,
 )
 from pydantask.models import (
     RuntimeState,
@@ -98,6 +98,7 @@ class DeepAgent:
         trace: bool = False,
         # default output type for the producer agent, can be set to a default type or custom pydantic model for better structure and validation of final output
         output_type: Type = TaskResult,
+        planning_mode: str = "dynamic",  # "static" | "dynamic"
     ):
         """
         Create DeepAgent instance.
@@ -156,18 +157,20 @@ class DeepAgent:
             end_strategy="exhaustive",
         )
 
-        self._supervisor_agent = supervisor_agent or self._create_agent_from_spec(
-            agent_spec=SupervisorSpec(),
-            name="_default_Supervisor_Agent",
+        self._supervisor_agent = supervisor_agent or Agent(
+            model=self._retry_model,
+            name="_dynamic_Supervisor_Agent",
+            system_prompt=DYNAMIC_SUPERVISOR_SYS_PROMPT,
+            output_type=SupervisorDecision,
+            deps_type=RuntimeState,
             tools=[
                 self.update_task_status,
+                self.add_task,
                 get_current_datetime,
                 think_tool,
                 self.view_qa_report,
             ],
-            output_type=SupervisorDecision,
-            deps_type=RuntimeState,
-            model=self._retry_model,
+            end_strategy="exhaustive",
         )
 
         self._producer_agent = self._create_agent_from_spec(
@@ -207,10 +210,6 @@ class DeepAgent:
                 tavily_search_tool(api_key),
                 think_tool,
                 append_scratch_note,
-                # File-system and context tools; prefer save_task_context for reports
-                write_to_file_system,
-                read_from_file_system,
-                save_task_context,
                 read_task_context,
                 get_current_datetime,
                 list_documents,
@@ -220,7 +219,9 @@ class DeepAgent:
             end_strategy="exhaustive",
         )
 
-        self.agent_registry = self._setup_default_sub_agents(sub_agents=sub_agents)
+        self.agent_registry = self._setup_default_sub_agents(
+            additonal_capabilities=sub_agents
+        )
 
     def _create_retrying_client(self):
         """Create a client with smart retry handling for multiple error types.
@@ -252,14 +253,14 @@ class DeepAgent:
         return AsyncClient(transport=transport)
 
     def _setup_default_sub_agents(
-        self, sub_agents: Union[None, list[CapabilityDescription]] = None
-    ):
+        self, additonal_capabilities: Union[None, list[CapabilityDescription]] = None
+    ) -> Dict:
         """
         Setup default sub agents along with any additional sub atgents that may be provided by the caller.
         Default suba gents available are producer, critic, researcher, and file_system.
 
         Args:
-            tools (Union[None, list[ToolDescription]], optional): Any custom tools to include in the agent. Defaults to None.
+            sub_agents (Union[None, list[CapabilityDescription]], optional): Any custom tools / agents to include. Defaults to None.
 
         Returns:
             dict[str, ToolDescription]: Mapping of toolId's to the tool description and function
@@ -273,9 +274,9 @@ class DeepAgent:
             output_type=TaskResult,
             tools=[
                 # FS & context tools for canonical final reports
-                write_to_file_system,
-                read_from_file_system,
-                save_task_context,
+                # write_to_file_system,
+                # read_from_file_system,
+                # save_task_context,
                 read_task_context,
                 # Plan / history inspection
                 list_documents,
@@ -328,42 +329,11 @@ class DeepAgent:
             tool_func=general_worker_agent,
         )
 
-        # file_system_agent = Agent(
-        #     model=self._retry_model,
-        #     name="_default_File_System_Agent",
-        #     system_prompt="You have access to a file system to use for tasks that need to be completed. \
-        #     Use the file system to store long term information. \
-        #     You may also write output for the user to the file system. \
-        #     You also have an addtional think tool that you can use to reflect on your work and plan next steps.",
-        #     tools=[write_to_file_system, read_from_file_system, think_tool],
-        #     deps_type=RuntimeState,
-        #     output_type=TaskItem,
-        # )
-
-        # file_system = CapabilityDescription(
-        #     name="file_system_agent",
-        #     description="Agent to interact with the file system of host machine. Should be used to store information that needs to persist for further use or context.",
-        #     tool_func=file_system_agent,
-        # )
-
-        # ask_user_agent = Agent(
-        #     self.model,
-        #     system_prompt="You ask the user clarifying questions when you need more information to complete a task. Once you have the information you need, you provide it back to the supervisor agent as a summary for it to then reason over. Do not return a question in that summary since the user will not see it. When done, set the status to REVIEW. If you runinto errors set the status to ERROR",
-        #     tools=[ask_user, think_tool],
-        #     output_type=TaskResult,
-        # )
-
-        # ask_user_tool = ToolDescription(
-        #     name="ask_user_agent",
-        #     description="Tool to ask the user a question and get input back from them.",
-        #     tool_func=ask_user_agent,
-        # )
-
         _sub_agents_list = [producer, researcher]
 
         # if additional sub agents been supplied then add those to the registry
-        if sub_agents:
-            _sub_agents_list.extend(sub_agents)
+        if additonal_capabilities:
+            _sub_agents_list.extend(additonal_capabilities)
 
         _sub_agent_registry = {
             sub_agent.name: sub_agent for sub_agent in _sub_agents_list
@@ -398,14 +368,15 @@ class DeepAgent:
 
         return agent
 
-    def _initialize_runtime_state(
-        self, plan: Dict[int, TaskItem], objective: str, registry: dict
-    ) -> RuntimeState:
+    def _initialize_runtime_state(self, objective: str, registry: dict) -> RuntimeState:
         # Logic to initialize and manage the runtime state
-        return RuntimeState(plan=plan, objective=objective, agent_registry=registry)
+        return RuntimeState(
+            objective=objective, agent_registry=registry, next_task_id=1
+        )
 
     def _format_capabilities(self) -> str:
-        """Return a human-readable list of available sub-agent capabilities for the planner.
+        """
+        Return a human-readable list of available sub-agent capabilities for the planner.
 
         Each line is of the form:
         - capability_name: description
@@ -417,6 +388,8 @@ class DeepAgent:
         return "\n".join(lines)
 
     def _build_producer_prompt(self, state: RuntimeState) -> str:
+        """Build a context prompt for the producer agent that summarizes all completed tasks, their results, and sources."""
+
         completed = [t for t in state.plan.values() if t.status == TaskStatus.COMPLETED]
         lines = []
         for t in sorted(completed, key=lambda x: x.task_id):
@@ -427,20 +400,20 @@ class DeepAgent:
             paths = getattr(result, "output_paths", []) if result else []
             sources = getattr(result, "sources", []) if result else []
 
-        src_lines = []
-        for s in sources or []:
-            src_lines.append(
-                f"    - [{s.id}] title={getattr(s, 'title', None)} "
-                f"url={getattr(s, 'url', None)} path={getattr(s, 'path', None)}"
+            src_lines = []
+            for s in sources or []:
+                src_lines.append(
+                    f"    - [{s.id}] title={getattr(s, 'title', None)} "
+                    f"url={getattr(s, 'url', None)} path={getattr(s, 'path', None)}"
+                )
+            src_block = "\n".join(src_lines) or "    - <no sources>"
+            lines.append(
+                f"- Task {t.task_id} ({t.capability})\n"
+                f"  objective: {t.sub_task_objective}\n"
+                f"  summary: {summary}\n"
+                f"  report_paths: {paths}\n"
+                f"  sources: {src_block}"
             )
-        src_block = "\n".join(src_lines) or "    - <no sources>"
-        lines.append(
-            f"- Task {t.task_id} ({t.capability})\n"
-            f"  objective: {t.sub_task_objective}\n"
-            f"  summary: {summary}\n"
-            f"  report_paths: {paths}\n"
-            f"  sources: {src_block}"
-        )
         completed_display = "\n".join(lines) or "<no completed tasks>"
 
         return f"""
@@ -450,8 +423,8 @@ class DeepAgent:
     Completed sub-tasks (source material):
     {completed_display}
 
-    Using only these results (and any files they point to), synthesize the final answer
-    to the overall objective. Do not perform new research.
+    Using only these results (and any files they point to), synthesize the final output according
+    to the overall objective. Do not perform new research or work.
     """
 
     def _format_plan(self, plan: Plan):
@@ -469,6 +442,8 @@ class DeepAgent:
     def _format_supervisor_input_prompt(self, ctx: RuntimeState) -> str:
         """Function to format input prompt to the supervisor agent."""
         # Pre-format the plan to ensure the LLM sees a clean "Status Board"
+        capability_display = self._format_capabilities()
+
         plan_display_lines = []
         for t in ctx.plan.values():
             line = (
@@ -493,17 +468,13 @@ class DeepAgent:
             plan_display_lines.append(line)
 
         plan_display = "\n".join(plan_display_lines)
-        # Simplify the registry so the Supervisor sees "Tools" not "Agent Objects"
-        agent_display = "\n".join(
-            [
-                f"- {uuid}: {info.description}"
-                for uuid, info in ctx.agent_registry.items()
-            ]
-        )
+
         return SUPERVISOR_INPUT_PROMPT.format(
             objective=ctx.objective,
             plan_display=plan_display,
-            agent_display=agent_display,
+            agent_display=capability_display,
+            now=datetime.now(),
+            current_year=datetime.now().year,
         )
 
     def _format_critic_input_prompt(self, task_result: TaskResult, ctx: RuntimeState):
@@ -526,6 +497,37 @@ class DeepAgent:
             """
         return _prompt
 
+    async def add_task(
+        self,
+        ctx: RunContext[RuntimeState],
+        sub_task_objective: str,
+        capability: str,
+        dependencies: list[int] | None = None,
+        metadata: dict | None = None,
+    ) -> int:
+        """
+        Tool: Add Task
+        Description: Add a new TaskItem to the current DAG if more work is needed to complete the objective.
+
+        Must add any `sub_task_dependencies` that may be needed to complete the new task.
+        """
+        plan = ctx.deps.plan
+        new_id = ctx.deps.next_task_id
+        ctx.deps.next_task_id += 1
+
+        task = TaskItem(
+            task_id=new_id,
+            overall_objective=ctx.deps.objective,
+            sub_task_objective=sub_task_objective,
+            capability=capability,
+            sub_task_dependencies=dependencies or [],
+            metadata=metadata or {},
+            status=TaskStatus.READY,
+            # ... any other required fields / defaults
+        )
+        plan[new_id] = task
+        return new_id
+
     @observe
     async def run(self):
         # Start the supervisor agent to manage sub-agents
@@ -533,36 +535,35 @@ class DeepAgent:
         now = await get_current_datetime()
         current_year = datetime.now().year
         capabilities_display = self._format_capabilities()
-        planner_prompt = f"""
-        Objective: {self.prompt}
+        # planner_prompt = f"""
+        # Objective: {self.prompt}
 
-        AVAILABLE CAPABILITIES:
-        {capabilities_display}
-        
-        Example of what capabilities could be used for:
-            -   "research_agent" → needs web/external info.
-            -   "worker_agent" → general reasoning/transformation on existing info.
-            -   "producer_agent" → only final answer step.
-        
-        
-        Current Datetime (MUST be used verbatim if time is needed as context): {now}
-        CURRENT_YEAR (authoritative numeric year): {current_year}
-        
-        Come up with a plan for the above objective using the available capabilities.
-        Always include the above datetime in the plan metadata and any date-sensitive instructions.
-        Use CURRENT_YEAR exactly as provided when resolving any relative time expressions.
-        """
+        # AVAILABLE CAPABILITIES:
+        # {capabilities_display}
 
-        agent_plan = await self._planner_agent.run(planner_prompt)
+        # Example of what capabilities could be used for:
+        #     -   "research_agent" → needs web/external info.
+        #     -   "worker_agent" → general reasoning/transformation on existing info.
+        #     -   "producer_agent" → generate final output or results.
 
-        agent_plan_map = {v.task_id: v for v in agent_plan.output.tasks}
+        # Current Datetime (MUST be used verbatim if time is needed as context): {now}
+        # CURRENT_YEAR (authoritative numeric year): {current_year}
 
-        logger.info("--- Generated Plan ---")
-        logger.info(self._format_plan(agent_plan.output))
-        logger.info("--- Generated Plan ---")
-        # now save the plan to the agent state
+        # Come up with a plan for the above objective using the available capabilities.
+        # Always include the above datetime in the plan metadata and any date-sensitive instructions.
+        # Use CURRENT_YEAR exactly as provided when resolving any relative time expressions.
+        # """
+
+        # agent_plan = await self._planner_agent.run(planner_prompt)
+
+        # agent_plan_map = {v.task_id: v for v in agent_plan.output.tasks}
+
+        # logger.info("--- Generated Plan ---\n")
+        # logger.info(self._format_plan(agent_plan.output))
+        # logger.info("--- Generated Plan ---\n")
+
         runtime_state = self._initialize_runtime_state(
-            plan=agent_plan_map, objective=self.prompt, registry=self.agent_registry
+            objective=self.prompt, registry=self.agent_registry
         )
 
         step_count = 0
@@ -625,6 +626,7 @@ class DeepAgent:
             runtime_state.runtime_steps += 1
 
             step_count += 1
+
         return runtime_state
 
     def _dependencies_satisfied(self, step: TaskItem, ctx: RuntimeState) -> bool:
