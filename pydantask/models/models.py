@@ -335,7 +335,8 @@ class RuntimeState(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     plan: Dict[int, TaskItem] = Field(
-        description="The plan that was generated to solve the objective."
+        description="The plan that is generated to solve the users objective.",
+        default_factory=dict,
     )
     objective: str = Field(description="The overall objective to solve for.")
     agent_registry: Dict[str, Any] = Field(
@@ -345,6 +346,9 @@ class RuntimeState(BaseModel):
     )
     completed_steps: set[int] = Field(
         description="Steps from the plan that have been completed.", default_factory=set
+    )
+    next_task_id: int = Field(
+        description="The next valid id value that could be added to a running plan"
     )
     runtime_steps: int = 0
     tokens_used: int = 0

@@ -46,9 +46,9 @@ from pydantask.prompts.prompts import (
     CRITIC_SYS_PROMPT,
     PRODUCER_SYS_PROMPT,
     RESEARCH_AGENT_SYS_PROMPT,
-    SUPERVISOR_SYS_PROMPT,
     SUPERVISOR_INPUT_PROMPT,
     WORKER_AGENT_SYS_PROMPT,
+    DYNAMIC_SUPERVISOR_SYS_PROMPT,
 )
 from pydantask.models import (
     RuntimeState,
@@ -157,19 +157,34 @@ class DeepAgent:
             end_strategy="exhaustive",
         )
 
-        self._supervisor_agent = supervisor_agent or self._create_agent_from_spec(
-            agent_spec=SupervisorSpec(),
-            name="_default_Supervisor_Agent",
+        # self._supervisor_agent = supervisor_agent or self._create_agent_from_spec(
+        #     agent_spec=SupervisorSpec(),
+        #     name="_dynammic_Supervisor_Agent",
+        #     tools=[
+        #         self.update_task_status,
+        #         get_current_datetime,
+        #         think_tool,
+        #         self.view_qa_report,
+        #         self.add_task,
+        #     ],
+        #     output_type=SupervisorDecision,
+        #     deps_type=RuntimeState,
+        #     model=self._retry_model,
+        # )
+        self._supervisor_agent = supervisor_agent or Agent(
+            model=self._retry_model,
+            name="_dynamic_Supervisor_Agent",
+            system_prompt=DYNAMIC_SUPERVISOR_SYS_PROMPT,
+            output_type=SupervisorDecision,
+            deps_type=RuntimeState,
             tools=[
                 self.update_task_status,
+                self.add_task,
                 get_current_datetime,
                 think_tool,
                 self.view_qa_report,
-                self.add_task,
             ],
-            output_type=SupervisorDecision,
-            deps_type=RuntimeState,
-            model=self._retry_model,
+            end_strategy="exhaustive",
         )
 
         self._producer_agent = self._create_agent_from_spec(
@@ -218,7 +233,9 @@ class DeepAgent:
             end_strategy="exhaustive",
         )
 
-        self.agent_registry = self._setup_default_sub_agents(sub_agents=sub_agents)
+        self.agent_registry = self._setup_default_sub_agents(
+            additonal_capabilities=sub_agents
+        )
 
     def _create_retrying_client(self):
         """Create a client with smart retry handling for multiple error types.
@@ -365,11 +382,9 @@ class DeepAgent:
 
         return agent
 
-    def _initialize_runtime_state(
-        self, plan: Dict[int, TaskItem], objective: str, registry: dict
-    ) -> RuntimeState:
+    def _initialize_runtime_state(self, objective: str, registry: dict) -> RuntimeState:
         # Logic to initialize and manage the runtime state
-        return RuntimeState(plan=plan, objective=objective, agent_registry=registry)
+        return RuntimeState(objective=objective, agent_registry=registry, next_id_val=1)
 
     def _format_capabilities(self) -> str:
         """
@@ -386,6 +401,7 @@ class DeepAgent:
 
     def _build_producer_prompt(self, state: RuntimeState) -> str:
         """Build a context prompt for the producer agent that summarizes all completed tasks, their results, and sources."""
+
         completed = [t for t in state.plan.values() if t.status == TaskStatus.COMPLETED]
         lines = []
         for t in sorted(completed, key=lambda x: x.task_id):
@@ -438,6 +454,7 @@ class DeepAgent:
     def _format_supervisor_input_prompt(self, ctx: RuntimeState) -> str:
         """Function to format input prompt to the supervisor agent."""
         # Pre-format the plan to ensure the LLM sees a clean "Status Board"
+        capability_display = self._format_capabilities()
 
         plan_display_lines = []
         for t in ctx.plan.values():
@@ -463,17 +480,13 @@ class DeepAgent:
             plan_display_lines.append(line)
 
         plan_display = "\n".join(plan_display_lines)
-        # Simplify the registry so the Supervisor sees "Tools" not "Agent Objects"
-        agent_display = "\n".join(
-            [
-                f"- {uuid}: {info.description}"
-                for uuid, info in ctx.agent_registry.items()
-            ]
-        )
+
         return SUPERVISOR_INPUT_PROMPT.format(
             objective=ctx.objective,
             plan_display=plan_display,
-            agent_display=agent_display,
+            agent_display=capability_display,
+            now=datetime.now(),
+            current_year=datetime.now().year,
         )
 
     def _format_critic_input_prompt(self, task_result: TaskResult, ctx: RuntimeState):
@@ -511,7 +524,8 @@ class DeepAgent:
         Must add any `sub_task_dependencies` that may be needed to complete the new task.
         """
         plan = ctx.deps.plan
-        new_id = max(plan.keys() or [0]) + 1
+        new_id = ctx.deps.new_task_id
+        ctx.deps.next_task_id += 1
 
         task = TaskItem(
             task_id=new_id,
@@ -559,10 +573,9 @@ class DeepAgent:
         # logger.info(self._format_plan(agent_plan.output))
         # logger.info("--- Generated Plan ---\n")
 
-        # # now save the plan to the agent state
-        # runtime_state = self._initialize_runtime_state(
-        #     plan=agent_plan_map, objective=self.prompt, registry=self.agent_registry
-        # )
+        runtime_state = self._initialize_runtime_state(
+            objective=self.prompt, registry=self.agent_registry
+        )
 
         step_count = 0
         stop_execution = False

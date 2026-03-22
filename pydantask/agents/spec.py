@@ -5,8 +5,8 @@ from pydantic_ai import RunContext
 from pydantask.models import RuntimeState
 from pydantask.prompts import (
     RESEARCH_AGENT_SYS_PROMPT,
-    SUPERVISOR_SYS_PROMPT,
     SUPERVISOR_INPUT_PROMPT,
+    DYNAMIC_SUPERVISOR_SYS_PROMPT,
 )
 from pydantask.prompts.prompts import PRODUCER_SYS_PROMPT
 
@@ -20,7 +20,7 @@ class BaseAgentSpec(ABC):
 class SupervisorSpec(BaseAgentSpec):
     def system_prompt(self, ctx: RunContext[RuntimeState]) -> str:
 
-        return SUPERVISOR_SYS_PROMPT
+        return DYNAMIC_SUPERVISOR_SYS_PROMPT
 
     def format_input_prompt(self, ctx: RunContext[RuntimeState]) -> str:
         # Pre-format the plan to ensure the LLM sees a clean "Status Board"

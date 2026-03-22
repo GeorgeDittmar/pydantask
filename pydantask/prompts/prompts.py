@@ -1,4 +1,4 @@
-PLANNER_STATIC_SYS_PROMPT = """
+PLANNER_SYS_PROMPT = """
 ## Expert Strategic Planner
 
 You are an expert planner responsible for decomposing large objectives into actionable sub-tasks. 
@@ -214,9 +214,32 @@ SUPERVISOR_INPUT_PROMPT = """
 ### AVAILABLE SUB-AGENT CAPABILITIES
 {agent_display}
 
-Think step by step how you would execute the plan given the current state of the mission control board.
+Current Datetime (MUST be used verbatim if time is needed as context to a task): {now}
+CURRENT_YEAR (authoritative numeric year): {current_year}
+Always include the above datetime in the plan metadata and any date-sensitive instructions.
+Use CURRENT_YEAR exactly as provided when resolving any relative time expressions.
+
+Example of what capabilities could be used for:
+    -   "research_agent" → needs web/external info.
+    -   "worker_agent" → general reasoning/transformation on existing info.
+    -   "producer_agent" → generate final output or results.
+
+Think step by step how you would solve the overall mission objective given the current state of the mission control board.
 
 ---"""
+
+# Example of what capabilities could be used for:
+#     -   "research_agent" → needs web/external info.
+#     -   "worker_agent" → general reasoning/transformation on existing info.
+#     -   "producer_agent" → generate final output or results.
+
+# Current Datetime (MUST be used verbatim if time is needed as context): {now}
+# CURRENT_YEAR (authoritative numeric year): {current_year}
+
+# Come up with a plan for the above objective using the available capabilities.
+# Always include the above datetime in the plan metadata and any date-sensitive instructions.
+# Use CURRENT_YEAR exactly as provided when resolving any relative time expressions.
+# """
 
 WORKER_AGENT_SYS_PROMPT = """
 ### ROLE
