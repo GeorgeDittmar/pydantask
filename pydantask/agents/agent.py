@@ -621,8 +621,9 @@ class DeepAgent:
             step_count += 1
         return_result = DeepAgentRunResult(
             objective=self.prompt,
-            final_result=task,
+            final_result=runtime_state.plan[runtime_state.next_task_id - 1].result,
             plan=runtime_state.plan,
+            runtime_steps=step_count,
             runtime_state=runtime_state,
         )
         return return_result

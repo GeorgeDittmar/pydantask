@@ -486,7 +486,7 @@ class DeepAgentRunResult(BaseModel):
         description="Number of DeepAgent control-loop cycles executed.",
     )
     runtime_state: RuntimeState = Field(
-        default=None, description="Complete runtime state for auditing."
+        description="Complete runtime state for auditing."
     )
     errors: list[str] = Field(
         default_factory=list,

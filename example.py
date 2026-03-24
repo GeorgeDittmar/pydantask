@@ -18,6 +18,6 @@ result = asyncio.run(da.run())
 
 from pprint import pprint
 
-pprint(result.model_dump_json(indent=2))
+pprint(result.model_dump())
 
-print(result.final_result)
+print(result.runtime_state.plan)
