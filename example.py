@@ -18,6 +18,10 @@ result = asyncio.run(da.run())
 
 from pprint import pprint
 
-pprint(result.model_dump())
+# pprint(result.model_dump())
+# Write JSON data to a file
+import json
 
-print(result.runtime_state.plan)
+with open("output.json", "w") as json_file:
+    json.dump(result.model_dump_json(), json_file, indent=4)
+pprint(result.final_result.summary)

@@ -211,7 +211,6 @@ class DeepAgent:
                 tavily_search_tool(api_key),
                 think_tool,
                 append_scratch_note,
-                read_task_context,
                 get_current_datetime,
                 list_documents,
             ],
@@ -303,10 +302,6 @@ class DeepAgent:
             deps_type=RuntimeState,
             output_type=TaskResult,
             tools=[
-                write_to_file_system,
-                read_from_file_system,
-                save_task_context,
-                read_task_context,
                 list_documents,
                 list_completed_tasks,
                 get_task_result,
@@ -384,45 +379,47 @@ class DeepAgent:
             lines.append(f"- {name}: {description}")
         return "\n".join(lines)
 
-    def _build_producer_prompt(self, state: RuntimeState) -> str:
-        """Build a context prompt for the producer agent that summarizes all completed tasks, their results, and sources."""
+    # def _build_producer_prompt(self, state: RuntimeState) -> str:
+    #     """Build a context prompt for the producer agent that summarizes all completed tasks, their results, and sources."""
 
-        completed = [t for t in state.plan.values() if t.status == TaskStatus.COMPLETED]
-        lines = []
-        for t in sorted(completed, key=lambda x: x.task_id):
-            result = t.result
-            summary = (
-                getattr(result, "summary", str(result)) if result else "<no result>"
-            )
-            paths = getattr(result, "output_paths", []) if result else []
-            sources = getattr(result, "sources", []) if result else []
+    #     completed = [t for t in state.plan.values() if t.status == TaskStatus.COMPLETED]
+    #     lines = []
+    #     for t in sorted(completed, key=lambda x: x.task_id):
+    #         result = t.result
+    #         summary = (
+    #             getattr(result, "summary", str(result)) if result else "<no result>"
+    #         )
+    #         paths = getattr(result, "output_paths", []) if result else []
+    #         sources = getattr(result, "sources", []) if result else []
 
-            src_lines = []
-            for s in sources or []:
-                src_lines.append(
-                    f"    - [{s.id}] title={getattr(s, 'title', None)} "
-                    f"url={getattr(s, 'url', None)} path={getattr(s, 'path', None)}"
-                )
-            src_block = "\n".join(src_lines) or "    - <no sources>"
-            lines.append(
-                f"- Task id: {t.task_id} ({t.capability})\n"
-                f"  objective: {t.sub_task_objective}\n"
-                # f"  summary: {summary}\n"
-                # f"  report_paths: {paths}\n"
-                # f"  sources: {src_block}"
-            )
-        completed_display = "\n".join(lines) or "<no completed tasks>"
+    #         src_lines = []
+    #         for s in sources or []:
+    #             src_lines.append(
+    #                 f"    - [{s.id}] title={getattr(s, 'title', None)} "
+    #                 f"url={getattr(s, 'url', None)} path={getattr(s, 'path', None)}"
+    #             )
+    #         src_block = "\n".join(src_lines) or "    - <no sources>"
+    #         lines.append(
+    #             f"- Task id: {t.task_id} ({t.capability})\n"
+    #             f"  objective: {t.sub_task_objective}\n"
+    #             # f"  summary: {summary}\n"
+    #             # f"  report_paths: {paths}\n"
+    #             # f"  sources: {src_block}"
+    #         )
+    #     completed_display = "\n".join(lines) or "<no completed tasks>"
 
-        return f"""
-    Overall objective:
-    {state.objective}
+    #     #     return f"""
+    #     # You are now the final synthesizer of an answer
+    #     # Overall objective:
+    #     # {state.objective}
 
-    Completed sub-tasks (source material):
-    {completed_display}
+    #     # Completed sub-tasks (source material):
+    #     # {completed_display}
 
-    Using only these results (and any files they point to), synthesize the final output according
-    to the overall objective. Do not perform new research or work.
-    """
+    #     # Using only these results (and any files they point to), synthesize the final output according
+    #     # to the overall objective. Do not perform new research or work.
+    #     # """
+    #     return ""
 
     def _format_plan(self, plan: Plan):
         lines = []
@@ -525,7 +522,7 @@ class DeepAgent:
         return new_id
 
     @observe
-    async def run(self):
+    async def run(self) -> DeepAgentRunResult:
         # Start the supervisor agent to manage sub-agents
         # state = RuntimeState(goal=self.prompt)
         # planner_prompt = f"""
@@ -621,9 +618,8 @@ class DeepAgent:
             step_count += 1
         return_result = DeepAgentRunResult(
             objective=self.prompt,
-            final_result=runtime_state.plan[runtime_state.next_task_id - 1].result,
+            final_result=task.result,
             plan=runtime_state.plan,
-            runtime_steps=step_count,
             runtime_state=runtime_state,
         )
         return return_result
@@ -714,15 +710,20 @@ class DeepAgent:
         if step.capability == "producer_agent":
             # Build a synthesis-oriented prompt that summarizes all completed tasks,
             # including their summaries, report_paths, and sources.
-            producer_context = self._build_producer_prompt(runtime_state)
+            # producer_context = self._build_producer_prompt(runtime_state)
 
             user_prompt = f"""
-                        {producer_context}
+            Overall objective:
+            {self.prompt}
 
-                        You are now executing the FINAL synthesis TaskItem:
-
-                        {step.model_dump_json(indent=2)}
-                        """
+            You are the final synthesis agent.
+            - First, call `list_completed_tasks` to see all completed upstream tasks.
+            - For each task that is relevant to the objective (especially research tasks), call `get_task_result(task_id=...)`.
+            - If a TaskResult includes `output_paths`, load those reports via `read_from_file_system` or `read_task_context`.
+            - THEN, write a single, coherent comparative analysis answering the objective.
+            - You MUST explicitly integrate evidence from ALL relevant completed tasks (e.g. Task 1 and Task 2 in this run).
+            - Do NOT call any research tools; you are only allowed to read existing TaskResults and their files.
+            """
 
             if _feedback_for_agent:
 

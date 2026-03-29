@@ -481,10 +481,6 @@ class DeepAgentRunResult(BaseModel):
         ...,
         description="The final plan state (all TaskItems after execution).",
     )
-    runtime_steps: int = Field(
-        ...,
-        description="Number of DeepAgent control-loop cycles executed.",
-    )
     runtime_state: RuntimeState = Field(
         description="Complete runtime state for auditing."
     )
