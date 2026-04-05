@@ -167,6 +167,8 @@ class DeepAgent:
             tools=[
                 self.update_task_status,
                 self.add_task,
+                self.cancel_task,
+                self.patch_task,
                 get_current_datetime,
                 think_tool,
                 self.view_qa_report,
@@ -178,15 +180,9 @@ class DeepAgent:
             agent_spec=ProducerSpec(),
             name="_default_Producer_Agent",
             tools=[
-                # Core FS and context tools
-                write_to_file_system,
-                read_from_file_system,
-                save_task_context,
-                read_task_context,
                 # Reasoning / time / plan-inspection tools
                 think_tool,
                 get_current_datetime,
-                list_documents,
                 list_completed_tasks,
                 get_task_result,
             ],
@@ -379,48 +375,6 @@ class DeepAgent:
             lines.append(f"- {name}: {description}")
         return "\n".join(lines)
 
-    # def _build_producer_prompt(self, state: RuntimeState) -> str:
-    #     """Build a context prompt for the producer agent that summarizes all completed tasks, their results, and sources."""
-
-    #     completed = [t for t in state.plan.values() if t.status == TaskStatus.COMPLETED]
-    #     lines = []
-    #     for t in sorted(completed, key=lambda x: x.task_id):
-    #         result = t.result
-    #         summary = (
-    #             getattr(result, "summary", str(result)) if result else "<no result>"
-    #         )
-    #         paths = getattr(result, "output_paths", []) if result else []
-    #         sources = getattr(result, "sources", []) if result else []
-
-    #         src_lines = []
-    #         for s in sources or []:
-    #             src_lines.append(
-    #                 f"    - [{s.id}] title={getattr(s, 'title', None)} "
-    #                 f"url={getattr(s, 'url', None)} path={getattr(s, 'path', None)}"
-    #             )
-    #         src_block = "\n".join(src_lines) or "    - <no sources>"
-    #         lines.append(
-    #             f"- Task id: {t.task_id} ({t.capability})\n"
-    #             f"  objective: {t.sub_task_objective}\n"
-    #             # f"  summary: {summary}\n"
-    #             # f"  report_paths: {paths}\n"
-    #             # f"  sources: {src_block}"
-    #         )
-    #     completed_display = "\n".join(lines) or "<no completed tasks>"
-
-    #     #     return f"""
-    #     # You are now the final synthesizer of an answer
-    #     # Overall objective:
-    #     # {state.objective}
-
-    #     # Completed sub-tasks (source material):
-    #     # {completed_display}
-
-    #     # Using only these results (and any files they point to), synthesize the final output according
-    #     # to the overall objective. Do not perform new research or work.
-    #     # """
-    #     return ""
-
     def _format_plan(self, plan: Plan):
         lines = []
         for task in plan.tasks:
@@ -520,37 +474,41 @@ class DeepAgent:
         )
         plan[new_id] = task
         return new_id
-
+    
+    async def cancel_task(
+            self, 
+            ctx: RunContext[RuntimeState], 
+            task_id: int, 
+            reason: str
+        ):
+        """
+        Tool: Cancel Task
+        Description: Use this to remove a task from the plan if it is no longer 
+        relevant or if a failure in an upstream dependency makes it impossible.
+        """
+        if task_id in ctx.deps.plan:
+            # Instead of deleting, mark as CANCELLED to keep history
+            ctx.deps.plan[task_id].status = TaskStatus.CANCELLED 
+            return f"Task {task_id} cancelled. Reason: {reason}"
+        return f"Error: Task {task_id} not found."
+    
+    async def patch_task(
+        self,
+        ctx: RunContext[RuntimeState],
+        task_id: int,
+        sub_task_objective: Optional[str] = None,
+        dependencies: Optional[List[int]] = None
+    ):
+        """Update an existing task's objective or its dependency requirements."""
+        task = ctx.deps.plan.get(task_id)
+        if not task: return "Task not found."
+        
+        if sub_task_objective: task.sub_task_objective = sub_task_objective
+        if dependencies is not None: task.sub_task_dependencies = dependencies
+        return f"Task {task_id} updated successfully."
+    
     @observe
     async def run(self) -> DeepAgentRunResult:
-        # Start the supervisor agent to manage sub-agents
-        # state = RuntimeState(goal=self.prompt)
-        # planner_prompt = f"""
-        # Objective: {self.prompt}
-
-        # AVAILABLE CAPABILITIES:
-        # {capabilities_display}
-
-        # Example of what capabilities could be used for:
-        #     -   "research_agent" → needs web/external info.
-        #     -   "worker_agent" → general reasoning/transformation on existing info.
-        #     -   "producer_agent" → generate final output or results.
-
-        # Current Datetime (MUST be used verbatim if time is needed as context): {now}
-        # CURRENT_YEAR (authoritative numeric year): {current_year}
-
-        # Come up with a plan for the above objective using the available capabilities.
-        # Always include the above datetime in the plan metadata and any date-sensitive instructions.
-        # Use CURRENT_YEAR exactly as provided when resolving any relative time expressions.
-        # """
-
-        # agent_plan = await self._planner_agent.run(planner_prompt)
-
-        # agent_plan_map = {v.task_id: v for v in agent_plan.output.tasks}
-
-        # logger.info("--- Generated Plan ---\n")
-        # logger.info(self._format_plan(agent_plan.output))
-        # logger.info("--- Generated Plan ---\n")
 
         runtime_state = self._initialize_runtime_state(
             objective=self.prompt, registry=self.agent_registry

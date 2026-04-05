@@ -20,6 +20,7 @@ class TaskStatus(Enum):
         FAILED: Evaluator/critic rejected the result.
         NEEDS_REVIEW: Needs evaluator/supervisor review.
         RERUN: Marked to be re-executed with revised instructions.
+        CANCELLED: Task that is no longer needed or relevant to complete the objective.
     """
 
     PENDING = "pending"  # Waiting for dependencies
@@ -30,6 +31,7 @@ class TaskStatus(Enum):
     FAILED = "failed"  # Evaluator rejected it
     NEEDS_REVIEW = "needs_review"  # Needs Evaluator review
     RERUN = "rerun"
+    CANCELLED = "cancelled"
 
 
 class TaskQAResult(BaseModel):
@@ -167,10 +169,10 @@ class TaskResult(BaseModel):
         default="",
         description=(
             "Concise, human-readable summary of what this task produced or concluded. "
-            "For research tasks this should summarize key findings; for other tasks "
-            "it should summarize what was done and the result."
         ),
     )
+
+    detailed_output: str = Field(default="", description="Detailed output for the task if required.")
 
     notes: List[str] = Field(
         default_factory=list,
@@ -230,7 +232,7 @@ class TaskItem(BaseModel):
         metadata: Optional free-form metadata for this task.
     """
 
-    task_id: int = Field(description="Unique task id. Should be an integer value.")
+    task_id: int = Field(description="Unique task id. Should be an integer value zero indexed.")
     overall_objective: str = Field(
         description="The overall objective this task is contributing to solving."
     )
@@ -245,10 +247,10 @@ class TaskItem(BaseModel):
         description="Which sub agent capability should attempt this task."
     )
     sub_task_dependencies: Optional[List[int]] = Field(
-        description="Put task dependency IDs here", default_factory=list
+        description="Put task_id dependency IDs here", default_factory=list
     )
     task_feedback: Optional[TaskQAResult] = None  # Store the Eval "critique" here
-    error_msg: Optional[str] = None  # Store any error messages here
+    error_msg: Optional[str] = Field(default=None, description="Any errors that happened during the running of this task. Only store the more recent error message.") # Store any error messages here
     iteration_history: List = Field(
         default_factory=list,
         description="Store any answer history if multiple attempts are made.",
