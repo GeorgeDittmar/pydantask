@@ -38,14 +38,14 @@ class TaskQAResult(BaseModel):
     """Evaluation result produced by the critic/QA agent for a single task.
 
     Attributes:
-        task_id: ID of the :class:`TaskItem` being evaluated.
-        reasoning: Detailed explanation of how the result was judged.
-        passed: True if the worker output sufficiently meets the sub-task objective.
+        task_id: ID of the :class:`TaskItem` being evaluated. It MUST match the task that is being evaluated.
+        reasoning: Detailed explanation of how the result was judged and why you scored the way you did.
+        passed: True if the worker output sufficiently meets the task objective. 
     """
 
-    task_id: int
-    reasoning: str
-    passed: bool = False
+    task_id: int = Field(default=-1, description="The task_id for the task being evaluated. Ex. Criticing task has task_id of 1, thus the task_id of this field will also be 1.")
+    reasoning: str = Field(default="", description="Detailed explanation of how the result was judged, why it god the score that it did and feedback for supervisor to attempt a retry.")
+    passed: bool = Field(default=False, description="Whether the task passed qa/critic. True if you found that the worker output sufficiently meets the task objective.")
 
 
 class KnowledgeRecord(BaseModel):
@@ -212,7 +212,7 @@ class TaskItem(BaseModel):
     through :class:`TaskStatus` states and accumulates results and feedback.
 
     Attributes:
-        task_id: Unique integer task identifier.
+        task_id: Unique integer task identifier. Integer value.
         overall_objective: The overall objective this task contributes to.
         sub_task_objective: The specific objective for this sub-task.
         status: Current lifecycle state of the task.
@@ -232,7 +232,7 @@ class TaskItem(BaseModel):
         metadata: Optional free-form metadata for this task.
     """
 
-    task_id: int = Field(description="Unique task id. Should be an integer value zero indexed.")
+    task_id: int = Field(description="Unique task id. Should be an integer")
     overall_objective: str = Field(
         description="The overall objective this task is contributing to solving."
     )
@@ -348,6 +348,7 @@ class RuntimeState(BaseModel):
         description="Agents available to perform tasks.",
         default_factory=dict,
         exclude=True,
+        
     )
     completed_steps: set[int] = Field(
         description="Steps from the plan that have been completed.", default_factory=set

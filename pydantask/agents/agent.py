@@ -32,6 +32,7 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.retries import AsyncTenacityTransport
 from pydantic_ai.common_tools.tavily import tavily_search_tool
+from pydantic_ai.usage import RunUsage
 from loguru import logger
 from pydantask.agents.spec import (
     BaseAgentSpec,
@@ -145,7 +146,7 @@ class DeepAgent:
             system_prompt=PLANNER_SYS_PROMPT,
             output_type=Plan,
             tools=[think_tool],
-            end_strategy="exhaustive",
+            # end_strategy="exhaustive",
         )
 
         self._critic_agent = critic_agent or Agent(
@@ -155,7 +156,7 @@ class DeepAgent:
             output_type=TaskQAResult,
             deps_type=RuntimeState,
             tools=[read_from_file_system, get_current_datetime, think_tool],
-            end_strategy="exhaustive",
+            # end_strategy="exhaustive",
         )
 
         self._supervisor_agent = supervisor_agent or Agent(
@@ -212,7 +213,7 @@ class DeepAgent:
             ],
             deps_type=RuntimeState,
             output_type=TaskResult,
-            end_strategy="exhaustive",
+            # end_strategy="exhaustive",
         )
 
         self.agent_registry = self._setup_default_sub_agents(
@@ -567,6 +568,18 @@ class DeepAgent:
                 # deterministic transition based on critic
                 self.handle_critic_result(task, qa_response)
 
+                # If the task result was produced via tools that return JSON (like write_to_file_system),
+                # extract the written files to populate the task's output_paths.
+                if hasattr(task_result, 'result') and isinstance(task_result.result, str):
+                    try:
+                        import json
+                        tool_output = json.loads(task_result.result)
+                        if isinstance(tool_output, dict) and "written_files" in tool_output:
+                            if task.result:
+                                task.result.output_paths.extend(tool_output["written_files"])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
                 # if qa_response.do
                 # add the qa report to the task result for the supervisor to review
                 # runtime_state.plan[task_result.task_id].task_feedback = qa_response
@@ -576,7 +589,7 @@ class DeepAgent:
             step_count += 1
         return_result = DeepAgentRunResult(
             objective=self.prompt,
-            final_result=task.result,
+            final_result=task.result if 'task' in locals() else None,
             plan=runtime_state.plan,
             runtime_state=runtime_state,
         )
@@ -657,7 +670,7 @@ class DeepAgent:
 
     @retry(wait=wait_exponential_jitter(), reraise=True, stop=stop_after_attempt(3))
     async def execute(
-        self, sub_agent, step: TaskItem, runtime_state: RuntimeState
+        self, sub_agent: Agent, step: TaskItem, runtime_state: RuntimeState
     ) -> TaskItem:
         """Helper to run an agent and capture its output into the step object."""
 
@@ -687,7 +700,7 @@ class DeepAgent:
 
                 user_prompt += f"""
 
-                    Supervisor feedback / additional insturctions for this execution:
+                    Supervisor feedback / additional instructions for this execution:
                     
                     {_feedback_for_agent}
                     """

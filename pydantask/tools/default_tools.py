@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from pydantic_ai import Agent, RunContext
 from pathlib import Path
 
-from pydantask.models import RuntimeState, TaskStatus
+from pydantask.models import RuntimeState
 
 BASE_DIR = Path(__file__).parent.resolve()  # Directory where this script is
 DEFAULT_DIR = BASE_DIR / "tmp_files"  # TODO: make this configurable
@@ -18,22 +18,7 @@ async def ask_user(ctx: RunContext[RuntimeState], question_for_user: str) -> str
     """Prompt the user for input. This is a synchronous blocking call."""
     return input(f"{question_for_user}: ")
 
-async def cancel_task(
-    self, 
-    ctx: RunContext[RuntimeState], 
-    task_id: int, 
-    reason: str
-):
-    """
-    Tool: Cancel Task
-    Description: Use this to remove a task from the plan if it is no longer 
-    relevant or if a failure in an upstream dependency makes it impossible.
-    """
-    if task_id in ctx.deps.plan:
-        # Instead of deleting, mark as CANCELLED to keep history
-        ctx.deps.plan[task_id].status = TaskStatus.CANCELLED 
-        return f"Task {task_id} cancelled. Reason: {reason}"
-    return f"Error: Task {task_id} not found."
+
 
 
 async def think_tool(reflection: str) -> str:
