@@ -146,7 +146,7 @@ class DeepAgent:
             system_prompt=PLANNER_SYS_PROMPT,
             output_type=Plan,
             tools=[think_tool],
-            # end_strategy="exhaustive",
+            end_strategy="exhaustive",
         )
 
         self._critic_agent = critic_agent or Agent(
