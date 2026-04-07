@@ -475,39 +475,39 @@ class DeepAgent:
         )
         plan[new_id] = task
         return new_id
-    
+
     async def cancel_task(
-            self, 
-            ctx: RunContext[RuntimeState], 
-            task_id: int, 
-            reason: str
-        ):
+        self, ctx: RunContext[RuntimeState], task_id: int, reason: str
+    ):
         """
         Tool: Cancel Task
-        Description: Use this to remove a task from the plan if it is no longer 
+        Description: Use this to remove a task from the plan if it is no longer
         relevant or if a failure in an upstream dependency makes it impossible.
         """
         if task_id in ctx.deps.plan:
             # Instead of deleting, mark as CANCELLED to keep history
-            ctx.deps.plan[task_id].status = TaskStatus.CANCELLED 
+            ctx.deps.plan[task_id].status = TaskStatus.CANCELLED
             return f"Task {task_id} cancelled. Reason: {reason}"
         return f"Error: Task {task_id} not found."
-    
+
     async def patch_task(
         self,
         ctx: RunContext[RuntimeState],
         task_id: int,
         sub_task_objective: Optional[str] = None,
-        dependencies: Optional[List[int]] = None
+        dependencies: Optional[List[int]] = None,
     ):
         """Update an existing task's objective or its dependency requirements."""
         task = ctx.deps.plan.get(task_id)
-        if not task: return "Task not found."
-        
-        if sub_task_objective: task.sub_task_objective = sub_task_objective
-        if dependencies is not None: task.sub_task_dependencies = dependencies
+        if not task:
+            return "Task not found."
+
+        if sub_task_objective:
+            task.sub_task_objective = sub_task_objective
+        if dependencies is not None:
+            task.sub_task_dependencies = dependencies
         return f"Task {task_id} updated successfully."
-    
+
     @observe
     async def run(self) -> DeepAgentRunResult:
 
@@ -570,13 +570,21 @@ class DeepAgent:
 
                 # If the task result was produced via tools that return JSON (like write_to_file_system),
                 # extract the written files to populate the task's output_paths.
-                if hasattr(task_result, 'result') and isinstance(task_result.result, str):
+                if hasattr(task_result, "result") and isinstance(
+                    task_result.result, str
+                ):
                     try:
                         import json
+
                         tool_output = json.loads(task_result.result)
-                        if isinstance(tool_output, dict) and "written_files" in tool_output:
+                        if (
+                            isinstance(tool_output, dict)
+                            and "written_files" in tool_output
+                        ):
                             if task.result:
-                                task.result.output_paths.extend(tool_output["written_files"])
+                                task.result.output_paths.extend(
+                                    tool_output["written_files"]
+                                )
                     except (json.JSONDecodeError, TypeError):
                         pass
 
@@ -589,7 +597,7 @@ class DeepAgent:
             step_count += 1
         return_result = DeepAgentRunResult(
             objective=self.prompt,
-            final_result=task.result if 'task' in locals() else None,
+            final_result=task.result if "task" in locals() else None,
             plan=runtime_state.plan,
             runtime_state=runtime_state,
         )
