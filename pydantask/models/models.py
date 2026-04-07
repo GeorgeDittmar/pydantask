@@ -40,12 +40,21 @@ class TaskQAResult(BaseModel):
     Attributes:
         task_id: ID of the :class:`TaskItem` being evaluated. It MUST match the task that is being evaluated.
         reasoning: Detailed explanation of how the result was judged and why you scored the way you did.
-        passed: True if the worker output sufficiently meets the task objective. 
+        passed: True if the worker output sufficiently meets the task objective.
     """
 
-    task_id: int = Field(default=-1, description="The task_id for the task being evaluated. Ex. Criticing task has task_id of 1, thus the task_id of this field will also be 1.")
-    reasoning: str = Field(default="", description="Detailed explanation of how the result was judged, why it god the score that it did and feedback for supervisor to attempt a retry.")
-    passed: bool = Field(default=False, description="Whether the task passed qa/critic. True if you found that the worker output sufficiently meets the task objective.")
+    task_id: int = Field(
+        default=-1,
+        description="The task_id for the task being evaluated. Ex. Criticing task has task_id of 1, thus the task_id of this field will also be 1.",
+    )
+    reasoning: str = Field(
+        default="",
+        description="Detailed explanation of how the result was judged, why it god the score that it did and feedback for supervisor to attempt a retry.",
+    )
+    passed: bool = Field(
+        default=False,
+        description="Whether the task passed qa/critic. True if you found that the worker output sufficiently meets the task objective.",
+    )
 
 
 class KnowledgeRecord(BaseModel):
@@ -172,7 +181,9 @@ class TaskResult(BaseModel):
         ),
     )
 
-    detailed_output: str = Field(default="", description="Detailed output for the task if required.")
+    detailed_output: str = Field(
+        default="", description="Detailed output for the task if required."
+    )
 
     notes: List[str] = Field(
         default_factory=list,
@@ -250,7 +261,10 @@ class TaskItem(BaseModel):
         description="Put task_id dependency IDs here", default_factory=list
     )
     task_feedback: Optional[TaskQAResult] = None  # Store the Eval "critique" here
-    error_msg: Optional[str] = Field(default=None, description="Any errors that happened during the running of this task. Only store the more recent error message.") # Store any error messages here
+    error_msg: Optional[str] = Field(
+        default=None,
+        description="Any errors that happened during the running of this task. Only store the more recent error message.",
+    )  # Store any error messages here
     iteration_history: List = Field(
         default_factory=list,
         description="Store any answer history if multiple attempts are made.",
@@ -348,7 +362,6 @@ class RuntimeState(BaseModel):
         description="Agents available to perform tasks.",
         default_factory=dict,
         exclude=True,
-        
     )
     completed_steps: set[int] = Field(
         description="Steps from the plan that have been completed.", default_factory=set
