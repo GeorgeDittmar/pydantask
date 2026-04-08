@@ -32,7 +32,7 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.retries import AsyncTenacityTransport
 from pydantic_ai.common_tools.tavily import tavily_search_tool
-from pydantic_ai.usage import RunUsage
+from pydantic_ai.usage import RunUsage, UsageLimits
 from loguru import logger
 from pydantask.agents.spec import (
     BaseAgentSpec,
@@ -208,8 +208,7 @@ class DeepAgent:
                 tavily_search_tool(api_key),
                 think_tool,
                 append_scratch_note,
-                get_current_datetime,
-                list_documents,
+                get_current_datetime
             ],
             deps_type=RuntimeState,
             output_type=TaskResult,
@@ -744,6 +743,8 @@ class DeepAgent:
         result = await sub_agent.run(
             user_prompt,
             deps=runtime_state,
+            usage_limits=UsageLimits(tool_calls_limit=20)
+
         )
         step.result = result.output
         step.status = TaskStatus.NEEDS_REVIEW

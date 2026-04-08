@@ -151,8 +151,7 @@ class SourceRef(BaseModel):
 class TaskResult(BaseModel):
     """Canonical result type for any sub-task executed by DeepAgent.
 
-    Works well for research-style tasks (summary + artifacts + sources), but can
-    also be used for other task types that just need a concise summary.
+    TaskResult stores the output from any given task.
 
     Attributes:
         task_id: ID of the :class:`TaskItem` this result belongs to.
