@@ -208,7 +208,7 @@ class DeepAgent:
                 tavily_search_tool(api_key),
                 think_tool,
                 append_scratch_note,
-                get_current_datetime
+                get_current_datetime,
             ],
             deps_type=RuntimeState,
             output_type=TaskResult,
@@ -743,8 +743,7 @@ class DeepAgent:
         result = await sub_agent.run(
             user_prompt,
             deps=runtime_state,
-            usage_limits=UsageLimits(tool_calls_limit=20)
-
+            usage_limits=UsageLimits(tool_calls_limit=20),
         )
         step.result = result.output
         step.status = TaskStatus.NEEDS_REVIEW
