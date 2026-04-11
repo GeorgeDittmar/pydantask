@@ -1,4 +1,4 @@
-site_name: Pydantask Agent Framework
+site_name: Pydantask Agent Harness
 nav:
   - Home: index.md
   - Quickstart: quickstart.md
@@ -22,7 +22,7 @@ theme:
   name: material
   palette:
     - scheme: default        # light mode
-      primary: blue grey     # calm, professional neutral
+      primary: blue grey   # calm, professional neutral
       accent: teal           # clear but not loud accent
       toggle:
         icon: material/weather-night

@@ -1,9 +1,13 @@
 # Pydantask Deep Agent Harness
 
-![logo](imgs/pydantask.png)
+<!-- ![logo](imgs/pydantask_logo_v3.png) -->
+<center>
+<img src="imgs/pydantask_logo_v4.png" width="400" alt="Logo">
+</center>
+
+<br>
 
 Welcome to the **Pydantask Deep Agent Harness**. This library enables you to build modular, multi-agent workflows capable of complex reasoning, orchestration, and persistent context.
-
 
 Features:
 
