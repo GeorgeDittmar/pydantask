@@ -16,4 +16,4 @@ Features:
 - Extensible tool/agent registration
 - Built-in planning, research, synthesis, and more
 
-Start with the [Quickstart](quickstart.md).
+Start with the [Quickstart](quickstart.md) guide to see how easy it is to add a Deep Agent to your workflow!
