@@ -3,4 +3,5 @@ mkdocs-material
 mkdocstrings
 mkdocstrings[python]
 griffe-pydantic
+zensical
 -e .

@@ -7,12 +7,13 @@ from dotenv import load_dotenv, find_dotenv
 agent_registry = {}
 
 da = DeepAgent(
-    "return teh next number in the sequence 1,2,3,4,5, ",
+    # "return teh next number in the sequence 1,2,3,4,5, ",
+    "Could MAGA be considered a cult a personality around Trump similar to North Korea. Output your report as markdown.",
     # "Give me a detailed report on the history of the internet, including key milestones, influential figures, and its impact on society. The report should be well-structured with sections for each aspect of the topic, and include citations for all sources used in text and at the end.",
     # "Generate a detailed report on paranormal phenomena known as the ghost lights. Include historical accounts, scientific investigations, and cultural interpretations. The report should be well-structured with sections for each aspect of the topic, and include citations for all sources used in text and at the end.",
     # "Give me an analysis of current deep agent frameworks and architectures in production. Each result or assertation must be cited clearly from where that information is from. This is to help validate the results, otherwise we cant trust the information.",
     # "I am traveling to London next month and want to know the best places to visit, eat, and stay. I also want to know about any events happening during that time. I would like a detailed itinerary for a 5 day trip that includes a mix of tourist attractions and local favorites. Please provide recommendations for each day, including activities, restaurants, and accommodations. Additionally, I would like to know about any cultural norms or tips for visiting London that I should be aware of.",
-    # "Research what Turboquant is for me. I need a detailed report along with clear and simple explanations of what it is, how it works, and how to implement. Be sure to give me clear citations as well."
+    # "Research what Turboquant is for me. I need a detailed report along with clear and simple explanations of what it is, how it works, and how to implement. Be sure to give me clear citations as well. Your final output should be in markdown.",
     model="gpt-5.1",
     trace=True,
 )
@@ -24,8 +25,8 @@ from pprint import pprint
 # Write JSON data to a file
 import json
 
-with open("output.json", "w") as json_file:
+with open("output_2.json", "w") as json_file:
     json.dump(result.model_dump_json(), json_file, indent=4)
 
-
-pprint(result.final_result.summary)
+with open("turboquant.md", "w") as f:
+    f.writelines(result.final_result.detailed_output)

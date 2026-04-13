@@ -8,19 +8,25 @@ from pydantic_ai import Agent
 from regex import F
 
 
+class TracingBackend(Enum):
+    LANGFUSE = "langfuse"
+    LOGFIRE = "logfire"
+    LANGSMITH = "langsmith"
+    NONE = "none"
+
 class TaskStatus(Enum):
     """Lifecycle state for a :class:`TaskItem` within a DeepAgent plan.
 
     Values:
-        PENDING: Waiting for dependencies to complete.
-        READY: All dependencies met; eligible to run.
-        RUNNING: Currently being executed by a sub-agent.
-        COMPLETED: Successfully finished and accepted.
-        ERRORED: Execution error occurred (tools, runtime, etc.).
-        FAILED: Evaluator/critic rejected the result.
-        NEEDS_REVIEW: Needs evaluator/supervisor review.
-        RERUN: Marked to be re-executed with revised instructions.
-        CANCELLED: Task that is no longer needed or relevant to complete the objective.
+        PENDING: Waiting for dependencies to complete. \n
+        READY: All dependencies met; eligible to run. \n
+        RUNNING: Currently being executed by a sub-agent. \n
+        COMPLETED: Successfully finished and accepted. \n
+        ERRORED: Execution error occurred (tools, runtime, etc.). \n
+        FAILED: Evaluator/critic rejected the result. \n
+        NEEDS_REVIEW: Needs evaluator/supervisor review. \n
+        RERUN: Marked to be re-executed with revised instructions. \n
+        CANCELLED: Task that is no longer needed or relevant to complete the objective. \n
     """
 
     PENDING = "pending"  # Waiting for dependencies
