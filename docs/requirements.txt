@@ -1,6 +1,7 @@
 mkdocs
 mkdocs-material
-mkdocstrings
+mkdocstrings-python
 mkdocstrings[python]
 griffe-pydantic
+zensical
 -e .

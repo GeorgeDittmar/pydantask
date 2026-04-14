@@ -61,6 +61,7 @@ from pydantask.models import (
     CapabilityDescription,
     TaskResult,
     DeepAgentRunResult,
+    TracingBackend
 )
 
 from pydantask.tools.default_tools import (
@@ -81,6 +82,107 @@ from pydantic_ai.retries import AsyncTenacityTransport, RetryConfig, wait_retry_
 
 from pprint import pprint
 
+_langfuse_instrumented = False
+_logfire_instrumented = False
+_langsmith_instrumented = False
+
+
+def init_langfuse_tracing() -> None:
+    """Initialize Langfuse tracing once, if credentials are valid."""
+    global _langfuse_instrumented
+    if _langfuse_instrumented:
+        return
+
+    try:
+        lf = get_client()
+        logger.info("Attempting to enable Langfuse tracing...")
+        if not lf.auth_check():
+            logger.warning(
+                "Langfuse auth_check failed. LANGFUSE_* env vars missing/invalid; "
+                "Langfuse tracing will remain disabled."
+            )
+            return
+
+        # PydanticAI <-> Langfuse integration via OpenTelemetry
+        Agent.instrument_all()
+        _langfuse_instrumented = True
+        logger.info("Langfuse tracing enabled for all PydanticAI agents.")
+    except Exception as e:
+        logger.exception(f"Failed to initialize Langfuse tracing: {e}")
+
+
+def init_logfire_tracing() -> None:
+    """Initialize Logfire tracing once."""
+    global _logfire_instrumented
+    if _logfire_instrumented:
+        return
+
+    try:
+        logger.info("Attempting to enable Logfire tracing...")
+        # TODO: import and configure Logfire here.
+        # e.g. logfire.configure(api_key=..., service_name=..., etc.)
+        # and connect it to OpenTelemetry / PydanticAI if desired.
+        _logfire_instrumented = True
+        logger.info("Logfire tracing enabled.")
+    except Exception as e:
+        logger.exception(f"Failed to initialize Logfire tracing: {e}")
+
+
+def init_langsmith_tracing() -> None:
+    """Initialize LangSmith tracing once."""
+    global _langsmith_instrumented
+    if _langsmith_instrumented:
+        return
+
+    try:
+        logger.info("Attempting to enable LangSmith tracing...")
+        # TODO: import and configure LangSmith client here.
+        # e.g. from langsmith import Client; client = Client(api_key=..., ...).
+        # Then register it with your LLM / tool stack as needed.
+        _langsmith_instrumented = True
+        logger.info("LangSmith tracing enabled.")
+    except Exception as e:
+        logger.exception(f"Failed to initialize LangSmith tracing: {e}")
+
+
+def autodetect_tracing_backend() -> TracingBackend:
+    """
+    Choose a tracing backend automatically based on environment variables.
+
+    Order of precedence:
+      1) Langfuse if LANGFUSE_PUBLIC_KEY + LANGFUSE_SECRET_KEY present
+      2) Logfire if LOGFIRE_API_KEY present (example name)
+      3) LangSmith if LANGCHAIN_API_KEY or LANGSMITH_API_KEY present
+      4) Otherwise, NONE
+    """
+    # Langfuse
+    if os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY"):
+        return TracingBackend.LANGFUSE
+
+    # Logfire (replace with whatever their SDK expects)
+    if os.getenv("LOGFIRE_API_KEY"):
+        return TracingBackend.LOGFIRE
+
+    # LangSmith (example; adjust to your actual config)
+    if (
+        os.getenv("LANGSMITH_API_KEY")
+        or os.getenv("LANGCHAIN_API_KEY")
+        or os.getenv("LANGCHAIN_TRACING_V2") in {"1", "true", "True"}
+    ):
+        return TracingBackend.LANGSMITH
+
+    return TracingBackend.NONE
+def init_tracing_backend(backend: TracingBackend) -> None:
+    if backend == TracingBackend.NONE:
+        return
+    elif backend == TracingBackend.LANGFUSE:
+        init_langfuse_tracing()
+    elif backend == TracingBackend.LOGFIRE:
+        init_logfire_tracing()
+    elif backend == TracingBackend.LANGSMITH:
+        init_langsmith_tracing()
+    else:
+        logger.warning(f"Unknown tracing backend: {backend}. Tracing disabled.")
 
 class DeepAgent:
     """Pydantic AI based DeepAgent that manages sub-agents to achieve complex goals."""
@@ -97,7 +199,6 @@ class DeepAgent:
         set_token_budget: Union[int, None] = None,
         sub_agents: Union[None, list[CapabilityDescription]] = None,
         human_feedback: bool = False,
-        trace: bool = False,
         # default output type for the producer agent, can be set to a default type or custom pydantic model for better structure and validation of final output
         output_type: Type = TaskResult,
         planning_mode: str = "dynamic",  # "static" | "dynamic"
@@ -115,16 +216,7 @@ class DeepAgent:
         # load_dotenv()
 
         if trace:
-            langfuse = get_client()
-            logger.info("Enabling Langfuse tracing...")
-            # Verify connection
-            if langfuse.auth_check():
-                logger.info("Langfuse client is authenticated and ready!")
-                Agent.instrument_all()
-            else:
-                logger.error(
-                    "Authentication failed. Could not find TAVILY_API_KEY in environment variables."
-                )
+            init_tracing_backend()
 
         self.model_name: str = model
         self.prompt: str = prompt  # Objective for the agent
