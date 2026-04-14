@@ -61,7 +61,7 @@ from pydantask.models import (
     CapabilityDescription,
     TaskResult,
     DeepAgentRunResult,
-    TracingBackend
+    TracingBackend,
 )
 
 from pydantask.tools.default_tools import (
@@ -172,6 +172,8 @@ def autodetect_tracing_backend() -> TracingBackend:
         return TracingBackend.LANGSMITH
 
     return TracingBackend.NONE
+
+
 def init_tracing_backend(backend: TracingBackend) -> None:
     if backend == TracingBackend.NONE:
         return
@@ -183,6 +185,7 @@ def init_tracing_backend(backend: TracingBackend) -> None:
         init_langsmith_tracing()
     else:
         logger.warning(f"Unknown tracing backend: {backend}. Tracing disabled.")
+
 
 class DeepAgent:
     """Pydantic AI based DeepAgent that manages sub-agents to achieve complex goals."""
@@ -202,6 +205,7 @@ class DeepAgent:
         # default output type for the producer agent, can be set to a default type or custom pydantic model for better structure and validation of final output
         output_type: Type = TaskResult,
         planning_mode: str = "dynamic",  # "static" | "dynamic"
+        trace: bool = False,
     ):
         """
         Create DeepAgent instance.
@@ -216,7 +220,7 @@ class DeepAgent:
         # load_dotenv()
 
         if trace:
-            init_tracing_backend()
+            init_tracing_backend(autodetect_tracing_backend())
 
         self.model_name: str = model
         self.prompt: str = prompt  # Objective for the agent
