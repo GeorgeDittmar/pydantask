@@ -8,7 +8,7 @@ load_dotenv()
 
 deep_agent = DeepAgent(
     prompt="Write a market analysis for LLM tooling in 2026.",
-    model="gpt-5.1",
+    model="gpt-5.4",
     # sub_agents=[
     #     AgentDescription(
     #         name="custom_research",
