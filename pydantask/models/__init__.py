@@ -2,6 +2,7 @@ from pydantask.models.models import (
     TaskItem,
     TaskStatus,
     CapabilityDescription,
+    DeepAgentRunResult,
     TaskResult,
     TaskQAResult,
     RuntimeState,
@@ -11,12 +12,14 @@ from pydantask.models.models import (
     SourceRef,
     SubAgentInstruction,
     TaskSpec,
+    TracingBackend
 )
 
 __all__ = [
     "TaskItem",
     "TaskStatus",
     "CapabilityDescription",
+    "DeepAgentRunResult",
     "TaskResult",
     "TaskQAResult",
     "RuntimeState",
@@ -26,4 +29,5 @@ __all__ = [
     "SourceRef",
     "SubAgentInstruction",
     "TaskSpec",
+    "TracingBackend"
 ]

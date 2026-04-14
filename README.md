@@ -1,13 +1,14 @@
-# PydanTask: Deep Agentic Loops for Pydantic AI
+# PydanTask: Deep Agentic Harness for Pydantic AI
 
-PydanTask is a framework for building deep, autonomous agents that don't just respond—they **reason**, **decompose**, and **execute**.
+![Pydantask Logo](docs/imgs/pydantask_logo_v3.png)
+
+PydanTask is a Harness for building deep, autonomous agents that don't just respond—they **reason**, **decompose**, and **execute**.
 
 It builds on top of [Pydantic AI](https://ai.pydantic.dev/) and adds:
 
 - Long‑horizon planning and hierarchical task management
 - A reusable orchestration loop (`DeepAgent`) with planner → supervisor → worker/researcher/producer → critic
 - Shared runtime state across agents (`RuntimeState`)
-- File‑backed context and scratchpads for tasks
 - Extensible capabilities via `CapabilityDescription` and custom tools/agents
 
 The goal is to give you a solid “agentic backbone” you can adapt, without having to reinvent multi‑step planning and control logic yourself.

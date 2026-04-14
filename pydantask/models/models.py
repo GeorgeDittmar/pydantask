@@ -1,5 +1,6 @@
 from typing import Literal, List, Union
 from enum import Enum
+from attr import field
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Literal, Any, Dict, Callable
 from datetime import datetime
@@ -7,18 +8,25 @@ from pydantic_ai import Agent
 from regex import F
 
 
+class TracingBackend(Enum):
+    LANGFUSE = "langfuse"
+    LOGFIRE = "logfire"
+    LANGSMITH = "langsmith"
+    NONE = "none"
+
 class TaskStatus(Enum):
     """Lifecycle state for a :class:`TaskItem` within a DeepAgent plan.
 
     Values:
-        PENDING: Waiting for dependencies to complete.
-        READY: All dependencies met; eligible to run.
-        RUNNING: Currently being executed by a sub-agent.
-        COMPLETED: Successfully finished and accepted.
-        ERRORED: Execution error occurred (tools, runtime, etc.).
-        FAILED: Evaluator/critic rejected the result.
-        NEEDS_REVIEW: Needs evaluator/supervisor review.
-        RERUN: Marked to be re-executed with revised instructions.
+        PENDING: Waiting for dependencies to complete. \n
+        READY: All dependencies met; eligible to run. \n
+        RUNNING: Currently being executed by a sub-agent. \n
+        COMPLETED: Successfully finished and accepted. \n
+        ERRORED: Execution error occurred (tools, runtime, etc.). \n
+        FAILED: Evaluator/critic rejected the result. \n
+        NEEDS_REVIEW: Needs evaluator/supervisor review. \n
+        RERUN: Marked to be re-executed with revised instructions. \n
+        CANCELLED: Task that is no longer needed or relevant to complete the objective. \n
     """
 
     PENDING = "pending"  # Waiting for dependencies
@@ -29,20 +37,30 @@ class TaskStatus(Enum):
     FAILED = "failed"  # Evaluator rejected it
     NEEDS_REVIEW = "needs_review"  # Needs Evaluator review
     RERUN = "rerun"
+    CANCELLED = "cancelled"
 
 
 class TaskQAResult(BaseModel):
     """Evaluation result produced by the critic/QA agent for a single task.
 
     Attributes:
-        task_id: ID of the :class:`TaskItem` being evaluated.
-        reasoning: Detailed explanation of how the result was judged.
-        passed: True if the worker output sufficiently meets the sub-task objective.
+        task_id: ID of the :class:`TaskItem` being evaluated. It MUST match the task that is being evaluated.
+        reasoning: Detailed explanation of how the result was judged and why you scored the way you did.
+        passed: True if the worker output sufficiently meets the task objective.
     """
 
-    task_id: int
-    reasoning: str
-    passed: bool = False
+    task_id: int = Field(
+        default=-1,
+        description="The task_id for the task being evaluated. Ex. Criticing task has task_id of 1, thus the task_id of this field will also be 1.",
+    )
+    reasoning: str = Field(
+        default="",
+        description="Detailed explanation of how the result was judged, why it god the score that it did and feedback for supervisor to attempt a retry.",
+    )
+    passed: bool = Field(
+        default=False,
+        description="Whether the task passed qa/critic. True if you found that the worker output sufficiently meets the task objective.",
+    )
 
 
 class KnowledgeRecord(BaseModel):
@@ -139,8 +157,7 @@ class SourceRef(BaseModel):
 class TaskResult(BaseModel):
     """Canonical result type for any sub-task executed by DeepAgent.
 
-    Works well for research-style tasks (summary + artifacts + sources), but can
-    also be used for other task types that just need a concise summary.
+    TaskResult stores the output from any given task.
 
     Attributes:
         task_id: ID of the :class:`TaskItem` this result belongs to.
@@ -166,9 +183,11 @@ class TaskResult(BaseModel):
         default="",
         description=(
             "Concise, human-readable summary of what this task produced or concluded. "
-            "For research tasks this should summarize key findings; for other tasks "
-            "it should summarize what was done and the result."
         ),
+    )
+
+    detailed_output: str = Field(
+        default="", description="Detailed output for the task if required."
     )
 
     notes: List[str] = Field(
@@ -209,7 +228,7 @@ class TaskItem(BaseModel):
     through :class:`TaskStatus` states and accumulates results and feedback.
 
     Attributes:
-        task_id: Unique integer task identifier.
+        task_id: Unique integer task identifier. Integer value.
         overall_objective: The overall objective this task contributes to.
         sub_task_objective: The specific objective for this sub-task.
         status: Current lifecycle state of the task.
@@ -229,7 +248,7 @@ class TaskItem(BaseModel):
         metadata: Optional free-form metadata for this task.
     """
 
-    task_id: int = Field(description="Unique task id. Should be an integer value.")
+    task_id: int = Field(description="Unique task id. Should be an integer")
     overall_objective: str = Field(
         description="The overall objective this task is contributing to solving."
     )
@@ -244,10 +263,13 @@ class TaskItem(BaseModel):
         description="Which sub agent capability should attempt this task."
     )
     sub_task_dependencies: Optional[List[int]] = Field(
-        description="Put task dependency IDs here", default_factory=list
+        description="Put task_id dependency IDs here", default_factory=list
     )
     task_feedback: Optional[TaskQAResult] = None  # Store the Eval "critique" here
-    error_msg: Optional[str] = None  # Store any error messages here
+    error_msg: Optional[str] = Field(
+        default=None,
+        description="Any errors that happened during the running of this task. Only store the more recent error message.",
+    )  # Store any error messages here
     iteration_history: List = Field(
         default_factory=list,
         description="Store any answer history if multiple attempts are made.",
@@ -473,16 +495,15 @@ class DeepAgentRunResult(BaseModel):
         default=None,
         description="The final TaskResult synthesized by the producer_agent, if any.",
     )
-    status: Literal["success", "partial", "failed"] = Field(
-        ..., description="High-level outcome of the run."
-    )
+    # status: Literal["success", "partial", "failed"] = Field(
+    #     ..., description="High-level outcome of the run."
+    # )
     plan: Dict[int, TaskItem] = Field(
         ...,
         description="The final plan state (all TaskItems after execution).",
     )
-    runtime_steps: int = Field(
-        ...,
-        description="Number of DeepAgent control-loop cycles executed.",
+    runtime_state: RuntimeState = Field(
+        description="Complete runtime state for auditing."
     )
     errors: list[str] = Field(
         default_factory=list,

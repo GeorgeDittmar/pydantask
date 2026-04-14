@@ -32,6 +32,7 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.retries import AsyncTenacityTransport
 from pydantic_ai.common_tools.tavily import tavily_search_tool
+from pydantic_ai.usage import RunUsage, UsageLimits
 from loguru import logger
 from pydantask.agents.spec import (
     BaseAgentSpec,
@@ -59,6 +60,8 @@ from pydantask.models import (
     SupervisorDecision,
     CapabilityDescription,
     TaskResult,
+    DeepAgentRunResult,
+    TracingBackend
 )
 
 from pydantask.tools.default_tools import (
@@ -79,6 +82,107 @@ from pydantic_ai.retries import AsyncTenacityTransport, RetryConfig, wait_retry_
 
 from pprint import pprint
 
+_langfuse_instrumented = False
+_logfire_instrumented = False
+_langsmith_instrumented = False
+
+
+def init_langfuse_tracing() -> None:
+    """Initialize Langfuse tracing once, if credentials are valid."""
+    global _langfuse_instrumented
+    if _langfuse_instrumented:
+        return
+
+    try:
+        lf = get_client()
+        logger.info("Attempting to enable Langfuse tracing...")
+        if not lf.auth_check():
+            logger.warning(
+                "Langfuse auth_check failed. LANGFUSE_* env vars missing/invalid; "
+                "Langfuse tracing will remain disabled."
+            )
+            return
+
+        # PydanticAI <-> Langfuse integration via OpenTelemetry
+        Agent.instrument_all()
+        _langfuse_instrumented = True
+        logger.info("Langfuse tracing enabled for all PydanticAI agents.")
+    except Exception as e:
+        logger.exception(f"Failed to initialize Langfuse tracing: {e}")
+
+
+def init_logfire_tracing() -> None:
+    """Initialize Logfire tracing once."""
+    global _logfire_instrumented
+    if _logfire_instrumented:
+        return
+
+    try:
+        logger.info("Attempting to enable Logfire tracing...")
+        # TODO: import and configure Logfire here.
+        # e.g. logfire.configure(api_key=..., service_name=..., etc.)
+        # and connect it to OpenTelemetry / PydanticAI if desired.
+        _logfire_instrumented = True
+        logger.info("Logfire tracing enabled.")
+    except Exception as e:
+        logger.exception(f"Failed to initialize Logfire tracing: {e}")
+
+
+def init_langsmith_tracing() -> None:
+    """Initialize LangSmith tracing once."""
+    global _langsmith_instrumented
+    if _langsmith_instrumented:
+        return
+
+    try:
+        logger.info("Attempting to enable LangSmith tracing...")
+        # TODO: import and configure LangSmith client here.
+        # e.g. from langsmith import Client; client = Client(api_key=..., ...).
+        # Then register it with your LLM / tool stack as needed.
+        _langsmith_instrumented = True
+        logger.info("LangSmith tracing enabled.")
+    except Exception as e:
+        logger.exception(f"Failed to initialize LangSmith tracing: {e}")
+
+
+def autodetect_tracing_backend() -> TracingBackend:
+    """
+    Choose a tracing backend automatically based on environment variables.
+
+    Order of precedence:
+      1) Langfuse if LANGFUSE_PUBLIC_KEY + LANGFUSE_SECRET_KEY present
+      2) Logfire if LOGFIRE_API_KEY present (example name)
+      3) LangSmith if LANGCHAIN_API_KEY or LANGSMITH_API_KEY present
+      4) Otherwise, NONE
+    """
+    # Langfuse
+    if os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY"):
+        return TracingBackend.LANGFUSE
+
+    # Logfire (replace with whatever their SDK expects)
+    if os.getenv("LOGFIRE_API_KEY"):
+        return TracingBackend.LOGFIRE
+
+    # LangSmith (example; adjust to your actual config)
+    if (
+        os.getenv("LANGSMITH_API_KEY")
+        or os.getenv("LANGCHAIN_API_KEY")
+        or os.getenv("LANGCHAIN_TRACING_V2") in {"1", "true", "True"}
+    ):
+        return TracingBackend.LANGSMITH
+
+    return TracingBackend.NONE
+def init_tracing_backend(backend: TracingBackend) -> None:
+    if backend == TracingBackend.NONE:
+        return
+    elif backend == TracingBackend.LANGFUSE:
+        init_langfuse_tracing()
+    elif backend == TracingBackend.LOGFIRE:
+        init_logfire_tracing()
+    elif backend == TracingBackend.LANGSMITH:
+        init_langsmith_tracing()
+    else:
+        logger.warning(f"Unknown tracing backend: {backend}. Tracing disabled.")
 
 class DeepAgent:
     """Pydantic AI based DeepAgent that manages sub-agents to achieve complex goals."""
@@ -95,7 +199,6 @@ class DeepAgent:
         set_token_budget: Union[int, None] = None,
         sub_agents: Union[None, list[CapabilityDescription]] = None,
         human_feedback: bool = False,
-        trace: bool = False,
         # default output type for the producer agent, can be set to a default type or custom pydantic model for better structure and validation of final output
         output_type: Type = TaskResult,
         planning_mode: str = "dynamic",  # "static" | "dynamic"
@@ -113,16 +216,7 @@ class DeepAgent:
         # load_dotenv()
 
         if trace:
-            langfuse = get_client()
-            logger.info("Enabling Langfuse tracing...")
-            # Verify connection
-            if langfuse.auth_check():
-                logger.info("Langfuse client is authenticated and ready!")
-                Agent.instrument_all()
-            else:
-                logger.error(
-                    "Authentication failed. Could not find TAVILY_API_KEY in environment variables."
-                )
+            init_tracing_backend()
 
         self.model_name: str = model
         self.prompt: str = prompt  # Objective for the agent
@@ -154,7 +248,7 @@ class DeepAgent:
             output_type=TaskQAResult,
             deps_type=RuntimeState,
             tools=[read_from_file_system, get_current_datetime, think_tool],
-            end_strategy="exhaustive",
+            # end_strategy="exhaustive",
         )
 
         self._supervisor_agent = supervisor_agent or Agent(
@@ -166,6 +260,8 @@ class DeepAgent:
             tools=[
                 self.update_task_status,
                 self.add_task,
+                self.cancel_task,
+                self.patch_task,
                 get_current_datetime,
                 think_tool,
                 self.view_qa_report,
@@ -177,15 +273,9 @@ class DeepAgent:
             agent_spec=ProducerSpec(),
             name="_default_Producer_Agent",
             tools=[
-                # Core FS and context tools
-                write_to_file_system,
-                read_from_file_system,
-                save_task_context,
-                read_task_context,
                 # Reasoning / time / plan-inspection tools
                 think_tool,
                 get_current_datetime,
-                list_documents,
                 list_completed_tasks,
                 get_task_result,
             ],
@@ -210,13 +300,11 @@ class DeepAgent:
                 tavily_search_tool(api_key),
                 think_tool,
                 append_scratch_note,
-                read_task_context,
                 get_current_datetime,
-                list_documents,
             ],
             deps_type=RuntimeState,
             output_type=TaskResult,
-            end_strategy="exhaustive",
+            # end_strategy="exhaustive",
         )
 
         self.agent_registry = self._setup_default_sub_agents(
@@ -273,10 +361,6 @@ class DeepAgent:
             deps_type=RuntimeState,
             output_type=TaskResult,
             tools=[
-                # FS & context tools for canonical final reports
-                # write_to_file_system,
-                # read_from_file_system,
-                # save_task_context,
                 read_task_context,
                 # Plan / history inspection
                 list_documents,
@@ -306,10 +390,6 @@ class DeepAgent:
             deps_type=RuntimeState,
             output_type=TaskResult,
             tools=[
-                write_to_file_system,
-                read_from_file_system,
-                save_task_context,
-                read_task_context,
                 list_documents,
                 list_completed_tasks,
                 get_task_result,
@@ -386,46 +466,6 @@ class DeepAgent:
             description = getattr(desc, "description", "")
             lines.append(f"- {name}: {description}")
         return "\n".join(lines)
-
-    def _build_producer_prompt(self, state: RuntimeState) -> str:
-        """Build a context prompt for the producer agent that summarizes all completed tasks, their results, and sources."""
-
-        completed = [t for t in state.plan.values() if t.status == TaskStatus.COMPLETED]
-        lines = []
-        for t in sorted(completed, key=lambda x: x.task_id):
-            result = t.result
-            summary = (
-                getattr(result, "summary", str(result)) if result else "<no result>"
-            )
-            paths = getattr(result, "output_paths", []) if result else []
-            sources = getattr(result, "sources", []) if result else []
-
-            src_lines = []
-            for s in sources or []:
-                src_lines.append(
-                    f"    - [{s.id}] title={getattr(s, 'title', None)} "
-                    f"url={getattr(s, 'url', None)} path={getattr(s, 'path', None)}"
-                )
-            src_block = "\n".join(src_lines) or "    - <no sources>"
-            lines.append(
-                f"- Task {t.task_id} ({t.capability})\n"
-                f"  objective: {t.sub_task_objective}\n"
-                f"  summary: {summary}\n"
-                f"  report_paths: {paths}\n"
-                f"  sources: {src_block}"
-            )
-        completed_display = "\n".join(lines) or "<no completed tasks>"
-
-        return f"""
-    Overall objective:
-    {state.objective}
-
-    Completed sub-tasks (source material):
-    {completed_display}
-
-    Using only these results (and any files they point to), synthesize the final output according
-    to the overall objective. Do not perform new research or work.
-    """
 
     def _format_plan(self, plan: Plan):
         lines = []
@@ -523,44 +563,44 @@ class DeepAgent:
             sub_task_dependencies=dependencies or [],
             metadata=metadata or {},
             status=TaskStatus.READY,
-            # ... any other required fields / defaults
         )
         plan[new_id] = task
         return new_id
 
+    async def cancel_task(
+        self, ctx: RunContext[RuntimeState], task_id: int, reason: str
+    ):
+        """
+        Tool: Cancel Task
+        Description: Use this to remove a task from the plan if it is no longer
+        relevant or if a failure in an upstream dependency makes it impossible.
+        """
+        if task_id in ctx.deps.plan:
+            # Instead of deleting, mark as CANCELLED to keep history
+            ctx.deps.plan[task_id].status = TaskStatus.CANCELLED
+            return f"Task {task_id} cancelled. Reason: {reason}"
+        return f"Error: Task {task_id} not found."
+
+    async def patch_task(
+        self,
+        ctx: RunContext[RuntimeState],
+        task_id: int,
+        sub_task_objective: Optional[str] = None,
+        dependencies: Optional[List[int]] = None,
+    ):
+        """Update an existing task's objective or its dependency requirements."""
+        task = ctx.deps.plan.get(task_id)
+        if not task:
+            return "Task not found."
+
+        if sub_task_objective:
+            task.sub_task_objective = sub_task_objective
+        if dependencies is not None:
+            task.sub_task_dependencies = dependencies
+        return f"Task {task_id} updated successfully."
+
     @observe
-    async def run(self):
-        # Start the supervisor agent to manage sub-agents
-        # state = RuntimeState(goal=self.prompt)
-        now = await get_current_datetime()
-        current_year = datetime.now().year
-        capabilities_display = self._format_capabilities()
-        # planner_prompt = f"""
-        # Objective: {self.prompt}
-
-        # AVAILABLE CAPABILITIES:
-        # {capabilities_display}
-
-        # Example of what capabilities could be used for:
-        #     -   "research_agent" → needs web/external info.
-        #     -   "worker_agent" → general reasoning/transformation on existing info.
-        #     -   "producer_agent" → generate final output or results.
-
-        # Current Datetime (MUST be used verbatim if time is needed as context): {now}
-        # CURRENT_YEAR (authoritative numeric year): {current_year}
-
-        # Come up with a plan for the above objective using the available capabilities.
-        # Always include the above datetime in the plan metadata and any date-sensitive instructions.
-        # Use CURRENT_YEAR exactly as provided when resolving any relative time expressions.
-        # """
-
-        # agent_plan = await self._planner_agent.run(planner_prompt)
-
-        # agent_plan_map = {v.task_id: v for v in agent_plan.output.tasks}
-
-        # logger.info("--- Generated Plan ---\n")
-        # logger.info(self._format_plan(agent_plan.output))
-        # logger.info("--- Generated Plan ---\n")
+    async def run(self) -> DeepAgentRunResult:
 
         runtime_state = self._initialize_runtime_state(
             objective=self.prompt, registry=self.agent_registry
@@ -619,6 +659,26 @@ class DeepAgent:
                 # deterministic transition based on critic
                 self.handle_critic_result(task, qa_response)
 
+                # If the task result was produced via tools that return JSON (like write_to_file_system),
+                # extract the written files to populate the task's output_paths.
+                if hasattr(task_result, "result") and isinstance(
+                    task_result.result, str
+                ):
+                    try:
+                        import json
+
+                        tool_output = json.loads(task_result.result)
+                        if (
+                            isinstance(tool_output, dict)
+                            and "written_files" in tool_output
+                        ):
+                            if task.result:
+                                task.result.output_paths.extend(
+                                    tool_output["written_files"]
+                                )
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
                 # if qa_response.do
                 # add the qa report to the task result for the supervisor to review
                 # runtime_state.plan[task_result.task_id].task_feedback = qa_response
@@ -626,8 +686,13 @@ class DeepAgent:
             runtime_state.runtime_steps += 1
 
             step_count += 1
-
-        return runtime_state
+        return_result = DeepAgentRunResult(
+            objective=self.prompt,
+            final_result=task.result if "task" in locals() else None,
+            plan=runtime_state.plan,
+            runtime_state=runtime_state,
+        )
+        return return_result
 
     def _dependencies_satisfied(self, step: TaskItem, ctx: RuntimeState) -> bool:
         # Consider a dependency satisfied only if it's COMPLETED (or whatever set you like)
@@ -704,7 +769,7 @@ class DeepAgent:
 
     @retry(wait=wait_exponential_jitter(), reraise=True, stop=stop_after_attempt(3))
     async def execute(
-        self, sub_agent, step: TaskItem, runtime_state: RuntimeState
+        self, sub_agent: Agent, step: TaskItem, runtime_state: RuntimeState
     ) -> TaskItem:
         """Helper to run an agent and capture its output into the step object."""
 
@@ -715,21 +780,26 @@ class DeepAgent:
         if step.capability == "producer_agent":
             # Build a synthesis-oriented prompt that summarizes all completed tasks,
             # including their summaries, report_paths, and sources.
-            producer_context = self._build_producer_prompt(runtime_state)
+            # producer_context = self._build_producer_prompt(runtime_state)
 
             user_prompt = f"""
-                        {producer_context}
+            Overall objective:
+            {self.prompt}
 
-                        You are now executing the FINAL synthesis TaskItem:
-
-                        {step.model_dump_json(indent=2)}
-                        """
+            You are the final synthesis agent.
+            - First, call `list_completed_tasks` to see all completed upstream tasks.
+            - For each task that is relevant to the objective (especially research tasks), call `get_task_result(task_id=...)`.
+            - If a TaskResult includes `output_paths`, load those reports via `read_from_file_system` or `read_task_context`.
+            - THEN, write a single, coherent comparative analysis answering the objective.
+            - You MUST explicitly integrate evidence from ALL relevant completed tasks (e.g. Task 1 and Task 2 in this run).
+            - Do NOT call any research tools; you are only allowed to read existing TaskResults and their files.
+            """
 
             if _feedback_for_agent:
 
                 user_prompt += f"""
 
-                    Supervisor feedback / additional insturctions for this execution:
+                    Supervisor feedback / additional instructions for this execution:
                     
                     {_feedback_for_agent}
                     """
@@ -765,6 +835,7 @@ class DeepAgent:
         result = await sub_agent.run(
             user_prompt,
             deps=runtime_state,
+            usage_limits=UsageLimits(tool_calls_limit=20),
         )
         step.result = result.output
         step.status = TaskStatus.NEEDS_REVIEW
