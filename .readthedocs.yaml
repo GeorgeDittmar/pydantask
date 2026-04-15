@@ -5,15 +5,15 @@
    tools:
      python: latest
    jobs:
-     # We recommend using a requirements file for reproducible builds.
-     # This is just a quick example to get started.
-     # https://docs.readthedocs.io/page/guides/reproducible-builds.html
-     install:
-       - pip install zensical
+     # https://docs.readthedocs.io/page/guides/reproducible-b
      build:
        html:
          - zensical build
      post_build:
        - mkdir -p $READTHEDOCS_OUTPUT/html/
        - cp --recursive site/* $READTHEDOCS_OUTPUT/html/
-
+python:
+  install:
+    - requirements: docs/requirements.txt # Make sure this path is correct
+    - method: pip
+      path: .
