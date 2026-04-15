@@ -1,2 +1,6 @@
 [project.theme.palette]
 scheme = "default"
+[project]
+# Note: variable interpolation is not yet supported in Zensical configuration files,
+# so you can use the explicit value for now.
+site_url = "https://pydantask.readthedocs.io/"
