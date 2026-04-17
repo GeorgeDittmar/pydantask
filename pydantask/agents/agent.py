@@ -242,7 +242,6 @@ class DeepAgent:
         self._retry_model = OpenAIChatModel(
             model, provider=OpenAIProvider(http_client=self._retry_client)
         )
-        logger.info("RAN PAST")
 
         self._planner_agent = planner_agent or Agent(
             name="_default_Planner_Agent",
