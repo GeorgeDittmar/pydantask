@@ -14,6 +14,9 @@ from tenacity import (
     retry_if_exception_type,
     stop_after_attempt,
 )
+
+import uuid
+
 from loguru import logger
 from os import system
 
@@ -41,6 +44,8 @@ from pydantask.agents.spec import (
     ResearcherSpec,
     SynthesizerSpec,
 )
+from pydantask.agents import utils
+from pathlib import Path
 from pydantic_ai.models import Model
 from pydantask.prompts.prompts import (
     PLANNER_SYS_PROMPT,
@@ -172,6 +177,7 @@ def autodetect_tracing_backend() -> TracingBackend:
         return TracingBackend.LANGSMITH
 
     return TracingBackend.NONE
+
 def init_tracing_backend(backend: TracingBackend) -> None:
     if backend == TracingBackend.NONE:
         return
@@ -198,10 +204,12 @@ class DeepAgent:
         max_steps: int = 20,
         set_token_budget: Union[int, None] = None,
         sub_agents: Union[None, list[CapabilityDescription]] = None,
-        human_feedback: bool = False,
+        human_in_loop: bool = False,
         # default output type for the producer agent, can be set to a default type or custom pydantic model for better structure and validation of final output
         output_type: Type = TaskResult,
         planning_mode: str = "dynamic",  # "static" | "dynamic"
+        trace: bool = True,
+        checkpoint: bool = False
     ):
         """
         Create DeepAgent instance.
@@ -211,12 +219,11 @@ class DeepAgent:
         :param max_steps: Maximum steps to prevent infinite loops. defaults to 20 steps
         :param set_token_budget: Token budget for the agent's operation. Defaults to None (no limit).
         :param tools: List of ToolDescription objects representing the agent's capabilities. Defaults to None.
-        :param human_feedback: Whether to incorporate human feedback in the agent's decision-making. Defaults to False.
+        :param human_in_loop: Whether to incorporate human feedback in the agent's decision-making. Defaults to False.
         """
-        # load_dotenv()
 
         if trace:
-            init_tracing_backend()
+            init_tracing_backend(autodetect_tracing_backend())
 
         self.model_name: str = model
         self.prompt: str = prompt  # Objective for the agent
@@ -226,12 +233,16 @@ class DeepAgent:
         self.output_type = output_type
         self._retry_client = self._create_retrying_client()
 
+        self.checkpoint = checkpoint
+        self.checkpoint_path = Path(f"_checkpoint/{uuid.uuid4()}/") 
+        self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         # TODO: support other chatmodels and providers beyond openai by allowing custom model and provider classes to be passed in as arguments and used for each agent. For now we will just use the openai chat model with the retry transport for all agents since it is the most robust for long conversations and has built in support for function calling which is useful for tool use.
 
         # have a ChatModel factory or something so we can support full set of models
         self._retry_model = OpenAIChatModel(
             model, provider=OpenAIProvider(http_client=self._retry_client)
         )
+
         self._planner_agent = planner_agent or Agent(
             name="_default_Planner_Agent",
             model=self._retry_model,
@@ -304,7 +315,6 @@ class DeepAgent:
             ],
             deps_type=RuntimeState,
             output_type=TaskResult,
-            # end_strategy="exhaustive",
         )
 
         self.agent_registry = self._setup_default_sub_agents(
@@ -453,6 +463,11 @@ class DeepAgent:
         return RuntimeState(
             objective=objective, agent_registry=registry, next_task_id=1
         )
+    
+    def _checkpoint_state(self, runtime: RuntimeState):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        new_checkpoint = utils.get_incremented_path(f"state_{timestamp}", "json", directory=self.checkpoint_path)
+        new_checkpoint.write_text(runtime.model_dump_json(indent=4), encoding="utf-8")
 
     def _format_capabilities(self) -> str:
         """
@@ -678,7 +693,8 @@ class DeepAgent:
                                 )
                     except (json.JSONDecodeError, TypeError):
                         pass
-
+                
+                self._checkpoint_state(runtime_state)
                 # if qa_response.do
                 # add the qa report to the task result for the supervisor to review
                 # runtime_state.plan[task_result.task_id].task_feedback = qa_response
