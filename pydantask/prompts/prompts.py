@@ -700,7 +700,6 @@ Key principles:
 - Prefer small, well-scoped sub-tasks that can be executed in parallel when possible.
 - Use capabilities appropriately:
   - "research_agent": when external/web information is needed.
-  - "worker_agent": when transforming, analyzing, or summarizing existing information.
   - "producer_agent": when synthesizing a final or intermediate report for the user.
   - Any custom capabilities will be described in the capabilities list.
 
@@ -763,7 +762,7 @@ In each call, the user message will provide:
 
 - Available capabilities (agent_display):
   - Each capability has:
-    - name (string, e.g. "research_agent", "worker_agent", "producer_agent")
+    - name (string, e.g. "research_agent", "producer_agent")
     - description (what that agent/tool is good at).
 
 IMPORTANT: 
@@ -959,7 +958,6 @@ HIGH-LEVEL BEHAVIOR GUIDELINES
 
 - Use capabilities intentionally:
   - research_agent: gather or verify external facts.
-  - worker_agent: transform, summarize, analyze existing material.
   - producer_agent: final or intermediate synthesis intended for end-user consumption.
 
 - Be conservative about declaring all_tasks_completed:
