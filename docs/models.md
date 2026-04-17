@@ -8,6 +8,7 @@ These models define:
 - Knowledge and citations (`KnowledgeRecord`, `SourceRef`)
 - Capabilities and runtime state (`CapabilityDescription`, `RuntimeState`)
 - Supervisor and planner structures (`SupervisorDecision`, `Plan`, `SubAgentInstruction`, `TaskSpec`)
+- Run/tracing utilities (`DeepAgentRunResult`, `TracingBackend`)
 
 All content below is rendered from the code via mkdocstrings.
 
@@ -90,5 +91,19 @@ All content below is rendered from the code via mkdocstrings.
 ### `TaskSpec`
 
 ::: pydantask.models.TaskSpec
+
+---
+
+## Run and Tracing
+
+### `DeepAgentRunResult`
+
+::: pydantask.models.DeepAgentRunResult
+
+---
+
+### `TracingBackend`
+
+::: pydantask.models.TracingBackend
 
 ---

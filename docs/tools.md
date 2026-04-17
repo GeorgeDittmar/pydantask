@@ -171,12 +171,23 @@ from pydantask.tools.default_tools import ask_user
 
 ## Registering Tools and Sub‑agents
 
-Built‑in agents (Planner, Critic, Supervisor, Producer, Researcher, Worker) are constructed inside `DeepAgent` with appropriate tool lists (see `pydantask/agents/agent.py`). For example, the default Researcher has access to:
+Built‑in agents are constructed inside `DeepAgent` with specific tool lists (see `pydantask/agents/agent.py`). In the current implementation:
 
-- `tavily_search_tool`
-- `think_tool`
-- `write_to_file_system`, `read_from_file_system`
-- `save_task_context`, `read_task_context`
-- `get_current_datetime`, `list_documents`
+- The **research agent** capability (`research_agent`) has access to:
+  - `tavily_search_tool` (requires `TAVILY_API_KEY`)
+  - `think_tool`
+  - `append_scratch_note`
+  - `get_current_datetime`
 
-Additional tools or sub‑agents can be registered by creating `CapabilityDescription` instances and passing them via the `sub_agents` parameter to `DeepAgent.__init__`. Those capabilities then become available to the Planner and Supervisor via `RuntimeState.agent_registry`.
+- The **producer agent** capability (`producer_agent`) has access to:
+  - `read_task_context`
+  - `list_documents`, `list_completed_tasks`, `get_task_result`
+  - `think_tool`
+
+- The **supervisor agent** (top-level orchestrator agent) can call DeepAgent methods as tools:
+  - `add_task`, `cancel_task`, `patch_task`
+  - `update_task_status`
+  - `view_qa_report`
+  - plus `get_current_datetime` and `think_tool`
+
+Additional tools or sub‑agents can be registered by creating `CapabilityDescription` instances and passing them via the `sub_agents` parameter to `DeepAgent.__init__`. Those capabilities then become available to the supervisor via `RuntimeState.agent_registry`.
