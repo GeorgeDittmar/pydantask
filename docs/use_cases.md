@@ -19,7 +19,10 @@ Before you start, make sure you have:
 - Environment variables set:
   - `OPENAI_API_KEY` – for the language model.
   - `TAVILY_API_KEY` – for the research agent’s web search tool.
-- (Optional) Langfuse configured if you want tracing (`LANGFUSE_*` env vars).
+- (Optional) tracing configured (auto-detected) if you want run traces:
+  - Langfuse: `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY`
+  - Logfire: `LOGFIRE_API_KEY` (example)
+  - LangSmith: `LANGSMITH_API_KEY` / `LANGCHAIN_API_KEY`
 
 You can use a `.env` file and `python-dotenv` to load these automatically.
 
@@ -30,11 +33,14 @@ You can use a `.env` file and `python-dotenv` to load these automatically.
 At a high level, a deep research run with `DeepAgent` follows a simple loop:
 
 1. **You provide an objective.** A single natural-language prompt that describes the research question or report you want.
-2. **DeepAgent plans the work.** It breaks the objective into smaller `TaskItem`s (research, analysis, synthesis, etc.).
-3. **Sub-agents execute tasks.** Research, worker, and producer agents run those tasks using tools like web search.
-4. **A critic reviews results.** The critic (`TaskQAResult`) checks quality and can trigger retries when needed.
-5. **The supervisor orchestrates.** It decides which tasks to run next and when the plan is complete.
-6. **You get a final report.** `DeepAgent.run()` returns a `DeepAgentRunResult` with a structured `TaskResult` and the full plan/state for inspection.
+2. **A dynamic supervisor builds the task graph.** Rather than relying on a separate upfront planner step, the supervisor agent incrementally creates `TaskItem`s at runtime using the `add_task` tool.
+3. **Capabilities execute tasks.** The supervisor schedules runnable tasks, and `DeepAgent` executes them using the capability named in `TaskItem.capability` (typically `research_agent` for web research and `producer_agent` for synthesis).
+4. **A critic reviews results.** The critic (`TaskQAResult`) checks each task output and drives deterministic retry/fail transitions.
+5. **Repeat until done.** The loop continues until the supervisor sets `all_tasks_completed=True` (or `max_steps` is reached).
+6. **You get a final report.** `DeepAgent.run()` returns a `DeepAgentRunResult` with:
+   - `final_result` (a `TaskResult`, when a producer task ran)
+   - the final `plan`
+   - the full `runtime_state`
 
 
 ---
@@ -78,7 +84,7 @@ async def main():
     da = DeepAgent(
         prompt=objective,
         model="gpt-4.1-mini",  # or any supported OpenAI-compatible model
-        trace=True,            # enable Langfuse tracing if configured
+        trace=True,            # enable tracing (auto-detected) if configured via env vars
     )
 
     # 3. Run the deep research workflow
@@ -128,16 +134,29 @@ You can open `deep_research_report.md` in any markdown viewer or editor to read 
 
 When you run the script above:
 
-- `DeepAgent` constructs and wires together:
-  - A **planner** (`Plan`) that generates a task graph of `TaskItem`s.
-  - A **supervisor** that schedules and updates tasks using `TaskStatus`.
-  - A **researcher** that calls Tavily search and writes results into `TaskResult`.
-  - A **critic** that produces `TaskQAResult` objects and drives retries if needed.
-  - A **producer** that reads all completed tasks and synthesizes the final `TaskResult`.
+- `DeepAgent` initializes a shared `RuntimeState` (objective, empty plan, capability registry).
 
-- All intermediate data flows through the shared `RuntimeState`:
-  - `plan`: the evolving mapping of task IDs to `TaskItem`s.
-  - `knowledge_store` and `document_store`: references to any files, notes, or artifacts created along the way.
+- `DeepAgent` constructs and wires together:
+
+  - A **supervisor agent** (system prompt: `DYNAMIC_SUPERVISOR_SYS_PROMPT`) that:
+    - inspects the current task DAG (“mission control board”)
+    - decides which tasks to run next (`SupervisorDecision.tasks_to_execute`)
+    - can mutate the plan at runtime using tools:
+      - `add_task`, `patch_task`, `cancel_task`, `update_task_status`
+      - `view_qa_report` (inspect critic feedback if it was stored)
+
+  - A **critic agent** (system prompt: `CRITIC_SYS_PROMPT`) that:
+    - evaluates each executed task’s `TaskResult`
+    - returns a `TaskQAResult(passed=..., reasoning=...)`
+    - drives deterministic transitions via `handle_critic_result` (completed vs retry vs failed)
+
+  - A capability registry (`DeepAgent.agent_registry`) that contains (by default):
+    - `research_agent`: uses `tavily_search_tool` (requires `TAVILY_API_KEY`) to gather and cite sources
+    - `producer_agent`: synthesizes across completed tasks into a final `TaskResult`
+
+- Execution is dependency-aware and parallelized:
+  - The supervisor may schedule multiple tasks.
+  - `DeepAgent` only runs tasks whose dependencies are all `COMPLETED`, and runs eligible tasks concurrently.
 
 This gives you:
 
@@ -152,8 +171,8 @@ This gives you:
 You can adapt this pattern to any deep research question by:
 
 - Changing the `objective` prompt to match your topic.
-- Optionally adding custom sub-agents or tools via the `sub_agents` argument to `DeepAgent`.
+- Optionally adding custom capabilities via the `sub_agents` argument to `DeepAgent`.
 - Adjusting `max_steps` or `set_token_budget` for longer or shorter runs.
 - Inspecting `run_result.plan` and `run_result.runtime_state` for debugging, analytics, or UI visualization.
 
-Pydantask handles the orchestration — planning, supervision, retries, and synthesis — so you can focus on defining the research problem and consuming the final structured output.
+Pydantask handles the orchestration — dynamic task-graph growth, dependency-aware execution, QA-driven retries, and synthesis — so you can focus on defining the research problem and consuming the final structured output.
