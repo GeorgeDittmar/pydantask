@@ -627,7 +627,8 @@ class DeepAgent:
             if dep_task.status not in required_statuses:
                 return False
         return True
-
+    
+    @traced(capture_input=False)
     async def _execute_ready_tasks(
         self, tasks: SupervisorDecision, ctx: RuntimeState
     ) -> list[TaskItem]:
@@ -640,9 +641,6 @@ class DeepAgent:
         # if no ready steps return empty list
         if len(ready_steps) == 0:
             return []
-
-        logger.info("Ready Steps to Execute:")
-        logger.info(ready_steps)
 
         if not ready_steps:
             return []
@@ -689,7 +687,7 @@ class DeepAgent:
         logger.info(results)
         return results
 
-    @traced(run_type="tool")
+    @traced(run_type="tool", capture_input=False)
     @retry(wait=wait_exponential_jitter(), reraise=True, stop=stop_after_attempt(3))
     async def execute(
         self, sub_agent: Agent, step: TaskItem, runtime_state: RuntimeState

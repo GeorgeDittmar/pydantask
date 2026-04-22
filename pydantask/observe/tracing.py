@@ -71,7 +71,11 @@ def autodetect_tracing_backend() -> TracingBackend:
 
 
 def init_langfuse_tracing() -> None:
-    """Initialize Langfuse tracing once, if credentials are valid."""
+    """Initialize Langfuse tracing once, if credentials are valid.
+
+    Note: If you want *deep* nested traces for PydanticAI internals (LLM calls,
+    tool calls), enable PydanticAI's OpenTelemetry instrumentation.
+    """
     global _langfuse_instrumented
     if _langfuse_instrumented:
         return
@@ -85,6 +89,12 @@ def init_langfuse_tracing() -> None:
                 "Langfuse tracing will remain disabled."
             )
             return
+
+        # Enable PydanticAI OpenTelemetry instrumentation so Langfuse can show
+        # nested agent/model/tool spans (requires Langfuse OTEL support).
+        from pydantic_ai.agent import Agent
+
+        Agent.instrument_all()
 
         _langfuse_instrumented = True
         # Ensure traces are flushed at interpreter shutdown for short-lived scripts.
@@ -189,6 +199,8 @@ def traced(
     name: str | None = None,
     *,
     run_type: LangSmithRunType = "chain",
+    capture_input: bool = True,
+    capture_output: bool = True,
 ) -> Callable[[AsyncFn], AsyncFn]:
     """Route tracing to exactly one backend (selected elsewhere).
 
@@ -212,7 +224,13 @@ def traced(
             if backend == TracingBackend.LANGFUSE:
                 from langfuse import observe
 
-                observed_fn = observe(name=span_name)(fn)
+                # Avoid serialization issues (e.g. passing a PydanticAI Agent object)
+                # by allowing callers to disable input/output capture.
+                observed_fn = observe(
+                    name=span_name,
+                    capture_input=capture_input,
+                    capture_output=capture_output,
+                )(fn)
                 return await cast(AsyncFn, observed_fn)(*args, **kwargs)
 
             if backend == TracingBackend.LANGSMITH:
