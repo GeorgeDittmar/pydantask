@@ -56,6 +56,7 @@ from pydantask.prompts.prompts import (
     WORKER_AGENT_SYS_PROMPT,
     DYNAMIC_SUPERVISOR_SYS_PROMPT,
 )
+from pydantask.observe.tracing import _langfuse_instrumented, _langsmith_instrumented,_logfire_instrumented
 from pydantask.models import (
     RuntimeState,
     TaskItem,
@@ -70,6 +71,7 @@ from pydantask.models import (
 )
 
 from pydantask.tools.default_tools import (
+    read_scratch_notes,
     write_to_file_system,
     read_from_file_system,
     think_tool,
@@ -82,113 +84,12 @@ from pydantask.tools.default_tools import (
     append_scratch_note,
 )
 
+from pydantask.observe.tracing import traced, init_tracing_backend, autodetect_tracing_backend, flush_tracing
 from pydantic_ai.retries import AsyncTenacityTransport, RetryConfig, wait_retry_after
 
 
 from pprint import pprint
 
-_langfuse_instrumented = False
-_logfire_instrumented = False
-_langsmith_instrumented = False
-
-
-def init_langfuse_tracing() -> None:
-    """Initialize Langfuse tracing once, if credentials are valid."""
-    global _langfuse_instrumented
-    if _langfuse_instrumented:
-        return
-
-    try:
-        lf = get_client()
-        logger.info("Attempting to enable Langfuse tracing...")
-        if not lf.auth_check():
-            logger.warning(
-                "Langfuse auth_check failed. LANGFUSE_* env vars missing/invalid; "
-                "Langfuse tracing will remain disabled."
-            )
-            return
-
-        # PydanticAI <-> Langfuse integration via OpenTelemetry
-        Agent.instrument_all()
-        _langfuse_instrumented = True
-        logger.info("Langfuse tracing enabled for all PydanticAI agents.")
-    except Exception as e:
-        logger.exception(f"Failed to initialize Langfuse tracing: {e}")
-
-
-def init_logfire_tracing() -> None:
-    """Initialize Logfire tracing once."""
-    global _logfire_instrumented
-    if _logfire_instrumented:
-        return
-
-    try:
-        logger.info("Attempting to enable Logfire tracing...")
-        # TODO: import and configure Logfire here.
-        # e.g. logfire.configure(api_key=..., service_name=..., etc.)
-        # and connect it to OpenTelemetry / PydanticAI if desired.
-        _logfire_instrumented = True
-        logger.info("Logfire tracing enabled.")
-    except Exception as e:
-        logger.exception(f"Failed to initialize Logfire tracing: {e}")
-
-
-def init_langsmith_tracing() -> None:
-    """Initialize LangSmith tracing once."""
-    global _langsmith_instrumented
-    if _langsmith_instrumented:
-        return
-
-    try:
-        logger.info("Attempting to enable LangSmith tracing...")
-        # TODO: import and configure LangSmith client here.
-        # e.g. from langsmith import Client; client = Client(api_key=..., ...).
-        # Then register it with your LLM / tool stack as needed.
-        _langsmith_instrumented = True
-        logger.info("LangSmith tracing enabled.")
-    except Exception as e:
-        logger.exception(f"Failed to initialize LangSmith tracing: {e}")
-
-
-def autodetect_tracing_backend() -> TracingBackend:
-    """
-    Choose a tracing backend automatically based on environment variables.
-
-    Order of precedence:
-      1) Langfuse if LANGFUSE_PUBLIC_KEY + LANGFUSE_SECRET_KEY present
-      2) Logfire if LOGFIRE_API_KEY present (example name)
-      3) LangSmith if LANGCHAIN_API_KEY or LANGSMITH_API_KEY present
-      4) Otherwise, NONE
-    """
-    # Langfuse
-    if os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY"):
-        return TracingBackend.LANGFUSE
-
-    # Logfire (replace with whatever their SDK expects)
-    if os.getenv("LOGFIRE_API_KEY"):
-        return TracingBackend.LOGFIRE
-
-    # LangSmith (example; adjust to your actual config)
-    if (
-        os.getenv("LANGSMITH_API_KEY")
-        or os.getenv("LANGCHAIN_API_KEY")
-        or os.getenv("LANGCHAIN_TRACING_V2") in {"1", "true", "True"}
-    ):
-        return TracingBackend.LANGSMITH
-
-    return TracingBackend.NONE
-
-def init_tracing_backend(backend: TracingBackend) -> None:
-    if backend == TracingBackend.NONE:
-        return
-    elif backend == TracingBackend.LANGFUSE:
-        init_langfuse_tracing()
-    elif backend == TracingBackend.LOGFIRE:
-        init_logfire_tracing()
-    elif backend == TracingBackend.LANGSMITH:
-        init_langsmith_tracing()
-    else:
-        logger.warning(f"Unknown tracing backend: {backend}. Tracing disabled.")
 
 class DeepAgent:
     """Pydantic AI based DeepAgent that manages sub-agents to achieve complex goals."""
@@ -197,6 +98,7 @@ class DeepAgent:
         self,
         prompt: str,
         model: str | Model = "gpt-4.1-mini",
+        # thinking: bool = False,
         critic_agent: Optional[Agent] = None,
         planner_agent: Optional[Agent] = None,
         supervisor_agent: Optional[Agent] = None,
@@ -207,8 +109,8 @@ class DeepAgent:
         human_in_loop: bool = False,
         # default output type for the producer agent, can be set to a default type or custom pydantic model for better structure and validation of final output
         output_type: Type = TaskResult,
-        planning_mode: str = "dynamic",  # "static" | "dynamic"
-        trace: bool = True,
+        # planning_mode: str = "dynamic",  # "static" | "dynamic"
+        trace: bool = False,
         checkpoint: bool = False
     ):
         """
@@ -221,7 +123,6 @@ class DeepAgent:
         :param tools: List of ToolDescription objects representing the agent's capabilities. Defaults to None.
         :param human_in_loop: Whether to incorporate human feedback in the agent's decision-making. Defaults to False.
         """
-
         if trace:
             init_tracing_backend(autodetect_tracing_backend())
 
@@ -311,6 +212,7 @@ class DeepAgent:
                 tavily_search_tool(api_key),
                 think_tool,
                 append_scratch_note,
+                read_scratch_notes,
                 get_current_datetime,
             ],
             deps_type=RuntimeState,
@@ -373,7 +275,7 @@ class DeepAgent:
             tools=[
                 read_task_context,
                 # Plan / history inspection
-                list_documents,
+                # list_documents,
                 list_completed_tasks,
                 get_task_result,
                 # Reflection
@@ -400,11 +302,12 @@ class DeepAgent:
             deps_type=RuntimeState,
             output_type=TaskResult,
             tools=[
-                list_documents,
+                # list_documents,
                 list_completed_tasks,
                 get_task_result,
                 think_tool,
                 append_scratch_note,
+                read_scratch_notes,
                 get_current_datetime,
             ],
         )
@@ -614,13 +517,13 @@ class DeepAgent:
             task.sub_task_dependencies = dependencies
         return f"Task {task_id} updated successfully."
 
-    @observe
+    @traced()
     async def run(self) -> DeepAgentRunResult:
 
         runtime_state = self._initialize_runtime_state(
             objective=self.prompt, registry=self.agent_registry
         )
-
+        
         step_count = 0
         stop_execution = False
         while step_count < self._max_steps and not stop_execution:
@@ -695,19 +598,22 @@ class DeepAgent:
                         pass
                 
                 self._checkpoint_state(runtime_state)
+
                 # if qa_response.do
                 # add the qa report to the task result for the supervisor to review
                 # runtime_state.plan[task_result.task_id].task_feedback = qa_response
-
             runtime_state.runtime_steps += 1
 
+            # make sure traces flush after each loop
             step_count += 1
+            
         return_result = DeepAgentRunResult(
             objective=self.prompt,
             final_result=task.result if "task" in locals() else None,
             plan=runtime_state.plan,
             runtime_state=runtime_state,
         )
+
         return return_result
 
     def _dependencies_satisfied(self, step: TaskItem, ctx: RuntimeState) -> bool:
@@ -783,6 +689,7 @@ class DeepAgent:
         logger.info(results)
         return results
 
+    @traced(run_type="tool")
     @retry(wait=wait_exponential_jitter(), reraise=True, stop=stop_after_attempt(3))
     async def execute(
         self, sub_agent: Agent, step: TaskItem, runtime_state: RuntimeState
@@ -805,10 +712,8 @@ class DeepAgent:
             You are the final synthesis agent.
             - First, call `list_completed_tasks` to see all completed upstream tasks.
             - For each task that is relevant to the objective (especially research tasks), call `get_task_result(task_id=...)`.
-            - If a TaskResult includes `output_paths`, load those reports via `read_from_file_system` or `read_task_context`.
             - THEN, write a single, coherent comparative analysis answering the objective.
             - You MUST explicitly integrate evidence from ALL relevant completed tasks (e.g. Task 1 and Task 2 in this run).
-            - Do NOT call any research tools; you are only allowed to read existing TaskResults and their files.
             """
 
             if _feedback_for_agent:
@@ -819,6 +724,7 @@ class DeepAgent:
                     
                     {_feedback_for_agent}
                     """
+                
             user_prompt += """
                     Your job:
                     - Use ONLY the completed sub-task results and any files they point to.
@@ -845,7 +751,7 @@ class DeepAgent:
 
             user_prompt += """
 
-            ONLY act on this sub-task. Do not re-plan or change the task.
+            ONLY act on this sub-task and any feedback. Do not re-plan or change the task.
             """
         # try:
         result = await sub_agent.run(
@@ -905,6 +811,7 @@ class DeepAgent:
             - If you need to review the full QA report from the critic.
         """
         task = ctx.deps.plan.get(task_id)
+        logger.info(ctx.deps.plan)
         if task is None:
             return f"No task with id {task_id}."
 

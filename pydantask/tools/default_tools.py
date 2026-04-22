@@ -286,3 +286,14 @@ async def append_scratch_note(
     existing = ctx.deps.document_store.get(key, "")
     ctx.deps.document_store[key] = existing + f"\n\n{note}"
     return f"Appended note to scratchpad {key}"
+
+async def read_scratch_notes(ctx: RunContext[RuntimeState], task_id: int):
+    """    
+    Tool: Read Scratch Notes
+    Description: Reads any notes in the in-memory scratchpad for this task. Use to see if there are any thoughts you need to reason over.
+    Pass in the task_id you are working on to view all the notes.
+    """
+
+    key = f"scratch_task_{task_id}"
+    existing = ctx.deps.document_store.get(key, "")
+    return existing
