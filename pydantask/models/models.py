@@ -57,6 +57,7 @@ class TaskQAResult(BaseModel):
         default="",
         description="Detailed explanation of how the result was judged, why it god the score that it did and feedback for supervisor to attempt a retry.",
     )
+
     passed: bool = Field(
         default=False,
         description="Whether the task passed qa/critic. True if you found that the worker output sufficiently meets the task objective.",
