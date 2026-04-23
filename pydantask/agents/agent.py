@@ -35,6 +35,7 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.retries import AsyncTenacityTransport
 from pydantic_ai.common_tools.tavily import tavily_search_tool
+from pydantic_ai.common_tools.duckduckgo import duckduckgo_search_tool
 from pydantic_ai.usage import RunUsage, UsageLimits
 from loguru import logger
 from pydantask.agents.spec import (
@@ -56,7 +57,11 @@ from pydantask.prompts.prompts import (
     WORKER_AGENT_SYS_PROMPT,
     DYNAMIC_SUPERVISOR_SYS_PROMPT,
 )
-from pydantask.observe.tracing import _langfuse_instrumented, _langsmith_instrumented,_logfire_instrumented
+from pydantask.observe.tracing import (
+    _langfuse_instrumented,
+    _langsmith_instrumented,
+    _logfire_instrumented,
+)
 from pydantask.models import (
     RuntimeState,
     TaskItem,
@@ -67,7 +72,7 @@ from pydantask.models import (
     CapabilityDescription,
     TaskResult,
     DeepAgentRunResult,
-    TracingBackend
+    TracingBackend,
 )
 
 from pydantask.tools.default_tools import (
@@ -84,7 +89,12 @@ from pydantask.tools.default_tools import (
     append_scratch_note,
 )
 
-from pydantask.observe.tracing import traced, init_tracing_backend, autodetect_tracing_backend, flush_tracing
+from pydantask.observe.tracing import (
+    traced,
+    init_tracing_backend,
+    autodetect_tracing_backend,
+    flush_tracing,
+)
 from pydantic_ai.retries import AsyncTenacityTransport, RetryConfig, wait_retry_after
 
 
@@ -111,7 +121,7 @@ class DeepAgent:
         output_type: Type = TaskResult,
         # planning_mode: str = "dynamic",  # "static" | "dynamic"
         trace: bool = False,
-        checkpoint: bool = False
+        checkpoint: bool = False,
     ):
         """
         Create DeepAgent instance.
@@ -135,7 +145,7 @@ class DeepAgent:
         self._retry_client = self._create_retrying_client()
 
         self.checkpoint = checkpoint
-        self.checkpoint_path = Path(f"_checkpoint/{uuid.uuid4()}/") 
+        self.checkpoint_path = Path(f"_checkpoint/{uuid.uuid4()}/")
         self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         # TODO: support other chatmodels and providers beyond openai by allowing custom model and provider classes to be passed in as arguments and used for each agent. For now we will just use the openai chat model with the retry transport for all agents since it is the most robust for long conversations and has built in support for function calling which is useful for tool use.
 
@@ -197,24 +207,28 @@ class DeepAgent:
         )
 
         # TODO: rework some of these tools
-        api_key = os.getenv("TAVILY_API_KEY", None)
+        tavily_api_key = os.getenv("TAVILY_API_KEY", None)
 
-        if not api_key:
-            raise ValueError(
-                "Tavily search api key not found or provided in env variables"
+        research_tool_set = [
+            think_tool,
+            append_scratch_note,
+            read_scratch_notes,
+            get_current_datetime,
+        ]
+
+        if not tavily_api_key:
+            logger.info(
+                "Tavily api key not found. Defaulting to built in Duck Duck Go search tool."
             )
+            research_tool_set.append(duckduckgo_search_tool())
+        else:
+            research_tool_set.append(tavily_search_tool(tavily_api_key))
 
         self._researcher_agent = researcher_agent or Agent(
             model=self._retry_model,
             name="_default_Research_Agent",  # Use a cheap model for simple tasks
             system_prompt=RESEARCH_AGENT_SYS_PROMPT,
-            tools=[
-                tavily_search_tool(api_key),
-                think_tool,
-                append_scratch_note,
-                read_scratch_notes,
-                get_current_datetime,
-            ],
+            tools=research_tool_set,
             deps_type=RuntimeState,
             output_type=TaskResult,
         )
@@ -366,10 +380,12 @@ class DeepAgent:
         return RuntimeState(
             objective=objective, agent_registry=registry, next_task_id=1
         )
-    
+
     def _checkpoint_state(self, runtime: RuntimeState):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        new_checkpoint = utils.get_incremented_path(f"state_{timestamp}", "json", directory=self.checkpoint_path)
+        new_checkpoint = utils.get_incremented_path(
+            f"state_{timestamp}", "json", directory=self.checkpoint_path
+        )
         new_checkpoint.write_text(runtime.model_dump_json(indent=4), encoding="utf-8")
 
     def _format_capabilities(self) -> str:
@@ -523,7 +539,7 @@ class DeepAgent:
         runtime_state = self._initialize_runtime_state(
             objective=self.prompt, registry=self.agent_registry
         )
-        
+
         step_count = 0
         stop_execution = False
         while step_count < self._max_steps and not stop_execution:
@@ -596,7 +612,7 @@ class DeepAgent:
                                 )
                     except (json.JSONDecodeError, TypeError):
                         pass
-                
+
                 self._checkpoint_state(runtime_state)
 
                 # if qa_response.do
@@ -606,7 +622,7 @@ class DeepAgent:
 
             # make sure traces flush after each loop
             step_count += 1
-            
+
         return_result = DeepAgentRunResult(
             objective=self.prompt,
             final_result=task.result if "task" in locals() else None,
@@ -627,7 +643,7 @@ class DeepAgent:
             if dep_task.status not in required_statuses:
                 return False
         return True
-    
+
     @traced(capture_input=False)
     async def _execute_ready_tasks(
         self, tasks: SupervisorDecision, ctx: RuntimeState
@@ -722,7 +738,7 @@ class DeepAgent:
                     
                     {_feedback_for_agent}
                     """
-                
+
             user_prompt += """
                     Your job:
                     - Use ONLY the completed sub-task results and any files they point to.
@@ -784,16 +800,16 @@ class DeepAgent:
 
     def handle_critic_result(self, task: TaskItem, review: TaskQAResult):
         """Deterministic transition logic to be used after critic run."""
+        task.attempt_count += 1
+        # IMPORTANT: For now only stores the latest review information, not previous review rounds
+        task.task_feedback = review
         if review.passed:
-            task.status = TaskStatus.COMPLETED
+            task.status = TaskStatus.NEEDS_REVIEW
         else:
             if task.attempt_count < task.max_attempts:
                 # THE TRANSITION
-                task.status = TaskStatus.READY  # Or a specific RERUN status
-                task.attempt_count += 1
+                task.status = TaskStatus.RERUN  # Or a specific RERUN status
 
-                # THE CONTEXT INJECTION (Crucial!)
-                # We must force the agent to see the failure so it doesn't repeat it
                 task.sub_task_objective += f"\n\n[RETRY {task.attempt_count}] Previous attempt failed review: {review.reasoning}"
             else:
                 task.status = TaskStatus.FAILED
