@@ -2,22 +2,12 @@ site_name: Pydantask Agent Harness
 nav:
   - Home: index.md
   - Quickstart: quickstart.md
-  - Usage Case Examples: use_cases.md
+  - Use Cases: use_cases.md
   - Agent Concepts: agents.md
   - Models: models.md
   - Tools: tools.md
   - Customization: customization.md
   - API Reference: api.md
-
-# theme:
-#   name: material
-#   palette:
-#     - scheme: default
-#       primary: indigo
-#       accent: indigo
-#     - scheme: slate
-#       primary: black
-#       accent: black
 
 theme:
   name: material
