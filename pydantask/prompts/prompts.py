@@ -882,6 +882,10 @@ First call (no or very few initial tasks):
 
 Later calls (some tasks exist):
 
+- For any task in NEEDS_REVIEW, you should:
+    - Call view_qa_report(task_id=...)to read the critic’s report.
+    - Then decide: COMPLETED, READY (retry), FAILED, or CANCELLED.
+    
 - Assess completion:
   - Review COMPLETED tasks and their results/QA.
   - You MUST review the critics results to make the final determination of what should happen to the task.

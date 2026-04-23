@@ -803,19 +803,19 @@ class DeepAgent:
         task.attempt_count += 1
         # IMPORTANT: For now only stores the latest review information, not previous review rounds
         task.task_feedback = review
-        if review.passed:
-            task.status = TaskStatus.NEEDS_REVIEW
-        else:
-            if task.attempt_count < task.max_attempts:
-                # THE TRANSITION
-                task.status = TaskStatus.RERUN  # Or a specific RERUN status
+        # if review.passed:
+        #     task.status = TaskStatus.NEEDS_REVIEW
+        # else:
+        #     if task.attempt_count < task.max_attempts:
+        #         # THE TRANSITION
+        #         task.status = TaskStatus.RERUN  # Or a specific RERUN status
 
-                task.sub_task_objective += f"\n\n[RETRY {task.attempt_count}] Previous attempt failed review: {review.reasoning}"
-            else:
-                task.status = TaskStatus.FAILED
-                task.error_msg = (
-                    f"Max retries reached. Critic feedback: {review.reasoning}"
-                )
+        #         task.sub_task_objective += f"\n\n[RETRY {task.attempt_count}] Previous attempt failed review: {review.reasoning}"
+        #     else:
+        #         task.status = TaskStatus.FAILED
+        #         task.error_msg = (
+        #             f"Max retries reached. Critic feedback: {review.reasoning}"
+        #         )
 
     async def view_qa_report(self, ctx: RunContext[RuntimeState], task_id: int) -> str:
         """
@@ -832,6 +832,8 @@ class DeepAgent:
         fb = getattr(task, "task_feedback", None)
         if fb is None:
             return f"No QA feedback found for task {task_id}."
+        task.metadata.setdefault("qa", {})
+        task.metadata["qa"]["report_viewed"] = True
 
         # Return either a summary or full JSON depending on your needs
         return fb.model_dump_json(indent=2)
