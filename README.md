@@ -27,8 +27,7 @@ from pydantask.agents.agent import DeepAgent
 
 `DeepAgent` coordinates several built‑in agents:
 
-- **Planner** – turns a single objective into a `Plan` (list of `TaskItem`s).
-- **Supervisor** – chooses which tasks to run next, based on statuses and dependencies.
+- **Supervisor** – plans and chooses which tasks to run next, based on statuses and dependencies.
 - **Researcher** – performs web/external research for tasks that need new information.
 - **Producer** – synthesizes intermediate results into a final answer or artifact.
 - **Critic** – evaluates task outputs and drives deterministic retry/fail transitions.
@@ -58,12 +57,12 @@ Key concepts:
 
 The control loop in `DeepAgent.run()`:
 
-1. Planner creates a `Plan` for the objective.
+1. Supervisor creates a `Plan` for the objective. This plan is dynammically expanded upon as the DeepAgent runs.
 2. `RuntimeState` is initialized with the plan and capabilities.
 3. In each cycle:
-   - Supervisor decides which tasks to execute next.
-   - Ready tasks (dependencies satisfied) are executed by the appropriate capability (sub‑agent).
-   - Critic reviews each result and calls `handle_critic_result` to update status and retry/failed state.
+   - Supervisor decides which tasks to execute next based on plan progress, task dependencies, and self reflection.
+   - Ready tasks, so long as dependencies are satisfied, are executed by the appropriate capability (sub‑agent).
+   - Critic reviews each result and produces a "QA" report for the supervisor to review if the task failed.
 4. Loop stops when the Supervisor sets `all_tasks_completed = True` or `max_steps` is reached.
 
 For more detail, see `docs/agents.md`.
@@ -79,7 +78,7 @@ PydanTask assumes you already have Pydantic AI and an OpenAI‑compatible model 
 From your project root:
 
 ```bash
-pip install -e .
+pip install pydantask
 ```
 
 (or however you manage your environment; if you use Poetry, adjust accordingly.)
@@ -89,9 +88,7 @@ pip install -e .
 Set the following environment variables (e.g. in your shell or a `.env` file):
 
 - `OPENAI_API_KEY` – for the underlying OpenAIChatModel (or whatever your Pydantic AI provider expects).
-- `TAVILY_API_KEY` – required by the default `research_agent` (via `tavily_search_tool`).
-
-If `TAVILY_API_KEY` is missing, `DeepAgent.__init__` will raise a `ValueError`.
+- `TAVILY_API_KEY` – used by the `research_agent` (via `tavily_search_tool`). If this key is not set, defaults to DuckDuckGo search.
 
 ---
 
