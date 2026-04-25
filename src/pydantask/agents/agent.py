@@ -33,6 +33,8 @@ from pydantic_ai import RunContext
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.models.anthropic import AnthropicModel
+from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.retries import AsyncTenacityTransport
 from pydantic_ai.common_tools.tavily import tavily_search_tool
 from pydantic_ai.common_tools.duckduckgo import duckduckgo_search_tool
@@ -136,7 +138,11 @@ class DeepAgent:
         if trace:
             init_tracing_backend(autodetect_tracing_backend())
 
-        self.model_name: str = model
+        # `model` can be either:
+        #   - a pydantic_ai Model instance (fully custom)
+        #   - a bare model name (defaults to OpenAI), e.g. "gpt-4.1-mini"
+        #   - a provider-prefixed string, e.g. "openai:gpt-4.1-mini" or "anthropic:claude-sonnet-4-5"
+        self.model_name: str = model if isinstance(model, str) else model.__class__.__name__
         self.prompt: str = prompt  # Objective for the agent
         self._max_steps: int = max_steps  # Max steps to prevent infinite loops
         self.token_budget: Union[int, None] = set_token_budget
@@ -147,12 +153,9 @@ class DeepAgent:
         self.checkpoint = checkpoint
         self.checkpoint_path = Path(f"_checkpoint/{uuid.uuid4()}/")
         self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-        # TODO: support other chatmodels and providers beyond openai by allowing custom model and provider classes to be passed in as arguments and used for each agent. For now we will just use the openai chat model with the retry transport for all agents since it is the most robust for long conversations and has built in support for function calling which is useful for tool use.
-
-        # have a ChatModel factory or something so we can support full set of models
-        self._retry_model = OpenAIChatModel(
-            model, provider=OpenAIProvider(http_client=self._retry_client)
-        )
+        # Build the shared model used by all sub-agents.
+        # We inject the retrying httpx client into the provider for durability.
+        self._retry_model = self._build_model(model)
 
         self._planner_agent = planner_agent or Agent(
             name="_default_Planner_Agent",
@@ -235,6 +238,61 @@ class DeepAgent:
 
         self.agent_registry = self._setup_default_sub_agents(
             additonal_capabilities=sub_agents
+        )
+
+
+    async def aclose(self) -> None:
+        try:
+            # best-effort; safe to call even if tracing is disabled
+            flush_tracing()
+        finally:
+            if getattr(self, "_retry_client", None) is not None:
+                await self._retry_client.aclose()
+
+    async def __aenter__(self) -> "DeepAgent":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        await self.aclose()
+
+    def _build_model(self, model: str | Model) -> Model:
+        """Build a pydantic-ai Model, injecting our retrying http client where possible.
+
+        Supported strings:
+            - "gpt-4.1-mini" (defaults to OpenAI)
+            - "openai:gpt-4.1-mini"
+            - "anthropic:claude-sonnet-4-5"
+
+        If a Model instance is provided, it's returned as-is.
+        """
+        if isinstance(model, Model):
+            return model
+
+        provider_name: str
+        model_name: str
+        if ":" in model:
+            provider_name, model_name = model.split(":", 1)
+            provider_name = provider_name.strip().lower()
+            model_name = model_name.strip()
+        else:
+            provider_name, model_name = "openai", model
+
+        if provider_name in {"openai", "openai_compat", "openrouter"}:
+            # NOTE: "openrouter" here assumes OpenAI-compatible API. If you want true
+            # OpenRouter defaults (headers/routing), you may want OpenRouterProvider.
+            return OpenAIChatModel(
+                model_name, provider=OpenAIProvider(http_client=self._retry_client)
+            )
+
+        if provider_name == "anthropic":
+            return AnthropicModel(
+                model_name,
+                provider=AnthropicProvider(http_client=self._retry_client),
+            )
+
+        raise ValueError(
+            f"Unsupported model provider prefix: {provider_name!r}. "
+            "Use e.g. 'openai:...' or 'anthropic:...' or pass a Model instance."
         )
 
     def _create_retrying_client(self):

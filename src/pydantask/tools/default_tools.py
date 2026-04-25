@@ -177,7 +177,7 @@ async def list_completed_tasks(ctx: RunContext[RuntimeState]) -> str:
     if not ctx.deps.plan:
         return "No tasks in plan."
 
-    from pydantask.models import TaskStatus  # local import to avoid cycles
+    from src.pydantask.models import TaskStatus  # local import to avoid cycles
 
     lines: list[str] = []
     for task_id, task in sorted(ctx.deps.plan.items(), key=lambda kv: kv[0]):
