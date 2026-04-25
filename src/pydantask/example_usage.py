@@ -1,7 +1,6 @@
 import asyncio
 
-from pydantask.agents import DeepAgent, AgentDescription
-from my_project.agents import my_custom_researcher, my_custom_writer
+from pydantask.agents import DeepAgent
 from dotenv import load_dotenv
 
 load_dotenv()
