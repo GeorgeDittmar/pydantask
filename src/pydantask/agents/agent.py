@@ -109,7 +109,7 @@ class DeepAgent:
     def __init__(
         self,
         prompt: str,
-        model: str | Model = "gpt-4.1-mini",
+        model: str | Model = "gpt-5.2",
         # thinking: bool = False,
         critic_agent: Optional[Agent] = None,
         planner_agent: Optional[Agent] = None,
@@ -124,17 +124,38 @@ class DeepAgent:
         # planning_mode: str = "dynamic",  # "static" | "dynamic"
         trace: bool = False,
         checkpoint: bool = False,
+        verbose_logging: bool = False,
     ):
-        """
-        Create DeepAgent instance.
+        """Initialize a DeepAgent orchestration instance.
 
-        :param prompt: The overall objective for the agent.
-        :param model: The language model to use. default is "gpt-4.1-mini".
-        :param max_steps: Maximum steps to prevent infinite loops. defaults to 20 steps
-        :param set_token_budget: Token budget for the agent's operation. Defaults to None (no limit).
-        :param tools: List of ToolDescription objects representing the agent's capabilities. Defaults to None.
-        :param human_in_loop: Whether to incorporate human feedback in the agent's decision-making. Defaults to False.
+        Args:
+            prompt: High-level overall objective for the agent run.
+            model: Model identifier or ``pydantic_ai.models.Model`` instance to use
+                for all sub-agents. Defaults to ``"gpt-5.2"``.
+            critic_agent: Optional pre-configured critic ``Agent``. If omitted, a
+                default critic agent is created.
+            planner_agent: Optional planner ``Agent`` instance. (Currently unused,
+                reserved for future static planning flows.)
+            supervisor_agent: Optional supervisor ``Agent`` used to manage the task
+                DAG. If omitted, a default dynamic supervisor is created.
+            researcher_agent: Optional research ``Agent``. If omitted, a default
+                web/doc research agent is created.
+            max_steps: Maximum number of DeepAgent control-loop iterations to run
+                before forcing termination.
+            set_token_budget: Optional global token budget for the run. Currently
+                stored but not strictly enforced.
+            sub_agents: Additional ``CapabilityDescription`` objects to register as
+                callable sub-agents alongside the built-ins.
+            human_in_loop: Reserved flag for interactive / human-feedback flows.
+            output_type: Pydantic model type used as the default output structure
+                for the producer agent.
+            trace: If ``True``, auto-configure tracing via the configured backend.
+            checkpoint: If ``True``, persist runtime state snapshots to disk after
+                each supervisor/critic cycle.
+            verbose_logging: If ``True``, log richer debugging information during
+                execution.
         """
+
         if trace:
             init_tracing_backend(autodetect_tracing_backend())
 
@@ -142,11 +163,13 @@ class DeepAgent:
         #   - a pydantic_ai Model instance (fully custom)
         #   - a bare model name (defaults to OpenAI), e.g. "gpt-4.1-mini"
         #   - a provider-prefixed string, e.g. "openai:gpt-4.1-mini" or "anthropic:claude-sonnet-4-5"
-        self.model_name: str = model if isinstance(model, str) else model.__class__.__name__
+        self.model_name: str = (
+            model if isinstance(model, str) else model.__class__.__name__
+        )
         self.prompt: str = prompt  # Objective for the agent
         self._max_steps: int = max_steps  # Max steps to prevent infinite loops
         self.token_budget: Union[int, None] = set_token_budget
-
+        self.verbose = verbose_logging
         self.output_type = output_type
         self._retry_client = self._create_retrying_client()
 
@@ -240,8 +263,13 @@ class DeepAgent:
             additonal_capabilities=sub_agents
         )
 
-
     async def aclose(self) -> None:
+        """Close underlying resources used by this ``DeepAgent`` instance.
+
+        This is primarily responsible for flushing any tracing backends and
+        closing the shared async HTTP client used by the model providers.
+        Safe to call multiple times.
+        """
         try:
             # best-effort; safe to call even if tracing is disabled
             flush_tracing()
@@ -250,20 +278,27 @@ class DeepAgent:
                 await self._retry_client.aclose()
 
     async def __aenter__(self) -> "DeepAgent":
+        """Enter the async context manager and return this ``DeepAgent``.
+
+        Allows ``async with DeepAgent(...) as agent: ...`` usage.
+        """
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
+        """Exit the async context manager, ensuring resources are cleaned up."""
         await self.aclose()
 
     def _build_model(self, model: str | Model) -> Model:
-        """Build a pydantic-ai Model, injecting our retrying http client where possible.
+        """Construct a ``pydantic_ai`` model, wiring in the shared HTTP client.
 
-        Supported strings:
-            - "gpt-4.1-mini" (defaults to OpenAI)
-            - "openai:gpt-4.1-mini"
-            - "anthropic:claude-sonnet-4-5"
+        The ``model`` parameter may be either:
 
-        If a Model instance is provided, it's returned as-is.
+        * A bare model name (e.g. ``"gpt-4.1-mini"``) which defaults to the
+          OpenAI provider.
+        * A provider-prefixed string such as ``"openai:gpt-4.1-mini"`` or
+          ``"anthropic:claude-sonnet-4-5"``.
+        * An already-instantiated ``pydantic_ai.models.Model`` instance, which is
+          returned unchanged.
         """
         if isinstance(model, Model):
             return model
@@ -296,8 +331,11 @@ class DeepAgent:
         )
 
     def _create_retrying_client(self):
-        """Create a client with smart retry handling for multiple error types.
-        https://ai.pydantic.dev/retries/
+        """Create an ``httpx.AsyncClient`` with robust retry behaviour.
+
+        The returned client uses ``AsyncTenacityTransport`` with sensible
+        defaults for rate limits and transient network failures. See
+        https://ai.pydantic.dev/retries/ for more details.
         """
 
         def should_retry_status(response):
@@ -327,15 +365,19 @@ class DeepAgent:
     def _setup_default_sub_agents(
         self, additonal_capabilities: Union[None, list[CapabilityDescription]] = None
     ) -> Dict:
-        """
-        Setup default sub agents along with any additional sub atgents that may be provided by the caller.
-        Default suba gents available are producer, critic, researcher, and file_system.
+        """Create the default sub-agent capability registry.
+
+        This wires up the built-in producer, researcher, and general worker
+        agents, and optionally merges any extra ``CapabilityDescription``
+        instances supplied by the caller.
 
         Args:
-            sub_agents (Union[None, list[CapabilityDescription]], optional): Any custom tools / agents to include. Defaults to None.
+            additonal_capabilities: Additional capabilities to register on top of
+                the built-in sub-agents.
 
         Returns:
-            dict[str, ToolDescription]: Mapping of toolId's to the tool description and function
+            Dict[str, CapabilityDescription]: Mapping from capability name to
+            its description and callable agent/tool.
         """
 
         producer_agent = Agent(
@@ -345,9 +387,7 @@ class DeepAgent:
             deps_type=RuntimeState,
             output_type=TaskResult,
             tools=[
-                read_task_context,
                 # Plan / history inspection
-                # list_documents,
                 list_completed_tasks,
                 get_task_result,
                 # Reflection
@@ -384,17 +424,17 @@ class DeepAgent:
             ],
         )
 
-        worker = CapabilityDescription(
+        gen_worker = CapabilityDescription(
             name="worker_agent",
             description=(
                 "General-purpose worker for analysis, summarization, document editing, "
-                "code or log interpretation, and other non-web tasks that operate on "
-                "existing context and files."
+                "code or log interpretation, and other non-research tasks that operate on "
+                "existing context."
             ),
             tool_func=general_worker_agent,
         )
 
-        _sub_agents_list = [producer, researcher]
+        _sub_agents_list = [producer, researcher, gen_worker]
 
         # if additional sub agents been supplied then add those to the registry
         if additonal_capabilities:
@@ -416,7 +456,11 @@ class DeepAgent:
         tools: list[Callable] = [],
         end_strategy="exhaustive",
     ) -> Agent:
+        """Instantiate an ``Agent`` and bind its system prompt from a spec.
 
+        The provided ``BaseAgentSpec`` is used to dynamically generate the
+        system prompt at runtime via ``spec.system_prompt(ctx)``.
+        """
         spec = agent_spec
         agent = Agent(
             model=model,
@@ -434,12 +478,27 @@ class DeepAgent:
         return agent
 
     def _initialize_runtime_state(self, objective: str, registry: dict) -> RuntimeState:
-        # Logic to initialize and manage the runtime state
+        """Create the initial :class:`RuntimeState` for a new DeepAgent run.
+
+        Args:
+            objective: Top-level objective for this DeepAgent execution.
+            registry: Mapping of capability names to ``CapabilityDescription``
+                instances.
+
+        Returns:
+            A freshly initialized ``RuntimeState`` with an empty plan and
+            ``next_task_id`` set to ``1``.
+        """
         return RuntimeState(
             objective=objective, agent_registry=registry, next_task_id=1
         )
 
     def _checkpoint_state(self, runtime: RuntimeState):
+        """Persist the current runtime state to a JSON checkpoint on disk.
+
+        The checkpoint directory is unique per DeepAgent instance and is only
+        created when checkpointing is enabled on construction.
+        """
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         new_checkpoint = utils.get_incremented_path(
             f"state_{timestamp}", "json", directory=self.checkpoint_path
@@ -447,11 +506,9 @@ class DeepAgent:
         new_checkpoint.write_text(runtime.model_dump_json(indent=4), encoding="utf-8")
 
     def _format_capabilities(self) -> str:
-        """
-        Return a human-readable list of available sub-agent capabilities for the planner.
+        """Format all registered capabilities into a planner-friendly string.
 
-        Each line is of the form:
-        - capability_name: description
+        Each line is of the form: ``- <capability_name>: <description>``.
         """
         lines = []
         for name, desc in self.agent_registry.items():
@@ -460,6 +517,7 @@ class DeepAgent:
         return "\n".join(lines)
 
     def _format_plan(self, plan: Plan):
+        """Format a :class:`Plan` instance into a human-readable multi-line string."""
         lines = []
         for task in plan.tasks:
             id = task.task_id
@@ -472,7 +530,11 @@ class DeepAgent:
         return "\n".join(lines)
 
     def _format_supervisor_input_prompt(self, ctx: RuntimeState) -> str:
-        """Function to format input prompt to the supervisor agent."""
+        """Build the composite prompt passed to the supervisor agent.
+
+        The prompt includes the overall objective, a summarized status board of
+        all tasks in the plan, and a list of available capabilities.
+        """
         # Pre-format the plan to ensure the LLM sees a clean "Status Board"
         capability_display = self._format_capabilities()
 
@@ -510,6 +572,12 @@ class DeepAgent:
         )
 
     def _format_critic_input_prompt(self, task_result: TaskResult, ctx: RuntimeState):
+        """Construct the evaluation prompt sent to the critic agent.
+
+        The critic receives the overall objective, the ``TaskItem`` definition
+        it should be evaluating, the worker's ``TaskResult``, and any relevant
+        documents from the runtime state.
+        """
         _prompt = f"""
             
             Evaluate if the following worker output completed the specified task task.
@@ -537,11 +605,25 @@ class DeepAgent:
         dependencies: list[int] | None = None,
         metadata: dict | None = None,
     ) -> int:
-        """
-        Tool: Add Task
-        Description: Add a new TaskItem to the current DAG if more work is needed to complete the objective.
+        """Tool: Add Task.
 
-        Must add any `sub_task_dependencies` that may be needed to complete the new task.
+        Create and register a new ``TaskItem`` in the current plan/DAG when
+        more work is required to achieve the overall objective.
+
+        The supervisor should specify any upstream dependencies so that
+        execution order can be enforced.
+
+        Args:
+            ctx: ``RunContext`` carrying the current ``RuntimeState``.
+            sub_task_objective: Natural-language objective for the new task.
+            capability: Name of the capability / sub-agent that should execute
+                this task.
+            dependencies: Optional list of task IDs that must complete
+                successfully before this task can run.
+            metadata: Optional free-form metadata dictionary attached to the task.
+
+        Returns:
+            The integer ``task_id`` assigned to the newly created task.
         """
         plan = ctx.deps.plan
         new_id = ctx.deps.next_task_id
@@ -562,10 +644,15 @@ class DeepAgent:
     async def cancel_task(
         self, ctx: RunContext[RuntimeState], task_id: int, reason: str
     ):
-        """
-        Tool: Cancel Task
-        Description: Use this to remove a task from the plan if it is no longer
-        relevant or if a failure in an upstream dependency makes it impossible.
+        """Tool: Cancel Task.
+
+        Mark a task as ``CANCELLED`` when it is no longer relevant or when
+        a failure in an upstream dependency makes it impossible to complete.
+
+        Args:
+            ctx: ``RunContext`` carrying the current ``RuntimeState``.
+            task_id: Identifier of the task to cancel.
+            reason: Human-readable explanation for the cancellation.
         """
         if task_id in ctx.deps.plan:
             # Instead of deleting, mark as CANCELLED to keep history
@@ -580,7 +667,16 @@ class DeepAgent:
         sub_task_objective: Optional[str] = None,
         dependencies: Optional[List[int]] = None,
     ):
-        """Update an existing task's objective or its dependency requirements."""
+        """Tool: Patch Task.
+
+        Update an existing task's objective and/or dependency list in-place.
+
+        Args:
+            ctx: ``RunContext`` carrying the current ``RuntimeState``.
+            task_id: Identifier of the task to modify.
+            sub_task_objective: New sub-task objective, if changing.
+            dependencies: Updated list of dependency IDs, if changing.
+        """
         task = ctx.deps.plan.get(task_id)
         if not task:
             return "Task not found."
@@ -593,7 +689,19 @@ class DeepAgent:
 
     @traced()
     async def run(self) -> DeepAgentRunResult:
+        """Run the full DeepAgent control loop until completion or max steps.
 
+        This method repeatedly:
+
+        * Invokes the supervisor to decide which tasks to execute next.
+        * Executes ready tasks in parallel via their associated sub-agents.
+        * Sends results to the critic for QA and status updates.
+        * Optionally checkpoints state between iterations.
+
+        Returns:
+            A ``DeepAgentRunResult`` containing the final output, the full plan,
+            and the final ``RuntimeState``.
+        """
         runtime_state = self._initialize_runtime_state(
             objective=self.prompt, registry=self.agent_registry
         )
@@ -611,9 +719,7 @@ class DeepAgent:
             supervisor_response = supervisor_response.output
 
             if supervisor_response.all_tasks_completed:
-                logger.info(
-                    f"--- All tasks completed according to supervisor. Ending execution loop. ---"
-                )
+                logger.info(f"--- All tasks completed. Ending execution loop. ---")
                 stop_execution = True
                 continue
 
@@ -625,14 +731,12 @@ class DeepAgent:
 
             if len(task_results) == 0:
                 # handle case if task_results are empty
-                logger.info("NO TASK RESULTS")
+                logger.info("No task results found. Stopping.")
                 stop_execution = True
                 continue
 
-            logger.info("--- Task Results ---")
+            # logger.info("--- Task Results ---")
             logger.info(f"Number of tasks executed: {len(task_results)}")
-            logger.info(f"Results: {task_results}")
-            logger.info("--- Task Result ---")
             # go through responses and evaluate if they have completed the task
             for task_result in task_results or []:
                 logger.info(f"--- Evaluating Task Result for {task_result.task_id} ---")
@@ -642,9 +746,9 @@ class DeepAgent:
                     deps=runtime_state,
                 )
                 qa_response = qa_response.output
-
-                logger.info(f"--- QA Response ---")
-                logger.info(qa_response.model_dump_json())
+                if self.verbose:
+                    logger.info(f"--- QA Response ---")
+                    logger.info(qa_response.model_dump_json(indent=2))
 
                 task = runtime_state.plan[task_result.task_id]
 
@@ -691,6 +795,11 @@ class DeepAgent:
         return return_result
 
     def _dependencies_satisfied(self, step: TaskItem, ctx: RuntimeState) -> bool:
+        """Return ``True`` if all of a task's dependencies are fully satisfied.
+
+        Currently a dependency is considered satisfied only if the dependent
+        task exists and is in the ``COMPLETED`` state.
+        """
         # Consider a dependency satisfied only if it's COMPLETED (or whatever set you like)
         required_statuses = {TaskStatus.COMPLETED}
         for dep_id in step.sub_task_dependencies or []:
@@ -706,7 +815,12 @@ class DeepAgent:
     async def _execute_ready_tasks(
         self, tasks: SupervisorDecision, ctx: RuntimeState
     ) -> list[TaskItem]:
-        """Finds all tasks that are ready to run and executes them in parallel."""
+        """Execute all tasks selected by the supervisor that are ready to run.
+
+        Tasks whose dependencies are satisfied are executed concurrently using
+        an ``asyncio.TaskGroup``. The returned list contains the updated
+        ``TaskItem`` instances after execution.
+        """
         candidate_steps = [ctx.plan[id] for id in tasks.tasks_to_execute]
 
         ready_steps = [
@@ -766,7 +880,12 @@ class DeepAgent:
     async def execute(
         self, sub_agent: Agent, step: TaskItem, runtime_state: RuntimeState
     ) -> TaskItem:
-        """Helper to run an agent and capture its output into the step object."""
+        """Execute a sub-agent for a single task and record the result.
+
+        Builds a task-specific prompt (with optional supervisor feedback),
+        runs the provided ``sub_agent``, and updates the ``TaskItem`` status
+        and result based on success or failure.
+        """
 
         _feedback_for_agent = None
         if isinstance(step.parameters, dict):
@@ -825,31 +944,34 @@ class DeepAgent:
 
             ONLY act on this sub-task and any feedback. Do not re-plan or change the task.
             """
-        # try:
-        result = await sub_agent.run(
-            user_prompt,
-            deps=runtime_state,
-            usage_limits=UsageLimits(tool_calls_limit=20),
-        )
-        step.result = result.output
-        step.status = TaskStatus.NEEDS_REVIEW
-        return step
-        # except Exception as e:
-        #     step.status = TaskStatus.ERRORED
-        #     step.error_msg = str(e)
-        #     return step
+        try:
+            result = await sub_agent.run(
+                user_prompt,
+                deps=runtime_state,
+                usage_limits=UsageLimits(tool_calls_limit=20),
+            )
+
+            step.result = result.output
+            step.status = TaskStatus.NEEDS_REVIEW
+            return step
+        except Exception as e:
+            step.status = TaskStatus.ERRORED
+            step.error_msg = str(e)
+            return step
 
     async def update_task_status(
         self, ctx: RunContext[RuntimeState], task_id: int, status: TaskStatus
     ):
-        """The supervisor uses this for updating a specific task in the plan to a new status.
+        """Tool: Update Task Status.
 
-        When to use:
-            - If a task has no dependencies and needs to be set to 'READY' state
-            - If a task has a result which has been QA'd and passed.
+        Primarily used by the supervisor to transition a task between states
+        (e.g. to ``READY`` or ``COMPLETED``) once dependencies are met or QA
+        has passed.
 
-        When not to use:
-            - Setting a task to a status to complete the plan before it is actually done.
+        Args:
+            ctx: ``RunContext`` carrying the current ``RuntimeState``.
+            task_id: Identifier of the task to update.
+            status: New :class:`TaskStatus` value for the task.
         """
         if task_id in ctx.deps.plan:
             ctx.deps.plan.get(task_id).status = status
@@ -857,33 +979,34 @@ class DeepAgent:
         return f"Error: No task with {task_id} found in plan. Be sure task_id actually exists."
 
     def handle_critic_result(self, task: TaskItem, review: TaskQAResult):
-        """Deterministic transition logic to be used after critic run."""
+        """Apply the critic's QA result to a task.
+
+        Currently this records only the most recent review and increments the
+        task's ``attempt_count``. Higher-level logic can then decide whether to
+        retry, patch, or cancel the task.
+        """
         task.attempt_count += 1
         # IMPORTANT: For now only stores the latest review information, not previous review rounds
         task.task_feedback = review
-        # if review.passed:
-        #     task.status = TaskStatus.NEEDS_REVIEW
-        # else:
-        #     if task.attempt_count < task.max_attempts:
-        #         # THE TRANSITION
-        #         task.status = TaskStatus.RERUN  # Or a specific RERUN status
-
-        #         task.sub_task_objective += f"\n\n[RETRY {task.attempt_count}] Previous attempt failed review: {review.reasoning}"
-        #     else:
-        #         task.status = TaskStatus.FAILED
-        #         task.error_msg = (
-        #             f"Max retries reached. Critic feedback: {review.reasoning}"
-        #         )
 
     async def view_qa_report(self, ctx: RunContext[RuntimeState], task_id: int) -> str:
-        """
-        Tool Name: View QA Report
-        Desription: Tool to view the specific detailed QA report for a given task_id.
-        When to use:
-            - If you need to review the full QA report from the critic.
+        """Tool: View QA Report.
+
+        Return the full serialized QA report for a specific task, if one is
+        available. This is typically called by the supervisor when additional
+        inspection of the critic's reasoning is required.
+
+        Args:
+            ctx: ``RunContext`` carrying the current ``RuntimeState``.
+            task_id: Identifier of the task whose QA report should be viewed.
+
+        Returns:
+            A JSON-formatted string representation of the stored
+            :class:`TaskQAResult`, or a message describing why no report is
+            available.
         """
         task = ctx.deps.plan.get(task_id)
-        logger.info(ctx.deps.plan)
+        logger.info(f"Checking QA Report for task: {task_id}")
         if task is None:
             return f"No task with id {task_id}."
 

@@ -6,6 +6,7 @@ nav:
   - Agent Concepts: agents.md
   - Models: models.md
   - Tools: tools.md
+  - Observability: observability.md
   - Customization: customization.md
   - API Reference: api.md
 
@@ -40,7 +41,9 @@ plugins:
   - mkdocstrings:
       handlers:
         python:
-          paths: ["."]
+          # Add the source tree to Python's import path so mkdocstrings can
+          # import `pydantask` (which lives under `src/`).
+          paths: ["src"]
           options:
             docstring_style: google
             show_source: true

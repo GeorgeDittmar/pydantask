@@ -9,7 +9,8 @@ You can add custom sub‑agents (capabilities) to your `DeepAgent` setup.
 - a full `pydantic_ai.Agent` instance, or
 - a simple async/sync callable (a plain tool function).
 
-These are merged with the built‑in capabilities (`producer_agent`, `research_agent`) inside `_setup_default_sub_agents`.
+These are merged with the built‑in capabilities (`producer_agent`, `research_agent`,
+`worker_agent`) inside `_setup_default_sub_agents`.
 
 ### Example: custom sub‑agent (Agent)
 
