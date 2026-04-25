@@ -77,18 +77,15 @@ from pydantask.models import (
     TracingBackend,
 )
 
+# Default tool wiring is intentionally in-memory focused.
+# Filesystem tools still exist in `pydantask.tools.default_tools` but are not enabled by default.
 from pydantask.tools.default_tools import (
-    read_scratch_notes,
-    write_to_file_system,
-    read_from_file_system,
-    think_tool,
-    get_current_datetime,
-    list_completed_tasks,
-    list_documents,
-    get_task_result,
-    save_task_context,
-    read_task_context,
     append_scratch_note,
+    get_current_datetime,
+    get_task_result,
+    list_completed_tasks,
+    read_scratch_notes,
+    think_tool,
 )
 
 from pydantask.observe.tracing import (
@@ -189,13 +186,15 @@ class DeepAgent:
             end_strategy="exhaustive",
         )
 
+        # NOTE: Filesystem tools exist in `pydantask.tools.default_tools`, but are not
+        # enabled by default. The harness is currently in-memory focused.
         self._critic_agent = critic_agent or Agent(
             model=self._retry_model,
             name="_default_Critic_Agent",
             system_prompt=CRITIC_SYS_PROMPT,
             output_type=TaskQAResult,
             deps_type=RuntimeState,
-            tools=[read_from_file_system, get_current_datetime, think_tool],
+            tools=[get_current_datetime, think_tool],
             # end_strategy="exhaustive",
         )
 
@@ -453,7 +452,7 @@ class DeepAgent:
         name: str = "Agent",
         deps_type: Type[RuntimeState] = RuntimeState,
         output_type=None,
-        tools: list[Callable] = [],
+        tools: list[Callable] | None = None,
         end_strategy="exhaustive",
     ) -> Agent:
         """Instantiate an ``Agent`` and bind its system prompt from a spec.
@@ -467,7 +466,7 @@ class DeepAgent:
             name=name,
             deps_type=deps_type,
             output_type=output_type,
-            tools=tools,
+            tools=tools or [],
             end_strategy=end_strategy,
         )
 
@@ -571,27 +570,32 @@ class DeepAgent:
             current_year=datetime.now().year,
         )
 
-    def _format_critic_input_prompt(self, task_result: TaskResult, ctx: RuntimeState):
+    def _format_critic_input_prompt(self, task: TaskItem, ctx: RuntimeState) -> str:
         """Construct the evaluation prompt sent to the critic agent.
 
         The critic receives the overall objective, the ``TaskItem`` definition
-        it should be evaluating, the worker's ``TaskResult``, and any relevant
-        documents from the runtime state.
+        it should be evaluating, the worker's structured ``TaskResult`` (if any),
+        and any relevant in-memory documents from the runtime state.
+
+        Note: this harness is currently in-memory focused; do not assume any
+        filesystem persistence.
         """
+        worker_output = task.result.model_dump_json(indent=2) if task.result else "null"
+
         _prompt = f"""
             
-            Evaluate if the following worker output completed the specified task task.
-            
+            Evaluate if the following worker output completed the specified task.
+
             Overall Objective:
             {ctx.objective}
 
             Sub Task Definition (TaskItem):
-            {ctx.plan[task_result.task_id].model_dump_json(indent=2)}
+            {task.model_dump_json(indent=2)}
 
             Worker Output (TaskResult):
-            {task_result.result.model_dump_json(indent=2)}
-            
-            Any documents to review:
+            {worker_output}
+
+            In-memory documents / scratchpads:
             {ctx.document_store}
             
             """
@@ -755,26 +759,6 @@ class DeepAgent:
                 # deterministic transition based on critic
                 self.handle_critic_result(task, qa_response)
 
-                # If the task result was produced via tools that return JSON (like write_to_file_system),
-                # extract the written files to populate the task's output_paths.
-                if hasattr(task_result, "result") and isinstance(
-                    task_result.result, str
-                ):
-                    try:
-                        import json
-
-                        tool_output = json.loads(task_result.result)
-                        if (
-                            isinstance(tool_output, dict)
-                            and "written_files" in tool_output
-                        ):
-                            if task.result:
-                                task.result.output_paths.extend(
-                                    tool_output["written_files"]
-                                )
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-
                 self._checkpoint_state(runtime_state)
 
                 # if qa_response.do
@@ -823,8 +807,12 @@ class DeepAgent:
         """
         candidate_steps = [ctx.plan[id] for id in tasks.tasks_to_execute]
 
+        allowed_statuses = {TaskStatus.READY, TaskStatus.RERUN}
         ready_steps = [
-            step for step in candidate_steps if self._dependencies_satisfied(step, ctx)
+            step
+            for step in candidate_steps
+            if step.status in allowed_statuses
+            and self._dependencies_satisfied(step, ctx)
         ]
         # if no ready steps return empty list
         if len(ready_steps) == 0:
@@ -918,7 +906,7 @@ class DeepAgent:
 
             user_prompt += """
                     Your job:
-                    - Use ONLY the completed sub-task results and any files they point to.
+                    - Use ONLY the completed sub-task results from this run.
                     - Combine their findings into a single, coherent final answer.
                     - Follow your system prompt instructions for citations and final TaskResult structure.
                     - Do NOT request new research or create new sub-tasks.
@@ -988,6 +976,23 @@ class DeepAgent:
         task.attempt_count += 1
         # IMPORTANT: For now only stores the latest review information, not previous review rounds
         task.task_feedback = review
+
+        if review.passed:
+            task.status = TaskStatus.COMPLETED
+            task.error_msg = None
+            return
+
+        # QA failed
+        if task.attempt_count >= task.max_attempts:
+            task.status = TaskStatus.FAILED
+            task.error_msg = (
+                f"Max retries reached ({task.attempt_count}/{task.max_attempts})."
+            )
+            return
+
+        task.status = TaskStatus.READY
+        task.error_msg = None
+        task.sub_task_objective = f"{task.sub_task_objective}\n\nPrevious attempt failed review; feedback: {review.reasoning}"
 
     async def view_qa_report(self, ctx: RunContext[RuntimeState], task_id: int) -> str:
         """Tool: View QA Report.
