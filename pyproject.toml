@@ -8,7 +8,7 @@ license = {text = "Apache-2.0"}
 authors = [
     {name = "George Dittmar ", email = "your.email@example.com"}
 ]
-keywords = ["ai", "agents", "pydantic", "orchestration", "llm"]
+keywords = ["ai", "agents", "pydantic", "orchestration", "llm", "DAG", "Autonomous"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -42,3 +42,13 @@ docs = [
     "mkdocs-material>=9.7.1",
     "mkdocstrings[python]>=1.0.3",
 ]
+
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

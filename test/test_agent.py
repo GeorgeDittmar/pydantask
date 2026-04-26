@@ -32,7 +32,7 @@ def runtime_state() -> RuntimeState:
 def make_minimal_deep_agent(prompt: str = "obj") -> agent_mod.DeepAgent:
     """Create a DeepAgent without running its heavy __init__."""
     da = agent_mod.DeepAgent.__new__(agent_mod.DeepAgent)
-    da.prompt = prompt
+    da.objective = prompt
     da.agent_registry = {}
     da._max_steps = 3
     da.checkpoint = False
@@ -75,9 +75,9 @@ def test_deep_agent_init_sets_registry_keys(monkeypatch: pytest.MonkeyPatch):
         # Avoid pulling in pydantic-ai's tool schema machinery for this unit test.
         patch.object(agent_mod, "Agent", autospec=True) as agent_cls,
     ):
-        deep_agent = agent_mod.DeepAgent(prompt="Test Goal", trace=False)
+        deep_agent = agent_mod.DeepAgent("Test Goal", trace=False)
 
-    assert deep_agent.prompt == "Test Goal"
+    assert deep_agent.objective == "Test Goal"
     assert "research_agent" in deep_agent.agent_registry
     assert "producer_agent" in deep_agent.agent_registry
 

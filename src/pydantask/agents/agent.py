@@ -67,6 +67,7 @@ from pydantask.models import (
     CapabilityDescription,
     TaskResult,
     DeepAgentRunResult,
+    TracingBackend,
 )
 
 # Default tool wiring is intentionally in-memory focused.
@@ -152,7 +153,12 @@ class DeepAgent:
         self.model_name: str = (
             model if isinstance(model, str) else model.__class__.__name__
         )
-        self.objective: str = objective  # Objective for the agent
+        if objective is None:
+            raise TypeError("DeepAgent requires 'prompt' (objective) to be provided")
+
+        # Back-compat: public API historically used `prompt` in some places and
+        # `objective` in others.
+        self.objective: str = objective
         self._max_steps: int = max_steps  # Max steps to prevent infinite loops
         self.token_budget: Union[int, None] = set_token_budget
         self.verbose = verbose_logging
@@ -160,8 +166,12 @@ class DeepAgent:
         self._retry_client = self._create_retrying_client()
 
         self.checkpoint = checkpoint
-        self.checkpoint_path = Path(f"_checkpoint/{uuid.uuid4()}/")
-        self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+
+
+        self.checkpoint_path: Path | None = None
+        if checkpoint:
+            self.checkpoint_path = Path(f"_checkpoint/{uuid.uuid4()}/")
+            self.checkpoint_path.mkdir(parents=True, exist_ok=True)
         # Build the shared model used by all sub-agents.
         # We inject the retrying httpx client into the provider for durability.
         self._retry_model = self._build_model(model)
@@ -488,6 +498,9 @@ class DeepAgent:
         created when checkpointing is enabled on construction.
         """
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        if self.checkpoint_path is None:
+            return
+
         new_checkpoint = utils.get_incremented_path(
             f"state_{timestamp}", "json", directory=self.checkpoint_path
         )
@@ -748,7 +761,9 @@ class DeepAgent:
                 # deterministic transition based on critic
                 self.handle_critic_result(task, qa_response)
 
-                self._checkpoint_state(runtime_state)
+
+                if self.checkpoint:
+                    self._checkpoint_state(runtime_state)
 
                 # if qa_response.do
                 # add the qa report to the task result for the supervisor to review
@@ -759,7 +774,7 @@ class DeepAgent:
             step_count += 1
 
         return_result = DeepAgentRunResult(
-            objective=self.prompt,
+            objective=self.objective,
             final_result=task.result if "task" in locals() else None,
             plan=runtime_state.plan,
             runtime_state=runtime_state,
@@ -875,7 +890,7 @@ class DeepAgent:
 
             user_prompt = f"""
             Overall objective:
-            {self.prompt}
+            {self.objective}
 
             You are the final synthesis agent.
             - First, call `list_completed_tasks` to see all completed upstream tasks.
@@ -907,7 +922,7 @@ class DeepAgent:
             {step.model_dump_json(indent=2)}
 
                 Overall objective:
-                {self.prompt}
+                {self.objective}
 
                 """
             if _feedback_for_agent:
