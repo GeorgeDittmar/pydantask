@@ -1,4 +1,4 @@
-from src.pydantask.models.models import (
+from pydantask.models.models import (
     TaskItem,
     TaskStatus,
     CapabilityDescription,
