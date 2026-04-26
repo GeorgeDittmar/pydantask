@@ -42,10 +42,7 @@ from pydantic_ai.usage import RunUsage, UsageLimits
 from loguru import logger
 from pydantask.agents.spec import (
     BaseAgentSpec,
-    SupervisorSpec,
     ProducerSpec,
-    ResearcherSpec,
-    SynthesizerSpec,
 )
 from pydantask.agents import utils
 from pathlib import Path
@@ -59,11 +56,7 @@ from pydantask.prompts.prompts import (
     WORKER_AGENT_SYS_PROMPT,
     DYNAMIC_SUPERVISOR_SYS_PROMPT,
 )
-from pydantask.observe.tracing import (
-    _langfuse_instrumented,
-    _langsmith_instrumented,
-    _logfire_instrumented,
-)
+
 from pydantask.models import (
     RuntimeState,
     TaskItem,
@@ -74,7 +67,6 @@ from pydantask.models import (
     CapabilityDescription,
     TaskResult,
     DeepAgentRunResult,
-    TracingBackend,
 )
 
 # Default tool wiring is intentionally in-memory focused.
@@ -105,17 +97,15 @@ class DeepAgent:
 
     def __init__(
         self,
-        prompt: str,
+        objective: str,
         model: str | Model = "gpt-5.2",
-        # thinking: bool = False,
         critic_agent: Optional[Agent] = None,
-        planner_agent: Optional[Agent] = None,
         supervisor_agent: Optional[Agent] = None,
         researcher_agent: Optional[Agent] = None,
+        producer_agent: Optional[Agent] = None,
         max_steps: int = 20,
         set_token_budget: Union[int, None] = None,
         sub_agents: Union[None, list[CapabilityDescription]] = None,
-        human_in_loop: bool = False,
         # default output type for the producer agent, can be set to a default type or custom pydantic model for better structure and validation of final output
         output_type: Type = TaskResult,
         # planning_mode: str = "dynamic",  # "static" | "dynamic"
@@ -123,27 +113,26 @@ class DeepAgent:
         checkpoint: bool = False,
         verbose_logging: bool = False,
     ):
-        """Initialize a DeepAgent orchestration instance.
+        """Initialize a DeepAgent instance.
 
         Args:
-            prompt: High-level overall objective for the agent run.
+            objective: The objective / task the deep agent is working on.
             model: Model identifier or ``pydantic_ai.models.Model`` instance to use
                 for all sub-agents. Defaults to ``"gpt-5.2"``.
             critic_agent: Optional pre-configured critic ``Agent``. If omitted, a
                 default critic agent is created.
-            planner_agent: Optional planner ``Agent`` instance. (Currently unused,
-                reserved for future static planning flows.)
             supervisor_agent: Optional supervisor ``Agent`` used to manage the task
                 DAG. If omitted, a default dynamic supervisor is created.
             researcher_agent: Optional research ``Agent``. If omitted, a default
                 web/doc research agent is created.
+            producer_agent: Optional producer ``Agent``. If omitted, a default
+                agent is created.
             max_steps: Maximum number of DeepAgent control-loop iterations to run
                 before forcing termination.
             set_token_budget: Optional global token budget for the run. Currently
                 stored but not strictly enforced.
             sub_agents: Additional ``CapabilityDescription`` objects to register as
                 callable sub-agents alongside the built-ins.
-            human_in_loop: Reserved flag for interactive / human-feedback flows.
             output_type: Pydantic model type used as the default output structure
                 for the producer agent.
             trace: If ``True``, auto-configure tracing via the configured backend.
@@ -163,7 +152,7 @@ class DeepAgent:
         self.model_name: str = (
             model if isinstance(model, str) else model.__class__.__name__
         )
-        self.prompt: str = prompt  # Objective for the agent
+        self.objective: str = objective  # Objective for the agent
         self._max_steps: int = max_steps  # Max steps to prevent infinite loops
         self.token_budget: Union[int, None] = set_token_budget
         self.verbose = verbose_logging
@@ -177,7 +166,7 @@ class DeepAgent:
         # We inject the retrying httpx client into the provider for durability.
         self._retry_model = self._build_model(model)
 
-        self._planner_agent = planner_agent or Agent(
+        self._planner_agent = producer_agent or Agent(
             name="_default_Planner_Agent",
             model=self._retry_model,
             system_prompt=PLANNER_SYS_PROMPT,
@@ -216,19 +205,19 @@ class DeepAgent:
             end_strategy="exhaustive",
         )
 
-        self._producer_agent = self._create_agent_from_spec(
-            agent_spec=ProducerSpec(),
-            name="_default_Producer_Agent",
+        self._producer_agent = Agent(
+            model=self._retry_model,
+            name="_default_Producer_agent",
+            system_prompt=PRODUCER_SYS_PROMPT,
+            deps_type=RuntimeState,
+            output_type=TaskResult,
             tools=[
-                # Reasoning / time / plan-inspection tools
-                think_tool,
-                get_current_datetime,
+                # Plan / history inspection
                 list_completed_tasks,
                 get_task_result,
+                # Reflection
+                think_tool,
             ],
-            output_type=output_type,
-            deps_type=RuntimeState,
-            model=self._retry_model,
         )
 
         # TODO: rework some of these tools
@@ -313,7 +302,7 @@ class DeepAgent:
 
         if provider_name in {"openai", "openai_compat", "openrouter"}:
             # NOTE: "openrouter" here assumes OpenAI-compatible API. If you want true
-            # OpenRouter defaults (headers/routing), you may want OpenRouterProvider.
+            # OpenRouter defaults (headers/routing), we may want OpenRouterProvider. Dunno
             return OpenAIChatModel(
                 model_name, provider=OpenAIProvider(http_client=self._retry_client)
             )
@@ -707,7 +696,7 @@ class DeepAgent:
             and the final ``RuntimeState``.
         """
         runtime_state = self._initialize_runtime_state(
-            objective=self.prompt, registry=self.agent_registry
+            objective=self.objective, registry=self.agent_registry
         )
 
         step_count = 0

@@ -2,13 +2,13 @@ from abc import ABC, abstractmethod
 from typing import Callable, Any, Union
 from pydantic_ai.agent import Agent
 from pydantic_ai import RunContext
-from pydantask.models import RuntimeState
-from pydantask.prompts import (
+from src.pydantask.models import RuntimeState
+from src.pydantask.prompts import (
     RESEARCH_AGENT_SYS_PROMPT,
     SUPERVISOR_INPUT_PROMPT,
     DYNAMIC_SUPERVISOR_SYS_PROMPT,
 )
-from pydantask.prompts.prompts import PRODUCER_SYS_PROMPT
+from src.pydantask.prompts.prompts import PRODUCER_SYS_PROMPT
 
 
 class BaseAgentSpec(ABC):

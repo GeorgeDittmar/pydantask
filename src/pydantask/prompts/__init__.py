@@ -1,4 +1,4 @@
-from pydantask.prompts.prompts import (
+from src.pydantask.prompts.prompts import (
     PLANNER_SYS_PROMPT,
     CRITIC_SYS_PROMPT,
     RESEARCH_AGENT_SYS_PROMPT,
