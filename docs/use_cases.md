@@ -34,8 +34,8 @@ At a high level, a deep research run with `DeepAgent` follows a simple loop:
 
 1. **You provide an objective.** A single natural-language prompt that describes the research question or report you want.
 2. **A dynamic supervisor builds the task graph.** Rather than relying on a separate upfront planner step, the supervisor agent incrementally creates `TaskItem`s at runtime using the `add_task` tool.
-3. **Capabilities execute tasks.** The supervisor schedules runnable tasks, and `DeepAgent` executes them using the capability named in `TaskItem.capability` (typically `research_agent` for web research and `producer_agent` for synthesis).
-4. **A critic reviews results.** The critic (`TaskQAResult`) checks each task output and drives deterministic retry/fail transitions.
+3. **Capabilities execute tasks.** The supervisor schedules runnable tasks, and `DeepAgent` executes them using the capability named in `TaskItem.capability` (typically `research_agent` for web research, `worker_agent` for general analysis, and `producer_agent` for synthesis).
+4. **A critic reviews results.** The critic (`TaskQAResult`) checks each task output and provides structured QA feedback (pass/fail + reasoning). Any status transitions (e.g., marking tasks as `COMPLETED` or `FAILED`) are driven by higher-level orchestration logic, typically via supervisor tools such as `update_task_status`.
 5. **Repeat until done.** The loop continues until the supervisor sets `all_tasks_completed=True` (or `max_steps` is reached).
 6. **You get a final report.** `DeepAgent.run()` returns a `DeepAgentRunResult` with:
    - `final_result` (a `TaskResult`, when a producer task ran)
@@ -148,11 +148,18 @@ When you run the script above:
   - A **critic agent** (system prompt: `CRITIC_SYS_PROMPT`) that:
     - evaluates each executed task’s `TaskResult`
     - returns a `TaskQAResult(passed=..., reasoning=...)`
-    - drives deterministic transitions via `handle_critic_result` (completed vs retry vs failed)
+    - records the latest QA review for each task (including pass/fail) via
+      `handle_critic_result`, while actual status transitions are made via
+      supervisor/orchestration tools such as `update_task_status`.
 
   - A capability registry (`DeepAgent.agent_registry`) that contains (by default):
-    - `research_agent`: uses `tavily_search_tool` (requires `TAVILY_API_KEY`) to gather and cite sources
-    - `producer_agent`: synthesizes across completed tasks into a final `TaskResult`
+    - `research_agent`: uses `tavily_search_tool` when `TAVILY_API_KEY` is set,
+      otherwise a DuckDuckGo-based search tool, to gather and cite sources.
+    - `producer_agent`: synthesizes across completed tasks into a final
+      `TaskResult`.
+    - `worker_agent`: a general-purpose worker used for analysis,
+      summarization, and other non-research tasks operating on existing
+      context.
 
 - Execution is dependency-aware and parallelized:
   - The supervisor may schedule multiple tasks.

@@ -7,7 +7,7 @@ PydanTask is a Harness for building deep, autonomous agents that don't just resp
 It builds on top of [Pydantic AI](https://ai.pydantic.dev/) and adds:
 
 - Long‑horizon planning and hierarchical task management
-- A reusable orchestration loop (`DeepAgent`) with planner → supervisor → worker/researcher/producer → critic
+- A reusable orchestration loop (`DeepAgent`) with supervisor (dynamic planner) → worker/researcher/producer → critic
 - Shared runtime state across agents (`RuntimeState`)
 - Extensible capabilities via `CapabilityDescription` and custom tools/agents
 
@@ -27,8 +27,7 @@ from pydantask.agents.agent import DeepAgent
 
 `DeepAgent` coordinates several built‑in agents:
 
-- **Planner** – turns a single objective into a `Plan` (list of `TaskItem`s).
-- **Supervisor** – chooses which tasks to run next, based on statuses and dependencies.
+- **Supervisor** – plans and chooses which tasks to run next, based on statuses and dependencies.
 - **Researcher** – performs web/external research for tasks that need new information.
 - **Producer** – synthesizes intermediate results into a final answer or artifact.
 - **Critic** – evaluates task outputs and drives deterministic retry/fail transitions.
@@ -58,12 +57,12 @@ Key concepts:
 
 The control loop in `DeepAgent.run()`:
 
-1. Planner creates a `Plan` for the objective.
-2. `RuntimeState` is initialized with the plan and capabilities.
+1. Supervisor incrementally builds a task DAG for the objective (via tools like `add_task`).
+2. `RuntimeState` is initialized with the capability registry.
 3. In each cycle:
-   - Supervisor decides which tasks to execute next.
-   - Ready tasks (dependencies satisfied) are executed by the appropriate capability (sub‑agent).
-   - Critic reviews each result and calls `handle_critic_result` to update status and retry/failed state.
+   - Supervisor decides which tasks to execute next based on plan progress, task dependencies, and self reflection.
+   - Ready tasks, so long as dependencies are satisfied, are executed by the appropriate capability (sub‑agent).
+   - Critic reviews each result and produces a "QA" report for the supervisor to review if the task failed.
 4. Loop stops when the Supervisor sets `all_tasks_completed = True` or `max_steps` is reached.
 
 For more detail, see `docs/agents.md`.
@@ -79,7 +78,7 @@ PydanTask assumes you already have Pydantic AI and an OpenAI‑compatible model 
 From your project root:
 
 ```bash
-pip install -e .
+pip install pydantask
 ```
 
 (or however you manage your environment; if you use Poetry, adjust accordingly.)
@@ -89,9 +88,7 @@ pip install -e .
 Set the following environment variables (e.g. in your shell or a `.env` file):
 
 - `OPENAI_API_KEY` – for the underlying OpenAIChatModel (or whatever your Pydantic AI provider expects).
-- `TAVILY_API_KEY` – required by the default `research_agent` (via `tavily_search_tool`).
-
-If `TAVILY_API_KEY` is missing, `DeepAgent.__init__` will raise a `ValueError`.
+- `TAVILY_API_KEY` – used by the `research_agent` (via `tavily_search_tool`). If this key is not set, defaults to DuckDuckGo search.
 
 ---
 
@@ -111,14 +108,16 @@ async def main() -> None:
         max_steps=10,
     )
 
-    runtime_state = await agent.run()
+    run_result = await agent.run()
+    runtime_state = run_result.runtime_state
 
     # Inspect the final plan and results
     for task_id, task in sorted(runtime_state.plan.items()):
         print(f"Task {task_id} [{task.status}]: {task.sub_task_objective}")
         if task.result is not None:
             print("  Summary:", task.result.summary)
-            print("  Outputs:", task.result.output_paths)
+            # The main long-form output for the task is stored in-memory:
+            print("  Detailed output:", (task.result.detailed_output or "<empty>"))
             print()
 
 if __name__ == "__main__":
@@ -127,12 +126,15 @@ if __name__ == "__main__":
 
 What this does:
 
-1. Constructs a `DeepAgent` with default Planner, Supervisor, Researcher, Producer, and Critic.
-2. Planner breaks down the objective into `TaskItem`s (using built‑in capabilities `research_agent` and `producer_agent`).
+1. Constructs a `DeepAgent` with default Supervisor, Researcher, Producer, and Critic.
+2. Supervisor (dynamic DAG architect) breaks down the objective into `TaskItem`s using built-in capabilities.
 3. Supervisor picks tasks to run in each loop iteration.
-4. Researcher and Producer execute those tasks, writing notes/reports to `pydantask/tools/tmp_files/` when appropriate.
+4. Researcher and Producer execute those tasks and return structured `TaskResult`s.
 5. Critic evaluates each task result and marks tasks as `COMPLETED`, retryable (`READY`/`RERUN`), or `FAILED` based on configured retry limits.
 6. When done, you get a `RuntimeState` with the full plan and results.
+
+> Note: this harness currently treats task artifacts as **in-memory** outputs (e.g. `TaskResult.detailed_output`).
+> File persistence is intentionally out-of-scope for now.
 
 ---
 

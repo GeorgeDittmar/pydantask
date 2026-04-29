@@ -1,14 +1,34 @@
 # Quickstart
 
-Install dependencies:
+Install dependencies from PyPI:
 
 ```sh
 pip install pydantask
 ```
 
+For development installs (from a cloned repo):
+
+```sh
+pip install -e .
+```
+
+You will also need at least:
+
+- `OPENAI_API_KEY` set in your environment for the language model backend.
+- (Optional) `TAVILY_API_KEY` if you want the default research agent to use
+  Tavily web search; otherwise it will fall back to a built-in DuckDuckGo-based
+  search tool.
+
+A simple `.env` file (used with `python-dotenv`) might look like:
+
+```bash
+OPENAI_API_KEY="sk-..."
+TAVILY_API_KEY="tvly-..."  # optional; omit to use DuckDuckGo-based search
+```
+
 Minimal usage (async):
 
-```python docs/quickstart.md
+```python 
 import asyncio
 
 from pydantask.agents import DeepAgent
