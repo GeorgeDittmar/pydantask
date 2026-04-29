@@ -1,7 +1,9 @@
 import asyncio
-
+import json
 from pydantask.agents import DeepAgent
+from pydantask.models import Plan, TaskItem
 from dotenv import load_dotenv, find_dotenv
+from pprint import pprint
 
 load_dotenv(find_dotenv())
 agent_registry = {}
@@ -26,16 +28,13 @@ Again this is a test to see how well you follow creating a plan.""",
 
 result = asyncio.run(da.run())
 
-from pprint import pprint
-
 # pprint(result.model_dump())
 # Write JSON data to a file
-import json
 
-with open("output_news.json", "w") as json_file:
+with open("output_book2.json", "w") as json_file:
     json.dump(result.model_dump_json(), json_file, indent=4)
 
-with open("result_news.md", "w") as f:
+with open("result_scifi_book2.md", "w") as f:
     f.writelines(result.final_result.detailed_output)
 
 pprint(result.final_result.detailed_output)

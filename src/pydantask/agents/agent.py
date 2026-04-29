@@ -100,6 +100,8 @@ class DeepAgent:
         self,
         objective: str,
         model: str | Model = "gpt-5.2",
+        seed_plan: Plan | None = None,
+        planning_mode: Literal['llm', 'fixed','hybrid'] = 'llm',
         critic_agent: Optional[Agent] = None,
         supervisor_agent: Optional[Agent] = None,
         researcher_agent: Optional[Agent] = None,
@@ -117,9 +119,27 @@ class DeepAgent:
         """Initialize a DeepAgent instance.
 
         Args:
-            objective: The objective / task the deep agent is working on.
+            objective: The overall objective / task the deep agent is working on.
             model: Model identifier or ``pydantic_ai.models.Model`` instance to use
                 for all sub-agents. Defaults to ``"gpt-5.2"``.
+            seed_plan: Optional pre-defined :class:`~pydantask.models.Plan` to seed
+                the initial task DAG. If provided, it is loaded into
+                :class:`~pydantask.models.RuntimeState.plan` at the start of
+                :meth:`run`.
+
+                Notes:
+                * Task IDs are respected and used as keys in ``RuntimeState.plan``.
+                * ``RuntimeState.next_task_id`` is set to ``max(task_id) + 1``.
+                * Dependencies are validated to ensure they reference existing tasks.
+            planning_mode: Controls whether the supervisor is allowed to modify the
+                plan at runtime.
+
+                * ``"llm"``: The supervisor may add/patch tasks.
+                * ``"hybrid"``: Same as ``"llm"``, but typically used with
+                  ``seed_plan`` to provide an initial DAG the supervisor can extend.
+                * ``"fixed"``: The supervisor is not given the plan-mutation tools
+                  (``add_task``/``patch_task``) and can only execute/transition the
+                  existing tasks.
             critic_agent: Optional pre-configured critic ``Agent``. If omitted, a
                 default critic agent is created.
             supervisor_agent: Optional supervisor ``Agent`` used to manage the task
@@ -153,8 +173,14 @@ class DeepAgent:
         self.model_name: str = (
             model if isinstance(model, str) else model.__class__.__name__
         )
+
         if objective is None:
             raise TypeError("DeepAgent requires 'prompt' (objective) to be provided")
+
+        if planning_mode in {"fixed", "hybrid"} and seed_plan is None:
+            raise ValueError(
+                "seed_plan must be provided when planning_mode is 'fixed' or 'hybrid'"
+            )
 
         # Back-compat: public API historically used `prompt` in some places and
         # `objective` in others.
@@ -163,10 +189,11 @@ class DeepAgent:
         self.token_budget: Union[int, None] = set_token_budget
         self.verbose = verbose_logging
         self.output_type = output_type
+        self.planning_mode = planning_mode
+        self.seed_plan = seed_plan
         self._retry_client = self._create_retrying_client()
 
         self.checkpoint = checkpoint
-
 
         self.checkpoint_path: Path | None = None
         if checkpoint:
@@ -203,15 +230,7 @@ class DeepAgent:
             system_prompt=DYNAMIC_SUPERVISOR_SYS_PROMPT,
             output_type=SupervisorDecision,
             deps_type=RuntimeState,
-            tools=[
-                self.update_task_status,
-                self.add_task,
-                self.cancel_task,
-                self.patch_task,
-                get_current_datetime,
-                think_tool,
-                self.view_qa_report,
-            ],
+            tools=self._supervisor_tools(),
             end_strategy="exhaustive",
         )
 
@@ -285,6 +304,36 @@ class DeepAgent:
     async def __aexit__(self, exc_type, exc, tb) -> None:
         """Exit the async context manager, ensuring resources are cleaned up."""
         await self.aclose()
+
+    def _supervisor_tools(self) -> list[Callable]:
+        """Return the set of tools exposed to the supervisor agent.
+
+        The selected toolset depends on :attr:`planning_mode`:
+
+        * ``fixed``: supervisor can update/cancel tasks and view QA reports, but
+          cannot add or patch tasks.
+        * ``llm`` / ``hybrid``: supervisor can also add and patch tasks.
+
+        Note: This is enforced by tool registration (not just prompting), so in
+        ``fixed`` mode the supervisor LLM cannot call ``add_task``/``patch_task``.
+        """
+        base_tools = [
+            self.update_task_status,
+            self.cancel_task,
+            self.view_qa_report,
+            get_current_datetime,
+            think_tool,
+        ]
+
+        mutating_tools = [
+            self.add_task,
+            self.patch_task,
+        ]
+
+        if self.planning_mode == "fixed":
+            return base_tools
+
+        return base_tools + mutating_tools
 
     def _build_model(self, model: str | Model) -> Model:
         """Construct a ``pydantic_ai`` model, wiring in the shared HTTP client.
@@ -478,6 +527,9 @@ class DeepAgent:
     def _initialize_runtime_state(self, objective: str, registry: dict) -> RuntimeState:
         """Create the initial :class:`RuntimeState` for a new DeepAgent run.
 
+        This initializes an empty plan. If ``seed_plan`` was provided when the
+        DeepAgent was constructed, it is applied at the start of :meth:`run`.
+
         Args:
             objective: Top-level objective for this DeepAgent execution.
             registry: Mapping of capability names to ``CapabilityDescription``
@@ -493,6 +545,8 @@ class DeepAgent:
 
     def _checkpoint_state(self, runtime: RuntimeState):
         """Persist the current runtime state to a JSON checkpoint on disk.
+
+        This is a no-op unless ``checkpoint=True`` was passed at construction.
 
         The checkpoint directory is unique per DeepAgent instance and is only
         created when checkpointing is enabled on construction.
@@ -613,6 +667,9 @@ class DeepAgent:
     ) -> int:
         """Tool: Add Task.
 
+        Note: In ``planning_mode="fixed"`` this tool is not registered on the
+        supervisor agent, but it may still be called directly in Python.
+
         Create and register a new ``TaskItem`` in the current plan/DAG when
         more work is required to achieve the overall objective.
 
@@ -675,6 +732,9 @@ class DeepAgent:
     ):
         """Tool: Patch Task.
 
+        Note: In ``planning_mode="fixed"`` this tool is not registered on the
+        supervisor agent, but it may still be called directly in Python.
+
         Update an existing task's objective and/or dependency list in-place.
 
         Args:
@@ -697,6 +757,9 @@ class DeepAgent:
     async def run(self) -> DeepAgentRunResult:
         """Run the full DeepAgent control loop until completion or max steps.
 
+        If a ``seed_plan`` was supplied at construction time, it is loaded into the
+        runtime state before the supervisor loop begins.
+
         This method repeatedly:
 
         * Invokes the supervisor to decide which tasks to execute next.
@@ -711,6 +774,7 @@ class DeepAgent:
         runtime_state = self._initialize_runtime_state(
             objective=self.objective, registry=self.agent_registry
         )
+        self._apply_seed_plan(runtime_state)
 
         step_count = 0
         stop_execution = False
@@ -781,6 +845,42 @@ class DeepAgent:
         )
 
         return return_result
+
+    def _apply_seed_plan(self, runtime_state: RuntimeState) -> None:
+        """Seed ``runtime_state.plan`` from ``self.seed_plan`` (if provided).
+
+        This is used to support user-specified plans. It validates:
+
+        * Unique task IDs.
+        * Dependencies refer to existing tasks.
+
+        It also updates ``runtime_state.next_task_id``.
+        """
+        if self.seed_plan is None:
+            return
+
+        tasks = list(self.seed_plan.tasks or [])
+        if not tasks:
+            return
+
+        plan_dict: dict[int, TaskItem] = {}
+        for t in tasks:
+            if t.task_id in plan_dict:
+                raise ValueError(f"Duplicate task_id in seed_plan: {t.task_id}")
+            # Ensure the overall objective is consistent.
+            if not getattr(t, "overall_objective", None):
+                t.overall_objective = runtime_state.objective
+            plan_dict[t.task_id] = t
+
+        for t in plan_dict.values():
+            for dep_id in t.sub_task_dependencies or []:
+                if dep_id not in plan_dict:
+                    raise ValueError(
+                        f"seed_plan task {t.task_id} depends on missing task {dep_id}"
+                    )
+
+        runtime_state.plan = plan_dict
+        runtime_state.next_task_id = max(plan_dict.keys()) + 1
 
     def _dependencies_satisfied(self, step: TaskItem, ctx: RuntimeState) -> bool:
         """Return ``True`` if all of a task's dependencies are fully satisfied.
