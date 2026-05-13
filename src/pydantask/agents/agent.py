@@ -21,8 +21,7 @@ from loguru import logger
 from os import system
 
 from enum import Enum
-from pydantic_ai import Agent, RunContext, FunctionToolset
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic_ai import Agent, RunContext
 from typing import List, Optional, Literal, Any, Dict, Callable, Union, Type
 from tenacity import retry_if_exception_type, stop_after_attempt, wait_exponential
 
@@ -38,11 +37,10 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.retries import AsyncTenacityTransport
 from pydantic_ai.common_tools.tavily import tavily_search_tool
 from pydantic_ai.common_tools.duckduckgo import duckduckgo_search_tool
-from pydantic_ai.usage import RunUsage, UsageLimits
+from pydantic_ai.usage import UsageLimits
 from loguru import logger
 from pydantask.agents.spec import (
     BaseAgentSpec,
-    ProducerSpec,
 )
 from pydantask.agents import utils
 from pathlib import Path
@@ -101,7 +99,7 @@ class DeepAgent:
         objective: str,
         model: str | Model = "gpt-5.2",
         seed_plan: Plan | None = None,
-        planning_mode: Literal['llm', 'fixed','hybrid'] = 'llm',
+        planning_mode: Literal["llm", "fixed", "hybrid"] = "llm",
         critic_agent: Optional[Agent] = None,
         supervisor_agent: Optional[Agent] = None,
         researcher_agent: Optional[Agent] = None,
@@ -190,7 +188,7 @@ class DeepAgent:
         self.verbose = verbose_logging
         self.output_type = output_type
         self.planning_mode = planning_mode
-        self.seed_plan = seed_plan
+        self.seed_plan: Union[Plan, None] = seed_plan
         self._retry_client = self._create_retrying_client()
 
         self.checkpoint = checkpoint
@@ -824,7 +822,6 @@ class DeepAgent:
 
                 # deterministic transition based on critic
                 self.handle_critic_result(task, qa_response)
-
 
                 if self.checkpoint:
                     self._checkpoint_state(runtime_state)
