@@ -41,6 +41,7 @@ from pydantic_ai.usage import UsageLimits
 from loguru import logger
 from pydantask.agents.spec import (
     BaseAgentSpec,
+    ProducerSpec,
 )
 from pydantask.agents import utils
 from pathlib import Path
@@ -201,14 +202,14 @@ class DeepAgent:
         # We inject the retrying httpx client into the provider for durability.
         self._retry_model = self._build_model(model)
 
-        self._planner_agent = producer_agent or Agent(
-            name="_default_Planner_Agent",
-            model=self._retry_model,
-            system_prompt=PLANNER_SYS_PROMPT,
-            output_type=Plan,
-            tools=[think_tool],
-            end_strategy="exhaustive",
-        )
+        # self._planner_agent = Agent(
+        #     name="_default_Planner_Agent",
+        #     model=self._retry_model,
+        #     system_prompt=PLANNER_SYS_PROMPT,
+        #     output_type=Plan,
+        #     tools=[think_tool],
+        #     end_strategy="exhaustive",
+        # )
 
         # NOTE: Filesystem tools exist in `pydantask.tools.default_tools`, but are not
         # enabled by default. The harness is currently in-memory focused.
