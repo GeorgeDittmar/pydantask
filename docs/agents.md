@@ -19,7 +19,9 @@ This page documents how `DeepAgent` works **as implemented today**.
 The public constructor accepts several optional overrides; the parameters that materially affect the current orchestration behavior are:
 
 - `prompt`: overall objective
-- `model`: model name (OpenAI-compatible)
+- `model`: model identifier or `pydantic_ai.models.Model` instance. Strings may be
+  bare model names (defaulting to the OpenAI provider) or provider-prefixed
+  values such as `"openai:gpt-4.1-mini"` or `"anthropic:claude-sonnet-4-5"`.
 - `max_steps`: outer-loop limit
 - `sub_agents`: additional capabilities to register
 - `trace`: whether to enable tracing auto-detection
@@ -38,7 +40,9 @@ agent = DeepAgent(
 )
 ```
 
-The default `research_agent` capability requires `TAVILY_API_KEY` to be set; initialization raises a `ValueError` if it is missing.
+The default `research_agent` capability uses Tavily web search when `TAVILY_API_KEY`
+ is set; if it is missing, it falls back to a built-in DuckDuckGo search tool
+ instead of raising an error.
 
 ### Return type
 
@@ -80,12 +84,16 @@ Each cycle:
 3. **Critic / QA**
    - For each executed task, the critic agent evaluates whether the produced `TaskResult` satisfies the task objective.
    - The critic returns `TaskQAResult(passed=..., reasoning=...)`.
-   - `handle_critic_result(...)` applies deterministic state transitions:
-     - If `passed=True` → task becomes `COMPLETED`
-     - If `passed=False` and attempts remain → task becomes `READY` and the critic feedback is appended into the task objective to guide the retry
-     - If `passed=False` and max attempts reached → task becomes `FAILED`
+   - `handle_critic_result(...)` currently records the latest critic review and
+     increments the task’s `attempt_count`, but does **not** automatically
+     change `TaskItem.status`. Any transition to `COMPLETED`, `FAILED`, or
+     other states must be driven by higher-level logic (e.g., via
+     `update_task_status(...)`).
 
-Between cycles, the `RuntimeState` is mutated in-place, so the supervisor sees the updated status board on the next iteration.
+Between cycles, the `RuntimeState` is mutated in-place and, as implemented
+ today, a JSON checkpoint of the state is written under `_checkpoint/` for the
+ current run. The supervisor therefore sees the updated status board on the
+ next iteration.
 
 ## RuntimeState, TaskItem, and status
 
@@ -113,7 +121,12 @@ Capabilities are stored in `DeepAgent.agent_registry` as `CapabilityDescription`
 
 By default, DeepAgent registers:
 
-- `research_agent` — uses Tavily web search to gather information and returns a cited `TaskResult`
-- `producer_agent` — reads completed tasks and synthesizes a final `TaskResult`
+- `research_agent` — uses Tavily web search (when `TAVILY_API_KEY` is present)
+  or a DuckDuckGo-based search tool to gather information and return a cited
+  `TaskResult`.
+- `producer_agent` — reads completed tasks and synthesizes a final `TaskResult`.
+- `worker_agent` — a general-purpose worker for analysis, summarization,
+  document/code/log interpretation, and other tasks that operate on existing
+  context.
 
 You can add additional capabilities by passing `sub_agents=[CapabilityDescription(...)]` into `DeepAgent.__init__`.

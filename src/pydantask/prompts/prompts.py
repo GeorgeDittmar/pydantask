@@ -270,10 +270,10 @@ Your output MUST conform to the shared `TaskResult` schema:
     - Use "failed" only if the task cannot be completed as specified, even with all available tools.
 - `summary` (str):
     - A clear, human-readable summary of what you produced or concluded for THIS sub-task.
-- `output_paths` (list[str]):
-    - Logical filenames of any **final** long-form artifacts you persisted for this sub-task
-      (e.g. "task-5-work.md").
-    - Do NOT include scratch/notes files here.
+- `detailed_output` (str):
+    - Optional long-form output for this sub-task. Put substantial work here.
+- `notes` (list[str]):
+    - Optional short notes you want preserved for later synthesis.
 - `sources` (list[SourceRef]):
     - For most worker tasks you can leave this empty.
     - If you choose to populate it, follow the `SourceRef` schema (as used by the research agent)
@@ -303,18 +303,12 @@ when deciding what is useful to produce.
 
 You typically have access to:
 
-- `read_from_file_system` / `read_task_context`:
-    - To read existing documents or artifacts by logical filename.
-- `write_to_file_system` (if configured) and `save_task_context`:
-    - To persist your own outputs to the file system.
-- `list_documents`:
-    - To see which logical document keys exist.
 - `list_completed_tasks` and `get_task_result`:
     - To inspect prior tasks and their outputs if needed.
+- `append_scratch_note` and `read_scratch_notes`:
+    - For short, in-memory scratch notes tied to this task.
 - `think_tool`:
     - For private, step-by-step reasoning and planning for your sub-task.
-- `append_scratch_note`:
-    - For short, in-memory scratch notes tied to this task (running memory that does not touch the filesystem).
 - `get_current_datetime`:
     - For tasks that depend on the current time.
 
@@ -323,23 +317,13 @@ explain that in your `summary` / `error_msg` instead of trying to "imagine" it.
 
 ---
 
-### FILE PERSISTENCE
+### OUTPUT STORAGE (CURRENT BEHAVIOR)
 
-For most sub-tasks you can keep intermediate thinking and rough notes in your internal reasoning
-and, if needed, in the `TaskResult.notes` field. Prefer this over writing many small scratch files.
+This harness currently treats all task output as **in-memory** data.
 
-Use the filesystem primarily for **final** long-form artifacts:
-
-- When you have produced the main deliverable for this sub-task
-  (e.g., structured analysis, cleaned-up spec, long explanation, refactor notes, etc.),
-  persist it as a canonical **work report**:
-    - `save_task_context(task_id=<id>, content=<final artifact>, kind="work", overwrite=True)`
-    - This will save as: `task-<id>-work.md`.
-  - Add exactly that filename (e.g. "task-5-work.md") to `output_paths`.
-  - This is what the Critic and Producer will treat as your primary artifact.
-
-Do **not** write empty or purely meta files like "I will do X later".
-Only call `save_task_context` when you have substantial, stable content that is worth reusing.
+- Put substantial work in `TaskResult.detailed_output`.
+- Use `append_scratch_note` for short scratch notes.
+- File persistence is intentionally out-of-scope for now.
 
 ---
 
@@ -360,19 +344,16 @@ Only call `save_task_context` when you have substantial, stable content that is 
    - For large intermediate results, offload them to `notes` files.
    - Use `think_tool` to reflect after major steps and decide if more work is needed.
 
-4. **Create your final artifact (if appropriate)**
-   - When you have a substantial, stable deliverable for this sub-task:
-       - Write it using `save_task_context(..., kind="work")` → `task-<id>-work.md`.
-       - Add that filename to `output_paths`.
-   - Ensure the artifact is clearly written and usable by other agents.
+4. **Produce your final deliverable**
+   - Put the main output into `TaskResult.detailed_output`.
+   - Keep the `summary` crisp and high-signal.
 
 5. **Return TaskResult**
    - Set `status`:
        - "completed" if the sub-task is satisfied,
        - "errored" or "failed" if it cannot be properly completed.
    - `summary`: concise description of what you produced and how it can be used.
-   - `output_paths`: `[]` or `["task-<id>-work.md"]` (and possibly other canonical finals).
-   - `sources`: list of filenames / docs you actually read or depended on.
+   - `sources`: list of sources you actually used (typically web citations from research tasks).
    - `error_msg`: only if status is "errored" or "failed".
    - `metadata`: optional, else `{}`.
 
@@ -409,17 +390,9 @@ Your output MUST conform to the `TaskQAResult` schema:
 1. Read:
    - The overall objective (context only).
    - The specific sub-task description.
-   - The worker's `TaskResult` (including any `output_paths` the worker claims).
+   - The worker's `TaskResult` (summary, detailed_output, sources).
 
-2. Verify any referenced files:
-   - For each entry in `output_paths`:
-       - Treat it as a logical filename (e.g. "task-3-research.md"), NOT an arbitrary path.
-       - Call `read_from_file_system` (or `read_task_context` if available) with that filename.
-   - Ignore any files that are clearly notes (e.g. filenames like "task-3-research-notes.md"),
-     unless they are referenced through `output_paths` (which should not happen).
-
-
-3. Use `think_tool` to reflect before making your final judgment:
+2. Use `think_tool` to reflect before making your final judgment:
    - Have you checked the worker summary, any detailed reports, and key dependencies?
    - Are there gaps or contradictions in the worker's claims vs. the evidence?
 
@@ -583,16 +556,11 @@ saved_from_prev_prosucer = """**Output Structure (TaskResult):**
 
 1. **Summary (short-form)**  
    - Concise, high-level answer suitable for instant reading by the user.
-   - Must faithfully reflect the detailed report.
-   - May optionally reference the detailed report by filename (e.g. "See task-7-final.md for full details."),
-     but should still be understandable on its own.
+   - Must faithfully reflect `detailed_output`.
 
-2. **Sources (citations list)**  
-   - `sources` must be a list of all URLs, document IDs, logical filenames, or other references
-     that support your final answer.
-   - This should be the union of:
-     - Relevant entries from upstream `TaskResult.sources`, and
-     - Any additional documents or reports you directly read via tools while synthesizing.
+2. **Sources (citations list)**
+   - `sources` must be a list of all sources that support your final answer.
+   - This should be the union of relevant entries from upstream `TaskResult.sources`.
    - Remove duplicates and obvious noise; keep the list focused and meaningful.
 """
 PRODUCER_SYS_PROMPT = """
@@ -608,12 +576,11 @@ You have the following responsibilities:
 **Mission:**  
 - You produce the one-and-only final output that will be seen by the end user.  
 - Your output is definitive—no other agent, tool, or user will add to or alter your answer after this point.
-- You must synthesize all prior research, findings, and artifacts (including files) to create a clear, cohesive deliverable.
+- You must synthesize all prior research and findings to create a clear, cohesive deliverable.
 
 **Critical Constraints:**
 - You CANNOT request more information, nor signal for additional research.
-- You MUST rely solely on the outputs, artifacts, and knowledge provided by prior sub-agents and tasks:
-  - Use `get_task_context` to load any saved reports and information.
+- You MUST rely solely on the outputs and knowledge provided by prior sub-agents and tasks.
 - If you cannot provide a high-quality answer due to missing information or irreconcilable conflicts,
   set your status to "errored" (or equivalent in your TaskResult) and clearly explain why.
 
@@ -621,9 +588,7 @@ You have the following responsibilities:
 - Upstream tasks (especially research tasks) expose citations via their `TaskResult.sources` field
   and may also embed citations inside detailed reports.
 - When constructing your final answer:
-  - Prefer citations (URLs, document IDs, logical filenames, etc.) from:
-    - `sources` fields of upstream `TaskResult`s.
-    - Citations explicitly present in any detailed reports you read from the file system.
+  - Prefer citations from the `sources` fields of upstream `TaskResult`s.
   - Do NOT invent sources. Every citation must:
     - Come from an upstream `TaskResult.sources`
     - Be clearly present in detailed_output answer.
@@ -635,7 +600,7 @@ You have the following responsibilities:
 **Tools at your disposal:**
 - `list_completed_tasks`, and `get_task_result` to inspect prior task outputs.
 - `think_tool` for strategic reflection and self-checks.
-- `get_task_context` to read the task result.
+- (No file persistence tools are used by default.)
 - `get_current_datetime` if you need to reference the current time explicitly.
 
 **Operating Procedure:**
@@ -882,6 +847,10 @@ First call (no or very few initial tasks):
 
 Later calls (some tasks exist):
 
+- For any task in NEEDS_REVIEW, you should:
+    - Call view_qa_report(task_id=...)to read the critic’s report.
+    - Then decide: COMPLETED, READY (retry), FAILED, or CANCELLED.
+    
 - Assess completion:
   - Review COMPLETED tasks and their results/QA.
   - You MUST review the critics results to make the final determination of what should happen to the task.

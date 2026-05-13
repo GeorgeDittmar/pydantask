@@ -7,7 +7,14 @@ import pytest
 from httpx import AsyncClient
 
 import pydantask.agents.agent as agent_mod
-from pydantask.models import RuntimeState, TaskItem, TaskQAResult, TaskResult, TaskStatus, SupervisorDecision
+from pydantask.models import (
+    RuntimeState,
+    TaskItem,
+    TaskQAResult,
+    TaskResult,
+    TaskStatus,
+    SupervisorDecision,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -25,7 +32,7 @@ def runtime_state() -> RuntimeState:
 def make_minimal_deep_agent(prompt: str = "obj") -> agent_mod.DeepAgent:
     """Create a DeepAgent without running its heavy __init__."""
     da = agent_mod.DeepAgent.__new__(agent_mod.DeepAgent)
-    da.prompt = prompt
+    da.objective = prompt
     da.agent_registry = {}
     da._max_steps = 3
     da.checkpoint = False
@@ -59,18 +66,32 @@ def test_deep_agent_init_sets_registry_keys(monkeypatch: pytest.MonkeyPatch):
         return {"ok": True}
 
     with (
-        patch.object(agent_mod.DeepAgent, "_create_retrying_client", return_value=AsyncClient()),
+        patch.object(
+            agent_mod.DeepAgent, "_create_retrying_client", return_value=AsyncClient()
+        ),
         patch.object(agent_mod, "OpenAIProvider", autospec=True),
         patch.object(agent_mod, "OpenAIChatModel", autospec=True),
         patch.object(agent_mod, "tavily_search_tool", return_value=_fake_tavily_tool),
         # Avoid pulling in pydantic-ai's tool schema machinery for this unit test.
-        patch.object(agent_mod, "Agent", autospec=True),
+        patch.object(agent_mod, "Agent", autospec=True) as agent_cls,
     ):
-        deep_agent = agent_mod.DeepAgent(prompt="Test Goal", trace=False)
+        deep_agent = agent_mod.DeepAgent("Test Goal", trace=False)
 
-    assert deep_agent.prompt == "Test Goal"
+    assert deep_agent.objective == "Test Goal"
     assert "research_agent" in deep_agent.agent_registry
     assert "producer_agent" in deep_agent.agent_registry
+
+    # Soft-disabled filesystem tools should not be registered by default.
+    all_tools: list[object] = []
+    for c in agent_cls.call_args_list:
+        tools = c.kwargs.get("tools") or []
+        all_tools.extend(tools)
+
+    all_tool_names = {getattr(t, "__name__", str(t)) for t in all_tools}
+    assert "read_from_file_system" not in all_tool_names
+    assert "write_to_file_system" not in all_tool_names
+    assert "save_task_context" not in all_tool_names
+    assert "read_task_context" not in all_tool_names
 
 
 @pytest.mark.asyncio
@@ -94,7 +115,9 @@ async def test_add_cancel_patch_task(runtime_state: RuntimeState):
     assert task.sub_task_dependencies == [123]
     assert task.metadata == {"k": "v"}
 
-    msg = await da.patch_task(ctx, task_id=task_id, sub_task_objective="new", dependencies=[1, 2])
+    msg = await da.patch_task(
+        ctx, task_id=task_id, sub_task_objective="new", dependencies=[1, 2]
+    )
     assert "updated successfully" in msg
     assert runtime_state.plan[task_id].sub_task_objective == "new"
     assert runtime_state.plan[task_id].sub_task_dependencies == [1, 2]
@@ -164,13 +187,17 @@ def test_handle_critic_result_transitions():
         attempt_count=0,
         max_attempts=2,
     )
-    da.handle_critic_result(task2, TaskQAResult(task_id=2, passed=False, reasoning="not good"))
+    da.handle_critic_result(
+        task2, TaskQAResult(task_id=2, passed=False, reasoning="not good")
+    )
     assert task2.status == TaskStatus.READY
     assert task2.attempt_count == 1
     assert "Previous attempt failed review" in task2.sub_task_objective
 
     task2.attempt_count = 2
-    da.handle_critic_result(task2, TaskQAResult(task_id=2, passed=False, reasoning="still bad"))
+    da.handle_critic_result(
+        task2, TaskQAResult(task_id=2, passed=False, reasoning="still bad")
+    )
     assert task2.status == TaskStatus.FAILED
     assert "Max retries reached" in (task2.error_msg or "")
 
@@ -201,7 +228,9 @@ async def test_execute_sets_result_and_needs_review(runtime_state: RuntimeState)
 
 
 @pytest.mark.asyncio
-async def test_execute_ready_tasks_filters_deps_and_injects_feedback(runtime_state: RuntimeState):
+async def test_execute_ready_tasks_filters_deps_and_injects_feedback(
+    runtime_state: RuntimeState,
+):
     da = make_minimal_deep_agent(prompt="overall")
 
     # plan: task 1 completed, task 2 ready (depends on 1), task 3 blocked (depends on missing)
@@ -277,9 +306,11 @@ async def test_update_task_status_and_view_qa_report(runtime_state: RuntimeState
     assert "now" in msg
     assert runtime_state.plan[1].status == TaskStatus.COMPLETED
 
-    runtime_state.plan[1].task_feedback = TaskQAResult(task_id=1, passed=True, reasoning="ok")
+    runtime_state.plan[1].task_feedback = TaskQAResult(
+        task_id=1, passed=True, reasoning="ok"
+    )
     report = await da.view_qa_report(ctx, task_id=1)
-    assert "\"passed\": true" in report
+    assert '"passed": true' in report
 
 
 @pytest.mark.asyncio

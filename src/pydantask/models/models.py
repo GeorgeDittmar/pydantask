@@ -14,6 +14,7 @@ class TracingBackend(Enum):
     LANGSMITH = "langsmith"
     NONE = "none"
 
+
 class TaskStatus(Enum):
     """Lifecycle state for a :class:`TaskItem` within a DeepAgent plan.
 
@@ -165,8 +166,6 @@ class TaskResult(BaseModel):
         status: Outcome of this task execution (COMPLETED/ERRORED/FAILED/etc.).
         summary: Human-readable summary of what this task produced or concluded.
         notes: Any notes or scratch references used while completing this task.
-        output_paths: Logical or filesystem paths to long-form outputs (reports,
-            code files, etc.) produced by this task.
         sources: Structured list of :class:`SourceRef` citations used in this
             result. Inline citations should reference ``SourceRef.id`` values.
         error_msg: Explanation of what went wrong if the task errored or failed.
@@ -354,7 +353,7 @@ class RuntimeState(BaseModel):
         tokens_used: Placeholder for token accounting.
         task_queue: Optional queue of additional tasks.
         knowledge_store: Mapping of logical IDs to :class:`KnowledgeRecord`s.
-        document_store: Mapping of logical document names to filesystem paths.
+        document_store: Mapping of logical document keys to in-memory content or identifiers.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -387,7 +386,10 @@ class RuntimeState(BaseModel):
         ),
     )  # simple in-memory document store
     document_store: Dict[str, str] = Field(
-        description="Documents that are written to the file system if needed for review.",
+        description=(
+            "In-memory document store for this run. Keys may be used by tools to store "
+            "notes or intermediate artifacts."
+        ),
         default_factory=dict,
     )
 
