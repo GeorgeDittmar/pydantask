@@ -41,13 +41,11 @@ from pydantic_ai.usage import UsageLimits
 from loguru import logger
 from pydantask.agents.spec import (
     BaseAgentSpec,
-    ProducerSpec,
 )
 from pydantask.agents import utils
 from pathlib import Path
 from pydantic_ai.models import Model
 from pydantask.prompts.prompts import (
-    PLANNER_SYS_PROMPT,
     CRITIC_SYS_PROMPT,
     PRODUCER_SYS_PROMPT,
     RESEARCH_AGENT_SYS_PROMPT,
@@ -66,7 +64,6 @@ from pydantask.models import (
     CapabilityDescription,
     TaskResult,
     DeepAgentRunResult,
-    TracingBackend,
 )
 
 # Default tool wiring is intentionally in-memory focused.
@@ -89,9 +86,6 @@ from pydantask.observe.tracing import (
 from pydantic_ai.retries import AsyncTenacityTransport, RetryConfig, wait_retry_after
 
 
-from pprint import pprint
-
-
 class DeepAgent:
     """Pydantic AI based DeepAgent that manages sub-agents to achieve complex goals."""
 
@@ -104,7 +98,6 @@ class DeepAgent:
         critic_agent: Optional[Agent] = None,
         supervisor_agent: Optional[Agent] = None,
         researcher_agent: Optional[Agent] = None,
-        producer_agent: Optional[Agent] = None,
         max_steps: int = 20,
         set_token_budget: Union[int, None] = None,
         sub_agents: Union[None, list[CapabilityDescription]] = None,
@@ -201,15 +194,6 @@ class DeepAgent:
         # Build the shared model used by all sub-agents.
         # We inject the retrying httpx client into the provider for durability.
         self._retry_model = self._build_model(model)
-
-        # self._planner_agent = Agent(
-        #     name="_default_Planner_Agent",
-        #     model=self._retry_model,
-        #     system_prompt=PLANNER_SYS_PROMPT,
-        #     output_type=Plan,
-        #     tools=[think_tool],
-        #     end_strategy="exhaustive",
-        # )
 
         # NOTE: Filesystem tools exist in `pydantask.tools.default_tools`, but are not
         # enabled by default. The harness is currently in-memory focused.
