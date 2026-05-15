@@ -64,6 +64,7 @@ from pydantask.models import (
     CapabilityDescription,
     TaskResult,
     DeepAgentRunResult,
+    TaskRunDeps,
 )
 
 # Default tool wiring is intentionally in-memory focused.
@@ -221,7 +222,7 @@ class DeepAgent:
             model=self._retry_model,
             name="_default_Producer_agent",
             system_prompt=PRODUCER_SYS_PROMPT,
-            deps_type=RuntimeState,
+            deps_type=TaskRunDeps,
             output_type=TaskResult,
             tools=[
                 # Plan / history inspection
@@ -255,7 +256,7 @@ class DeepAgent:
             name="_default_Research_Agent",  # Use a cheap model for simple tasks
             system_prompt=RESEARCH_AGENT_SYS_PROMPT,
             tools=research_tool_set,
-            deps_type=RuntimeState,
+            deps_type=TaskRunDeps,
             output_type=TaskResult,
         )
 
@@ -891,6 +892,7 @@ class DeepAgent:
         an ``asyncio.TaskGroup``. The returned list contains the updated
         ``TaskItem`` instances after execution.
         """
+
         candidate_steps = [ctx.plan[id] for id in tasks.tasks_to_execute]
 
         allowed_statuses = {TaskStatus.READY, TaskStatus.RERUN}
@@ -949,7 +951,7 @@ class DeepAgent:
         logger.info(results)
         return results
 
-    @traced(run_type="tool", capture_input=False)
+    @traced(run_type="agent", capture_input=False)
     @retry(wait=wait_exponential_jitter(), reraise=True, stop=stop_after_attempt(3))
     async def execute(
         self, sub_agent: Agent, step: TaskItem, runtime_state: RuntimeState
@@ -966,9 +968,6 @@ class DeepAgent:
             _feedback_for_agent = step.parameters.get("supervisor_feedback")
 
         if step.capability == "producer_agent":
-            # Build a synthesis-oriented prompt that summarizes all completed tasks,
-            # including their summaries, report_paths, and sources.
-            # producer_context = self._build_producer_prompt(runtime_state)
 
             user_prompt = f"""
             Overall objective:
@@ -1010,7 +1009,7 @@ class DeepAgent:
             if _feedback_for_agent:
                 user_prompt += f"""
 
-                Supervisor feedback for this execution:
+                Supervisor feedback / additional instructions for this execution:
                 {_feedback_for_agent}
                 """
 

@@ -8,6 +8,7 @@ from pydantic_ai import Agent, RunContext
 from pathlib import Path
 
 from pydantask.models import RuntimeState
+from pydantask.models.models import TaskItem
 
 BASE_DIR = Path(__file__).parent.resolve()  # Directory where this script is
 DEFAULT_DIR = BASE_DIR / "tmp_files"  # TODO: make this configurable
@@ -256,9 +257,16 @@ async def get_task_result(ctx: RunContext[RuntimeState], task_id: int) -> str:
         - When you need to inspect the detailed output of a prior task.
         - Before synthesizing or critiquing based on earlier work.
     """
+
+    # check if task_id if valid. if not then return saying incorrect id
+
+    if task_id not in ctx.deps.plan:
+        return f"CRITICAL: task id: {task_id} does not exist in the plan. Retry and double check the task id before trying again."
+
     task = ctx.deps.plan.get(task_id)
+
     if task is None:
-        return f"No task with id {task_id}."
+        return f"CRITICAL: No task with id {task_id}."
 
     if task.result is None:
         return f"Task {task_id} has no result yet. Current status: {task.status}."
@@ -267,13 +275,11 @@ async def get_task_result(ctx: RunContext[RuntimeState], task_id: int) -> str:
 
 
 async def append_scratch_note(
-    ctx: RunContext[RuntimeState],
-    task_id: int,
-    note: str,
+    ctx: RunContext[RuntimeState], task_id: int, note: str, task_item: TaskItem
 ) -> str:
     """
     Tool: Append Scratch Note
-    Description: Append a short note to the in-memory scratchpad for this task.
+    Description: Append a short note to the tasks notepad / memory
 
     When to use:
         - You want to store intermediate notes or thoughts about your work and any.

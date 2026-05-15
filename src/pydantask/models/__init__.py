@@ -12,7 +12,8 @@ from pydantask.models.models import (
     SourceRef,
     SubAgentInstruction,
     TaskSpec,
-    TracingBackend
+    TracingBackend,
+    TaskRunDeps,
 )
 
 __all__ = [
@@ -29,5 +30,6 @@ __all__ = [
     "SourceRef",
     "SubAgentInstruction",
     "TaskSpec",
-    "TracingBackend"
+    "TracingBackend",
+    "TaskRunDeps",
 ]

@@ -512,3 +512,10 @@ class DeepAgentRunResult(BaseModel):
         default_factory=list,
         description="Any top-level errors or important warnings.",
     )
+
+
+class TaskRunDeps(BaseModel):
+    runtime: RuntimeState
+    task: TaskItem = Field(
+        description="The task item we mute. This is a deep copy of the taskitem stored in the plan"
+    )
