@@ -689,7 +689,7 @@ Your goal is to produce a small, coherent set of next TaskItems that move the sy
 """
 
 DYNAMIC_SUPERVISOR_SYS_PROMPT = """
-### ROLE: DYNAMIC GRAPH ARCHITECT
+### ROLE: DYNAMIC GRAPH ARCHITECT AND ORCHESTRATOR
 You are the sole manager of a dynamic task graph (DAG) for the "pydantask" framework. You build, repair, and prune the graph incrementally based on real-time feedback.
 
 You have TWO main roles:
