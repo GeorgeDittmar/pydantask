@@ -515,7 +515,7 @@ class DeepAgentRunResult(BaseModel):
 
 
 class TaskRunDeps(BaseModel):
-    runtime: RuntimeState
+    runtime_state: RuntimeState
     task: TaskItem = Field(
         description="The task item we mute. This is a deep copy of the taskitem stored in the plan"
     )

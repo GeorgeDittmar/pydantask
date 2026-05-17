@@ -4,7 +4,7 @@ from json import tool
 import json
 from multiprocessing.connection import wait
 import os
-
+import asyncio
 from httpx import AsyncClient, HTTPStatusError
 from langfuse import get_client
 from langfuse import observe
@@ -218,20 +218,20 @@ class DeepAgent:
             end_strategy="exhaustive",
         )
 
-        self._producer_agent = Agent(
-            model=self._retry_model,
-            name="_default_Producer_agent",
-            system_prompt=PRODUCER_SYS_PROMPT,
-            deps_type=TaskRunDeps,
-            output_type=TaskResult,
-            tools=[
-                # Plan / history inspection
-                list_completed_tasks,
-                get_task_result,
-                # Reflection
-                think_tool,
-            ],
-        )
+        # self._producer_agent = Agent(
+        #     model=self._retry_model,
+        #     name="_default_Producer_agent",
+        #     system_prompt=PRODUCER_SYS_PROMPT,
+        #     deps_type=TaskRunDeps,
+        #     output_type=TaskResult,
+        #     tools=[
+        #         # Plan / history inspection
+        #         list_completed_tasks,
+        #         get_task_result,
+        #         # Reflection
+        #         think_tool,
+        #     ],
+        # )
 
         # TODO: rework some of these tools
         tavily_api_key = os.getenv("TAVILY_API_KEY", None)
@@ -415,7 +415,7 @@ class DeepAgent:
             model=self._retry_model,
             name="_default_Producer_agent",
             system_prompt=PRODUCER_SYS_PROMPT,
-            deps_type=RuntimeState,
+            deps_type=TaskRunDeps,
             output_type=TaskResult,
             tools=[
                 # Plan / history inspection
@@ -442,7 +442,7 @@ class DeepAgent:
             model=self._retry_model,
             name="_default_General_Worker_Agent",
             system_prompt=WORKER_AGENT_SYS_PROMPT,
-            deps_type=RuntimeState,
+            deps_type=TaskRunDeps,
             output_type=TaskResult,
             tools=[
                 # list_documents,
@@ -640,6 +640,81 @@ class DeepAgent:
             
             """
         return _prompt
+
+    def _is_context_limit_error(self, exc: Exception) -> bool:
+        """Heuristic detection of "context length exceeded" errors.
+
+        Different providers/local gateways surface these differently (OpenAI-style
+        400s, Anthropic "prompt too long", llama.cpp "context overflow", etc.).
+        """
+        msg = str(exc).lower()
+        needles = [
+            "context length",
+            "maximum context",
+            "max context",
+            "prompt is too long",
+            "too many tokens",
+            "context overflow",
+            "exceeds the context",
+            "token limit",
+        ]
+        if any(n in msg for n in needles):
+            return True
+
+        if isinstance(exc, HTTPStatusError):
+            # Common for OpenAI-compatible APIs.
+            try:
+                data = exc.response.json()
+            except Exception:
+                data = None
+
+            if exc.response.status_code in (400, 413):
+                # 413 can happen on some proxies when payload is too large.
+                if data and isinstance(data, dict):
+                    err = data.get("error") or {}
+                    code = (err.get("code") or "").lower()
+                    emsg = (err.get("message") or "").lower()
+                    if "context" in code or "context" in emsg:
+                        return True
+
+        return False
+
+    def _build_resume_prompt(self, step: TaskItem, error: Exception) -> str:
+        """Build a minimal resume prompt after a context overflow.
+
+        We intentionally keep this short; the sub-agent should reconstruct its
+        progress using task metadata (scratch notes / checkpoints).
+        """
+        checkpoint = step.metadata.get("scratch_notes", "")
+        checkpoint_preview = checkpoint
+        if len(checkpoint_preview) > 6_000:
+            checkpoint_preview = checkpoint_preview[:6_000] + "\n...[checkpoint truncated]..."
+
+        return f"""
+A previous attempt to execute this task failed due to context/window limits.
+
+Task:
+- task_id: {step.task_id}
+- capability: {step.capability}
+- sub_task_objective: {step.sub_task_objective}
+
+Overall objective:
+{self.objective}
+
+Checkpoint / scratch notes saved so far (authoritative):
+{checkpoint_preview if checkpoint_preview else '<none>'}
+
+Recovery instructions (IMPORTANT):
+- Continue the task from the checkpoint above.
+- Keep responses concise. Avoid pasting large blobs.
+- If you need prior task outputs, call `get_task_result(task_id=..., max_chars=6000)` (or smaller).
+- After each major step, call `append_scratch_note(task_id={step.task_id}, note=...)` with a short checkpoint:
+  "what I did" + "what I will do next" + "open questions".
+- If you feel you're approaching the context limit again, STOP calling tools and output the best possible `TaskResult`.
+
+Error that triggered recovery (for debugging only):
+{str(error)}
+"""
 
     async def add_task(
         self,
@@ -951,7 +1026,7 @@ class DeepAgent:
         logger.info(results)
         return results
 
-    @traced(run_type="agent", capture_input=False)
+    @traced(run_type="task", capture_input=False)
     @retry(wait=wait_exponential_jitter(), reraise=True, stop=stop_after_attempt(3))
     async def execute(
         self, sub_agent: Agent, step: TaskItem, runtime_state: RuntimeState
@@ -1017,20 +1092,60 @@ class DeepAgent:
 
             ONLY act on this sub-task and any feedback. Do not re-plan or change the task.
             """
-        try:
-            result = await sub_agent.run(
-                user_prompt,
-                deps=runtime_state,
-                usage_limits=UsageLimits(tool_calls_limit=20),
-            )
+        task_deps = TaskRunDeps(runtime_state=runtime_state, task=step)
 
-            step.result = result.output
-            step.status = TaskStatus.NEEDS_REVIEW
-            return step
-        except Exception as e:
-            step.status = TaskStatus.ERRORED
-            step.error_msg = str(e)
-            return step
+        # Help smaller-context models avoid blowing up in a single long tool-run.
+        # This doesn't guarantee safety (tool output can still be large), but combined
+        # with truncated tool outputs and scratch checkpoints it greatly improves durability.
+        user_prompt += f"""
+
+Context-budget note:
+- You may be running on a smaller-context model.
+- Prefer small tool outputs. When calling tools that can return large text, request truncation.
+- Checkpoint progress frequently via `append_scratch_note(task_id={step.task_id}, note=...)`.
+"""
+
+        max_resume_attempts = 2
+        last_error: Exception | None = None
+
+        for resume_attempt in range(max_resume_attempts + 1):
+            tool_call_limit = 20 if resume_attempt == 0 else 10
+
+            try:
+                result = await sub_agent.run(
+                    user_prompt,
+                    deps=task_deps,
+                    usage_limits=UsageLimits(tool_calls_limit=tool_call_limit),
+                )
+                step.result = result.output
+                step.status = TaskStatus.NEEDS_REVIEW
+                step.error_msg = None
+                return step
+            except Exception as e:
+                last_error = e
+                if self._is_context_limit_error(e) and resume_attempt < max_resume_attempts:
+                    # Record the incident and attempt a "fresh run" using scratch checkpoints.
+                    step.metadata.setdefault("context_overflow", [])
+                    step.metadata["context_overflow"].append(
+                        {
+                            "at": datetime.now().isoformat(),
+                            "attempt": resume_attempt,
+                            "error": str(e),
+                        }
+                    )
+
+                    # Build a minimal prompt to continue from checkpoint notes.
+                    user_prompt = self._build_resume_prompt(step, e)
+                    continue
+
+                step.status = TaskStatus.ERRORED
+                step.error_msg = str(e)
+                return step
+
+        # Should be unreachable, but keep a safe fallback.
+        step.status = TaskStatus.ERRORED
+        step.error_msg = str(last_error) if last_error else "Unknown error"
+        return step
 
     async def update_task_status(
         self, ctx: RunContext[RuntimeState], task_id: int, status: TaskStatus

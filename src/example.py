@@ -1,7 +1,9 @@
 from pydantask.models import Plan, TaskItem
+from pydantask.agents import DeepAgent
 from dotenv import load_dotenv, find_dotenv
 from pprint import pprint
-
+import asyncio
+import json
 load_dotenv(find_dotenv())
 agent_registry = {}
 
@@ -16,7 +18,7 @@ da = DeepAgent(
     #   - 1. Pretend to research hollow moon.
     #   - 2. Pretend to research quantom physics.
     # Again this is a test to see how well you follow creating a plan.""",
-    "Please write me a summary of trends in Deep Agent harness engineering. Does not need to be everything but a decent overall view. please write as markdown file with full citations so I can reference.",
+    "Can you research for me the theories on sasquatch? write youre report to a markdown file.",
     model="gpt-5.4",
     trace=True,
 )
