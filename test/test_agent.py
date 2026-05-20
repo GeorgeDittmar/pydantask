@@ -190,7 +190,7 @@ def test_handle_critic_result_transitions():
     da.handle_critic_result(
         task2, TaskQAResult(task_id=2, passed=False, reasoning="not good")
     )
-    assert task2.status == TaskStatus.READY
+    assert task2.status == TaskStatus.RERUN
     assert task2.attempt_count == 1
     assert "Previous attempt failed review" in task2.sub_task_objective
 

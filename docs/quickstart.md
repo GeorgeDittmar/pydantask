@@ -35,7 +35,7 @@ from pydantask.agents import DeepAgent
 
 
 async def main() -> None:
-    agent = DeepAgent(prompt="Research the best open source LLMs of 2024.")
+    agent = DeepAgent(objective="Research the best open source LLMs of 2024.")
     run_result = await agent.run()  # DeepAgentRunResult
 
     print("Objective:", run_result.objective)

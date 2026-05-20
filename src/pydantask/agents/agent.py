@@ -16,6 +16,7 @@ from tenacity import (
 )
 
 import uuid
+from collections import Counter
 
 from loguru import logger
 from os import system
@@ -168,15 +169,13 @@ class DeepAgent:
         )
 
         if objective is None:
-            raise TypeError("DeepAgent requires 'prompt' (objective) to be provided")
+            raise TypeError("DeepAgent requires 'objective' to be provided")
 
         if planning_mode in {"fixed", "hybrid"} and seed_plan is None:
             raise ValueError(
                 "seed_plan must be provided when planning_mode is 'fixed' or 'hybrid'"
             )
 
-        # Back-compat: public API historically used `prompt` in some places and
-        # `objective` in others.
         self.objective: str = objective
         self._max_steps: int = max_steps  # Max steps to prevent infinite loops
         self.token_budget: Union[int, None] = set_token_budget
@@ -187,6 +186,11 @@ class DeepAgent:
         self._retry_client = self._create_retrying_client()
 
         self.checkpoint = checkpoint
+
+        # Concurrency guardrails:
+        # - `_plan_lock` protects plan-level mutations and task claiming (READY->RUNNING).
+        #   This prevents accidentally scheduling the same task twice in one cycle.
+        self._plan_lock = asyncio.Lock()
 
         self.checkpoint_path: Path | None = None
         if checkpoint:
@@ -263,6 +267,9 @@ class DeepAgent:
         self.agent_registry = self._setup_default_sub_agents(
             additonal_capabilities=sub_agents
         )
+
+        # Scheduler/system notes injected into the next supervisor prompt.
+        self._last_scheduler_report: str = ""
 
     async def aclose(self) -> None:
         """Close underlying resources used by this ``DeepAgent`` instance.
@@ -477,36 +484,36 @@ class DeepAgent:
         # each agent gets its own unique id
         return _sub_agent_registry
 
-    def _create_agent_from_spec(
-        self,
-        model: Model,
-        agent_spec: BaseAgentSpec,
-        name: str = "Agent",
-        deps_type: Type[RuntimeState] = RuntimeState,
-        output_type=None,
-        tools: list[Callable] | None = None,
-        end_strategy="exhaustive",
-    ) -> Agent:
-        """Instantiate an ``Agent`` and bind its system prompt from a spec.
+    # def _create_agent_from_spec(
+    #     self,
+    #     model: Model,
+    #     agent_spec: BaseAgentSpec,
+    #     name: str = "Agent",
+    #     deps_type: Type[RuntimeState] = RuntimeState,
+    #     output_type=None,
+    #     tools: list[Callable] | None = None,
+    #     end_strategy="exhaustive",
+    # ) -> Agent:
+    #     """Instantiate an ``Agent`` and bind its system prompt from a spec.
 
-        The provided ``BaseAgentSpec`` is used to dynamically generate the
-        system prompt at runtime via ``spec.system_prompt(ctx)``.
-        """
-        spec = agent_spec
-        agent = Agent(
-            model=model,
-            name=name,
-            deps_type=deps_type,
-            output_type=output_type,
-            tools=tools or [],
-            end_strategy=end_strategy,
-        )
+    #     The provided ``BaseAgentSpec`` is used to dynamically generate the
+    #     system prompt at runtime via ``spec.system_prompt(ctx)``.
+    #     """
+    #     spec = agent_spec
+    #     agent = Agent(
+    #         model=model,
+    #         name=name,
+    #         deps_type=deps_type,
+    #         output_type=output_type,
+    #         tools=tools or [],
+    #         end_strategy=end_strategy,
+    #     )
 
-        @agent.system_prompt
-        def _prompt(ctx):
-            return spec.system_prompt(ctx)
+    #     @agent.system_prompt
+    #     def _prompt(ctx):
+    #         return spec.system_prompt(ctx)
 
-        return agent
+    #     return agent
 
     def _initialize_runtime_state(self, objective: str, registry: dict) -> RuntimeState:
         """Create the initial :class:`RuntimeState` for a new DeepAgent run.
@@ -580,7 +587,7 @@ class DeepAgent:
         plan_display_lines = []
         for t in ctx.plan.values():
             line = (
-                f"- Task ID: {t.task_id} | Status: [{t.status}] "
+                f"- Task ID: {t.task_id} | Status: [{t.status.value}] "
                 f"| Objective: {t.sub_task_objective} "
                 f"| Dependencies: {t.sub_task_dependencies}"
             )
@@ -602,13 +609,21 @@ class DeepAgent:
 
         plan_display = "\n".join(plan_display_lines)
 
-        return SUPERVISOR_INPUT_PROMPT.format(
+        prompt = SUPERVISOR_INPUT_PROMPT.format(
             objective=ctx.objective,
             plan_display=plan_display,
             agent_display=capability_display,
             now=datetime.now(),
             current_year=datetime.now().year,
         )
+
+        if self._last_scheduler_report:
+            prompt += (
+                "\n\n### SYSTEM SCHEDULER NOTES (deterministic)\n"
+                + self._last_scheduler_report.strip()
+            )
+
+        return prompt
 
     def _format_critic_input_prompt(self, task: TaskItem, ctx: RuntimeState) -> str:
         """Construct the evaluation prompt sent to the critic agent.
@@ -747,21 +762,22 @@ Error that triggered recovery (for debugging only):
         Returns:
             The integer ``task_id`` assigned to the newly created task.
         """
-        plan = ctx.deps.plan
-        new_id = ctx.deps.next_task_id
-        ctx.deps.next_task_id += 1
+        async with self._plan_lock:
+            plan = ctx.deps.plan
+            new_id = ctx.deps.next_task_id
+            ctx.deps.next_task_id += 1
 
-        task = TaskItem(
-            task_id=new_id,
-            overall_objective=ctx.deps.objective,
-            sub_task_objective=sub_task_objective,
-            capability=capability,
-            sub_task_dependencies=dependencies or [],
-            metadata=metadata or {},
-            status=TaskStatus.READY,
-        )
-        plan[new_id] = task
-        return new_id
+            task = TaskItem(
+                task_id=new_id,
+                overall_objective=ctx.deps.objective,
+                sub_task_objective=sub_task_objective,
+                capability=capability,
+                sub_task_dependencies=dependencies or [],
+                metadata=metadata or {},
+                status=TaskStatus.READY,
+            )
+            plan[new_id] = task
+            return new_id
 
     async def cancel_task(
         self, ctx: RunContext[RuntimeState], task_id: int, reason: str
@@ -776,11 +792,12 @@ Error that triggered recovery (for debugging only):
             task_id: Identifier of the task to cancel.
             reason: Human-readable explanation for the cancellation.
         """
-        if task_id in ctx.deps.plan:
-            # Instead of deleting, mark as CANCELLED to keep history
-            ctx.deps.plan[task_id].status = TaskStatus.CANCELLED
-            return f"Task {task_id} cancelled. Reason: {reason}"
-        return f"Error: Task {task_id} not found."
+        async with self._plan_lock:
+            if task_id in ctx.deps.plan:
+                # Instead of deleting, mark as CANCELLED to keep history
+                ctx.deps.plan[task_id].status = TaskStatus.CANCELLED
+                return f"Task {task_id} cancelled. Reason: {reason}"
+            return f"Error: Task {task_id} not found."
 
     async def patch_task(
         self,
@@ -802,15 +819,134 @@ Error that triggered recovery (for debugging only):
             sub_task_objective: New sub-task objective, if changing.
             dependencies: Updated list of dependency IDs, if changing.
         """
-        task = ctx.deps.plan.get(task_id)
-        if not task:
-            return "Task not found."
+        async with self._plan_lock:
+            task = ctx.deps.plan.get(task_id)
+            if not task:
+                return "Task not found."
 
-        if sub_task_objective:
-            task.sub_task_objective = sub_task_objective
-        if dependencies is not None:
-            task.sub_task_dependencies = dependencies
-        return f"Task {task_id} updated successfully."
+            if sub_task_objective:
+                task.sub_task_objective = sub_task_objective
+            if dependencies is not None:
+                task.sub_task_dependencies = dependencies
+            return f"Task {task_id} updated successfully."
+
+    def _is_terminal_status(self, status: TaskStatus) -> bool:
+        """Return True if a task is in a terminal state.
+
+        Note: ERRORED is intentionally treated as non-terminal; the supervisor
+        may still choose to patch the task and rerun it.
+        """
+        return status in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED}
+
+    async def _scheduler_pass(self, ctx: RuntimeState) -> str:
+        """Deterministic scheduler pass.
+
+        This pass performs small, non-LLM state normalization to improve autonomy:
+
+        - Promote PENDING -> READY when all dependencies are COMPLETED.
+        - Demote READY -> PENDING if dependencies are not satisfied (keeps the
+          status board honest).
+        - Mark tasks with unknown capability as ERRORED (unless terminal).
+
+        Returns a human-readable report injected into the next supervisor prompt.
+        """
+        changes: list[str] = []
+        warnings: list[str] = []
+
+        async with self._plan_lock:
+            for task_id, task in sorted(ctx.plan.items(), key=lambda kv: kv[0]):
+                # Unknown capability detection.
+                if task.capability and task.capability not in self.agent_registry:
+                    if not self._is_terminal_status(task.status):
+                        if task.status != TaskStatus.ERRORED:
+                            changes.append(
+                                f"- Task {task_id}: {task.status.value} -> errored (unknown capability: {task.capability!r})"
+                            )
+                        task.status = TaskStatus.ERRORED
+                        task.error_msg = f"Unknown capability: {task.capability!r}"
+                    continue
+
+                # Dependency-based readiness propagation.
+                deps_ok = self._dependencies_satisfied(task, ctx)
+
+                if task.status == TaskStatus.PENDING and deps_ok:
+                    task.status = TaskStatus.READY
+                    changes.append(f"- Task {task_id}: pending -> ready (deps satisfied)")
+
+                # Keep READY tasks honest if deps are not actually satisfied.
+                if task.status == TaskStatus.READY and not deps_ok:
+                    task.status = TaskStatus.PENDING
+                    changes.append(f"- Task {task_id}: ready -> pending (deps not satisfied)")
+
+        if not changes and not warnings:
+            return "No scheduler changes this cycle."
+
+        out: list[str] = []
+        if changes:
+            out.append("Status normalization:")
+            out.extend(changes)
+        if warnings:
+            out.append("Warnings:")
+            out.extend(warnings)
+        return "\n".join(out)
+
+    def _build_deadlock_report(
+        self, ctx: RuntimeState, decision: SupervisorDecision | None = None
+    ) -> str:
+        """Explain why no tasks ran in the current cycle."""
+
+        status_counts = Counter(t.status.value for t in ctx.plan.values())
+        runnable: list[int] = []
+        blocked: list[str] = []
+
+        for task_id, task in sorted(ctx.plan.items(), key=lambda kv: kv[0]):
+            if self._is_terminal_status(task.status):
+                continue
+
+            if task.status in {TaskStatus.READY, TaskStatus.RERUN} and self._dependencies_satisfied(task, ctx):
+                runnable.append(task_id)
+                continue
+
+            # Compute a human-readable reason.
+            if task.capability not in self.agent_registry:
+                blocked.append(
+                    f"- Task {task_id} [{task.status.value}]: unknown capability {task.capability!r}"
+                )
+                continue
+
+            if task.sub_task_dependencies:
+                missing = [d for d in task.sub_task_dependencies if d not in ctx.plan]
+                if missing:
+                    blocked.append(
+                        f"- Task {task_id} [{task.status.value}]: missing deps {missing}"
+                    )
+                    continue
+
+                unmet = [
+                    d
+                    for d in task.sub_task_dependencies
+                    if ctx.plan.get(d) is not None and ctx.plan[d].status != TaskStatus.COMPLETED
+                ]
+                if unmet:
+                    blocked.append(
+                        f"- Task {task_id} [{task.status.value}]: waiting on deps {unmet}"
+                    )
+                    continue
+
+            blocked.append(f"- Task {task_id} [{task.status.value}]: not runnable")
+
+        lines: list[str] = []
+        lines.append("Deadlock / no-progress report:")
+        lines.append(f"- status_counts: {dict(status_counts)}")
+        if decision is not None:
+            lines.append(f"- supervisor_requested: {decision.tasks_to_execute or []}")
+        lines.append(f"- runnable_now: {runnable}")
+        if blocked:
+            lines.append("- blocked_examples:")
+            # keep this short to avoid prompt bloat
+            lines.extend(blocked[:12])
+
+        return "\n".join(lines)
 
     @traced()
     async def run(self) -> DeepAgentRunResult:
@@ -835,11 +971,17 @@ Error that triggered recovery (for debugging only):
         )
         self._apply_seed_plan(runtime_state)
 
+        errors: list[str] = []
+        no_progress_cycles = 0
+
         step_count = 0
         stop_execution = False
         while step_count < self._max_steps and not stop_execution:
 
             logger.info(f"\n--- DeepAgent Cycle {step_count} ---")
+
+            # Deterministic scheduler pass to normalize readiness and surface issues.
+            self._last_scheduler_report = await self._scheduler_pass(runtime_state)
 
             supervisor_response = await self._supervisor_agent.run(
                 self._format_supervisor_input_prompt(runtime_state),
@@ -848,23 +990,50 @@ Error that triggered recovery (for debugging only):
             supervisor_response = supervisor_response.output
 
             if supervisor_response.all_tasks_completed:
-                logger.info(f"--- All tasks completed. Ending execution loop. ---")
+                logger.info("--- Supervisor declared completion. Ending execution loop. ---")
                 stop_execution = True
-                continue
+                break
 
-            logger.info(f"--- Executing Tasks ---")
+            logger.info("--- Executing Tasks ---")
             # execute tasks that are ready to run and await responses
             task_results = await self._execute_ready_tasks(
                 supervisor_response, runtime_state
             )
 
+            # NOTE: `execute(...)` mutates the canonical TaskItem stored in `runtime_state.plan`
+            # in-place (it receives the same object reference). Do NOT overwrite
+            # `runtime_state.plan[task_id]` with returned TaskItems here; that can clobber
+            # concurrent metadata updates (e.g. scratch notes/checkpoints).
+
             if len(task_results) == 0:
-                # handle case if task_results are empty
-                logger.info("No task results found. Stopping.")
-                stop_execution = True
+                # No tasks ran this cycle. This is not necessarily terminal in a
+                # dynamic planner: we may be blocked on deps, have errored tasks
+                # that need patching, or need the supervisor to add new nodes.
+                no_progress_cycles += 1
+                deadlock = self._build_deadlock_report(runtime_state, supervisor_response)
+                self._last_scheduler_report = (self._last_scheduler_report + "\n\n" + deadlock).strip()
+
+                logger.info(
+                    f"No executable tasks this cycle (no_progress_cycles={no_progress_cycles}). Continuing."
+                )
+
+                # Prevent infinite loops if the supervisor cannot make progress.
+                if no_progress_cycles >= 3:
+                    msg = (
+                        "No progress after 3 consecutive cycles (no tasks executed). "
+                        "Stopping to avoid infinite loop. "
+                        "See SYSTEM SCHEDULER NOTES in the final cycle for details."
+                    )
+                    logger.warning(msg)
+                    errors.append(msg)
+                    stop_execution = True
+
+                runtime_state.runtime_steps += 1
+                step_count += 1
                 continue
 
-            # logger.info("--- Task Results ---")
+            no_progress_cycles = 0
+
             logger.info(f"Number of tasks executed: {len(task_results)}")
             # go through responses and evaluate if they have completed the task
             for task_result in task_results or []:
@@ -876,7 +1045,7 @@ Error that triggered recovery (for debugging only):
                 )
                 qa_response = qa_response.output
                 if self.verbose:
-                    logger.info(f"--- QA Response ---")
+                    logger.info("--- QA Response ---")
                     logger.info(qa_response.model_dump_json(indent=2))
 
                 task = runtime_state.plan[task_result.task_id]
@@ -887,12 +1056,7 @@ Error that triggered recovery (for debugging only):
                 if self.checkpoint:
                     self._checkpoint_state(runtime_state)
 
-                # if qa_response.do
-                # add the qa report to the task result for the supervisor to review
-                # runtime_state.plan[task_result.task_id].task_feedback = qa_response
             runtime_state.runtime_steps += 1
-
-            # make sure traces flush after each loop
             step_count += 1
 
         return_result = DeepAgentRunResult(
@@ -900,6 +1064,7 @@ Error that triggered recovery (for debugging only):
             final_result=task.result if "task" in locals() else None,
             plan=runtime_state.plan,
             runtime_state=runtime_state,
+            errors=errors,
         )
 
         return return_result
@@ -968,14 +1133,22 @@ Error that triggered recovery (for debugging only):
         ``TaskItem`` instances after execution.
         """
 
-        candidate_steps = [ctx.plan[id] for id in tasks.tasks_to_execute]
+        # Dedupe while preserving order (supervisor can occasionally emit duplicates).
+        requested_ids: list[int] = list(dict.fromkeys(tasks.tasks_to_execute or []))
+
+        # Be defensive: supervisor might reference missing IDs.
+        candidate_steps: list[TaskItem] = [
+            ctx.plan[task_id] for task_id in requested_ids if task_id in ctx.plan
+        ]
 
         allowed_statuses = {TaskStatus.READY, TaskStatus.RERUN}
+
+        # Determine which steps are eligible based on status+deps.
+        # We'll "claim" them (set RUNNING) under `_plan_lock` below to prevent double-scheduling.
         ready_steps = [
             step
             for step in candidate_steps
-            if step.status in allowed_statuses
-            and self._dependencies_satisfied(step, ctx)
+            if step.status in allowed_statuses and self._dependencies_satisfied(step, ctx)
         ]
         # if no ready steps return empty list
         if len(ready_steps) == 0:
@@ -984,9 +1157,26 @@ Error that triggered recovery (for debugging only):
         if not ready_steps:
             return []
 
-        # 2. Prepare the concurrent coroutines
+        # 2. Claim tasks (READY/RERUN -> RUNNING) atomically so we don't schedule the same
+        # task twice in parallel.
+        claimed_steps: list[TaskItem] = []
+        async with self._plan_lock:
+            for step in ready_steps:
+                # step is a reference to ctx.plan[task_id]
+                if step.status not in allowed_statuses:
+                    continue
+                # deps can change while we awaited the lock (other tasks completing); re-check.
+                if not self._dependencies_satisfied(step, ctx):
+                    continue
+                step.status = TaskStatus.RUNNING
+                claimed_steps.append(step)
+
+        if not claimed_steps:
+            return []
+
+        # 3. Prepare the concurrent coroutines
         ready_tasks = []
-        for step in ready_steps:
+        for step in claimed_steps:
             # get supervisor feedback if any for this task
             if (
                 tasks.feedback_to_subagents
@@ -1010,11 +1200,14 @@ Error that triggered recovery (for debugging only):
             # grab the tool that the plan or supervisor  decides
             worker = self.agent_registry.get(step.capability)
             if worker:
-                step.status = TaskStatus.RUNNING
                 # We wrap the agent run in a small wrapper to update the step status after
                 ready_tasks.append(self.execute(worker.tool_func, step, ctx))
+            else:
+                # No such capability; mark errored so supervisor/QA can see what happened.
+                step.status = TaskStatus.ERRORED
+                step.error_msg = f"Unknown capability: {step.capability!r}"
 
-        # 3. Execute tasks and return exceptions to notify the supervisor
+        # 4. Execute tasks and return exceptions to notify the supervisor
         logger.info("--- Executing Ready Tasks ---")
         task_results = []
         async with TaskGroup() as tg:
@@ -1023,7 +1216,6 @@ Error that triggered recovery (for debugging only):
 
         results = [t.result() for t in task_results]
         logger.info("--- All Ready Tasks Completed ---")
-        logger.info(results)
         return results
 
     @traced(run_type="task", capture_input=False)
@@ -1161,10 +1353,11 @@ Context-budget note:
             task_id: Identifier of the task to update.
             status: New :class:`TaskStatus` value for the task.
         """
-        if task_id in ctx.deps.plan:
-            ctx.deps.plan.get(task_id).status = status
-            return f"Status for {task_id} is now {status}."
-        return f"Error: No task with {task_id} found in plan. Be sure task_id actually exists."
+        async with self._plan_lock:
+            if task_id in ctx.deps.plan:
+                ctx.deps.plan.get(task_id).status = status
+                return f"Status for {task_id} is now {status}."
+            return f"Error: No task with {task_id} found in plan. Be sure task_id actually exists."
 
     def handle_critic_result(self, task: TaskItem, review: TaskQAResult):
         """Apply the critic's QA result to a task.
@@ -1190,7 +1383,7 @@ Context-budget note:
             )
             return
 
-        task.status = TaskStatus.READY
+        task.status = TaskStatus.RERUN
         task.error_msg = None
         task.sub_task_objective = f"{task.sub_task_objective}\n\nPrevious attempt failed review; feedback: {review.reasoning}"
 
@@ -1210,16 +1403,17 @@ Context-budget note:
             :class:`TaskQAResult`, or a message describing why no report is
             available.
         """
-        task = ctx.deps.plan.get(task_id)
-        logger.info(f"Checking QA Report for task: {task_id}")
-        if task is None:
-            return f"No task with id {task_id}."
+        async with self._plan_lock:
+            task = ctx.deps.plan.get(task_id)
+            logger.info(f"Checking QA Report for task: {task_id}")
+            if task is None:
+                return f"No task with id {task_id}."
 
-        fb = getattr(task, "task_feedback", None)
-        if fb is None:
-            return f"No QA feedback found for task {task_id}."
-        task.metadata.setdefault("qa", {})
-        task.metadata["qa"]["report_viewed"] = True
+            fb = getattr(task, "task_feedback", None)
+            if fb is None:
+                return f"No QA feedback found for task {task_id}."
+            task.metadata.setdefault("qa", {})
+            task.metadata["qa"]["report_viewed"] = True
 
-        # Return either a summary or full JSON depending on your needs
-        return fb.model_dump_json(indent=2)
+            # Return either a summary or full JSON depending on your needs
+            return fb.model_dump_json(indent=2)
