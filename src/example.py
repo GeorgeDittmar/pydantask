@@ -2,10 +2,12 @@ from pydantask.models import Plan, TaskItem
 from pydantask.agents import DeepAgent
 from dotenv import load_dotenv, find_dotenv
 from pprint import pprint
+from pathlib import Path
 import asyncio
-import json
+
 load_dotenv(find_dotenv())
-agent_registry = {}
+
+checkpoint_dir = Path("_checkpoint") / "sasquatch_run"
 
 da = DeepAgent(
     # "I need a report of the news for today. Give me a high level summary and then a detailed version of major pieces of news as it pertains to the US and world. Output the report as markdown withj citations in the report. You must cite all sources at the end of the article.",
@@ -21,17 +23,22 @@ da = DeepAgent(
     "Can you research for me the theories on sasquatch? write youre report to a markdown file.",
     model="gpt-5.4",
     trace=True,
+    checkpoint=True,
+    checkpoint_dir=checkpoint_dir,
 )
 
 result = asyncio.run(da.run())
 
+print(f"Checkpoint events saved to: {da.checkpoint_path}")
+
 # pprint(result.model_dump())
 # Write JSON data to a file
 
-with open("output_book2.json", "w") as json_file:
-    json.dump(result.model_dump_json(), json_file, indent=4)
+with open("output_book2.json", "w", encoding="utf-8") as json_file:
+    json_file.write(result.model_dump_json(indent=2))
 
-with open("result_scifi_book2.md", "w") as f:
-    f.writelines(result.final_result.detailed_output)
+final_output = result.final_result.detailed_output if result.final_result else ""
+with open("result_scifi_book2.md", "w", encoding="utf-8") as f:
+    f.write(final_output)
 
-pprint(result.final_result.detailed_output)
+pprint(final_output or "<no final result>")

@@ -203,7 +203,9 @@ async def list_completed_tasks(ctx: RunContext[TaskRunDeps]) -> str:
     from pydantask.models import TaskStatus  # local import to avoid cycles
 
     lines: list[str] = []
-    for task_id, task in sorted(ctx.deps.runtime_state.plan.items(), key=lambda kv: kv[0]):
+    for task_id, task in sorted(
+        ctx.deps.runtime_state.plan.items(), key=lambda kv: kv[0]
+    ):
         if task.status != TaskStatus.COMPLETED:
             continue
         summary = task.result.summary if task.result is not None else "<no result>"
@@ -304,7 +306,9 @@ async def get_task_result(
 
 
 async def append_scratch_note(
-    ctx: RunContext[TaskRunDeps], task_id: int, note: str,
+    ctx: RunContext[TaskRunDeps],
+    task_id: int,
+    note: str,
 ) -> str:
     """
     Tool: Append Scratch Note
@@ -315,9 +319,17 @@ async def append_scratch_note(
     When not to use:
         - Writing final full reports / analysis or answers.
     """
-    key = f"scratch_notes"
+    key = "scratch_notes"
     existing = ctx.deps.task.metadata.get(key, "")
     ctx.deps.task.metadata[key] = existing + f"\n\n{note}"
+
+    recorder = getattr(ctx.deps.runtime_state, "checkpoint_recorder", None)
+    if recorder is not None:
+        recorder.record(
+            "scratch_note_appended",
+            {"task_id": task_id, "note": _truncate_text(note, max_chars=1_000)},
+        )
+
     return f"Appended note to scratchpad {key}"
 
 

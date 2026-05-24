@@ -7,6 +7,7 @@ import pytest
 from httpx import AsyncClient
 
 import pydantask.agents.agent as agent_mod
+from pydantask.tools import default_tools
 from pydantask.models import (
     RuntimeState,
     TaskItem,
@@ -14,7 +15,32 @@ from pydantask.models import (
     TaskResult,
     TaskStatus,
     SupervisorDecision,
+    TaskRunDeps,
 )
+
+
+class DummyAsyncLock:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class DummyRecorder:
+    def __init__(self):
+        self.events: list[tuple[str, dict]] = []
+        self.summaries: list[dict] = []
+        self._events_to_load: list[agent_mod.CheckpointEvent] = []
+
+    def record(self, event_type, payload):
+        self.events.append((event_type, payload))
+
+    def record_summary(self, summary):
+        self.summaries.append(summary)
+
+    def load_events(self):
+        return list(self._events_to_load)
 
 
 @pytest.fixture(autouse=True)
@@ -36,6 +62,14 @@ def make_minimal_deep_agent(prompt: str = "obj") -> agent_mod.DeepAgent:
     da.agent_registry = {}
     da._max_steps = 3
     da.checkpoint = False
+    da.seed_plan = None
+    da._plan_lock = DummyAsyncLock()
+    da._checkpoint_recorder = None
+    da.checkpoint_path = None
+    da._last_scheduler_report = ""
+    da._supervisor_agent = MagicMock()
+    da._critic_agent = MagicMock()
+    da._retry_model = MagicMock()
     return da
 
 
@@ -311,6 +345,123 @@ async def test_update_task_status_and_view_qa_report(runtime_state: RuntimeState
     )
     report = await da.view_qa_report(ctx, task_id=1)
     assert '"passed": true' in report
+
+
+@pytest.mark.asyncio
+async def test_add_task_emits_checkpoint_event_when_enabled(
+    runtime_state: RuntimeState,
+):
+    da = make_minimal_deep_agent()
+    recorder = DummyRecorder()
+    da._checkpoint_recorder = recorder
+    runtime_state.checkpoint_recorder = recorder
+    ctx = SimpleNamespace(deps=runtime_state)
+
+    task_id = await da.add_task(
+        ctx,
+        sub_task_objective="checkpoint",
+        capability="worker_agent",
+    )
+
+    assert task_id == 1
+    assert recorder.events and recorder.events[0][0] == "task_added"
+    payload = recorder.events[0][1]
+    assert payload["task"]["task_id"] == 1
+    assert payload["next_task_id"] == runtime_state.next_task_id
+
+
+def test_replay_checkpoint_rebuilds_state(runtime_state: RuntimeState):
+    da = make_minimal_deep_agent()
+    recorder = DummyRecorder()
+
+    task_payload = TaskItem(
+        task_id=3,
+        overall_objective=runtime_state.objective,
+        sub_task_objective="replayed",
+        capability="worker_agent",
+        status=TaskStatus.READY,
+    ).model_dump()
+
+    recorder._events_to_load = [
+        agent_mod.CheckpointEvent(
+            type="task_added",
+            payload={"task": task_payload, "next_task_id": 4},
+        ),
+        agent_mod.CheckpointEvent(
+            type="task_status_updated",
+            payload={
+                "task_id": 3,
+                "status": TaskStatus.RUNNING.value,
+                "reason": "claimed",
+            },
+        ),
+        agent_mod.CheckpointEvent(
+            type="critic_feedback",
+            payload={
+                "task_id": 3,
+                "feedback": TaskQAResult(
+                    task_id=3, passed=False, reasoning="fail"
+                ).model_dump(),
+                "attempt_count": 2,
+            },
+        ),
+    ]
+
+    da._checkpoint_recorder = recorder
+    da._replay_checkpoint(runtime_state)
+
+    assert 3 in runtime_state.plan
+    task = runtime_state.plan[3]
+    assert task.status == TaskStatus.RUNNING
+    assert task.attempt_count == 2
+    assert task.task_feedback and task.task_feedback.reasoning == "fail"
+    assert task.metadata["status_history"][0]["reason"] == "claimed"
+    assert runtime_state.next_task_id >= 4
+
+
+def test_checkpoint_state_records_summary(runtime_state: RuntimeState):
+    da = make_minimal_deep_agent()
+    recorder = DummyRecorder()
+    da._checkpoint_recorder = recorder
+
+    runtime_state.plan[1] = TaskItem(
+        task_id=1,
+        overall_objective=runtime_state.objective,
+        sub_task_objective="x",
+        capability="worker_agent",
+        status=TaskStatus.READY,
+    )
+
+    da._checkpoint_state(runtime_state)
+    assert len(recorder.summaries) == 1
+    summary = recorder.summaries[0]
+    assert summary["total_tasks"] == 1
+    assert summary["status_counts"][TaskStatus.READY.value] == 1
+
+
+@pytest.mark.asyncio
+async def test_append_scratch_note_records_checkpoint_event(
+    runtime_state: RuntimeState,
+):
+    recorder = DummyRecorder()
+    runtime_state.checkpoint_recorder = recorder
+
+    task = TaskItem(
+        task_id=1,
+        overall_objective=runtime_state.objective,
+        sub_task_objective="memo",
+        capability="worker_agent",
+        status=TaskStatus.RUNNING,
+        metadata={},
+    )
+    deps = TaskRunDeps(runtime_state=runtime_state, task=task)
+    ctx = SimpleNamespace(deps=deps)
+
+    await default_tools.append_scratch_note(ctx, task_id=1, note="remember this")
+
+    assert "scratch_notes" in task.metadata
+    assert recorder.events and recorder.events[-1][0] == "scratch_note_appended"
+    assert recorder.events[-1][1]["task_id"] == 1
 
 
 @pytest.mark.asyncio

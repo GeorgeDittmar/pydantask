@@ -392,6 +392,11 @@ class RuntimeState(BaseModel):
         ),
         default_factory=dict,
     )
+    checkpoint_recorder: Any | None = Field(
+        default=None,
+        description="Optional recorder used for event-sourced checkpointing.",
+        exclude=True,
+    )
 
 
 class SupervisorDecision(BaseModel):
