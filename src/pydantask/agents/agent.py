@@ -30,9 +30,20 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.common_tools.tavily import tavily_search_tool
 from pydantic_ai.common_tools.duckduckgo import duckduckgo_search_tool
 from pydantic_ai.usage import UsageLimits
+
+from pydantask.capabilities.runner import as_runner
 from pathlib import Path
 from pydantic_ai.models import Model
-from pydantask.prompts.prompts import (
+# from pydantask.prompts.prompts import (
+#     CRITIC_SYS_PROMPT,
+#     PRODUCER_SYS_PROMPT,
+#     RESEARCH_AGENT_SYS_PROMPT,
+#     SUPERVISOR_INPUT_PROMPT,
+#     WORKER_AGENT_SYS_PROMPT,
+#     DYNAMIC_SUPERVISOR_SYS_PROMPT,
+# )
+
+from pydantask.prompts.prompts_v2 import (
     CRITIC_SYS_PROMPT,
     PRODUCER_SYS_PROMPT,
     RESEARCH_AGENT_SYS_PROMPT,
@@ -144,7 +155,7 @@ class DeepAgent:
         set_token_budget: Union[int, None] = None,
         sub_agents: Union[None, list[CapabilityDescription]] = None,
         # default output type for the producer agent, can be set to a default type or custom pydantic model for better structure and validation of final output
-        output_type: Type = TaskResult,
+        # output_type: Type = TaskResult,
         # planning_mode: str = "dynamic",  # "static" | "dynamic"
         trace: bool = False,
         checkpoint: bool = False,
@@ -222,7 +233,7 @@ class DeepAgent:
         self._max_steps: int = max_steps  # Max steps to prevent infinite loops
         self.token_budget: Union[int, None] = set_token_budget
         self.verbose = verbose_logging
-        self.output_type = output_type
+        # self.output_type = output_type
         self.planning_mode = planning_mode
         self.seed_plan: Union[Plan, None] = seed_plan
         self._retry_client = self._create_retrying_client()
@@ -234,7 +245,6 @@ class DeepAgent:
 
         # Concurrency guardrails:
         # - `_plan_lock` protects plan-level mutations and task claiming (READY->RUNNING).
-        #   This prevents accidentally scheduling the same task twice in one cycle.
         self._plan_lock = asyncio.Lock()
 
         self.checkpoint_path: Path | None = None
@@ -247,7 +257,9 @@ class DeepAgent:
             )
             self.checkpoint_path.mkdir(parents=True, exist_ok=True)
             self._checkpoint_recorder = CheckpointRecorder(self.checkpoint_path)
+
         # Build the shared model used by all sub-agents.
+        # TODO: Future state allow for configuration of what models to use per capability
         # We inject the retrying httpx client into the provider for durability.
         self._retry_model = self._build_model(model)
 
@@ -273,25 +285,10 @@ class DeepAgent:
             end_strategy="exhaustive",
         )
 
-        # self._producer_agent = Agent(
-        #     model=self._retry_model,
-        #     name="_default_Producer_agent",
-        #     system_prompt=PRODUCER_SYS_PROMPT,
-        #     deps_type=TaskRunDeps,
-        #     output_type=TaskResult,
-        #     tools=[
-        #         # Plan / history inspection
-        #         list_completed_tasks,
-        #         get_task_result,
-        #         # Reflection
-        #         think_tool,
-        #     ],
-        # )
-
         # TODO: rework some of these tools
         tavily_api_key = os.getenv("TAVILY_API_KEY", None)
 
-        research_tool_set = [
+        _defautl_research_tool_set = [
             think_tool,
             append_scratch_note,
             read_scratch_notes,
@@ -302,20 +299,20 @@ class DeepAgent:
             logger.info(
                 "Tavily api key not found. Defaulting to built in Duck Duck Go search tool."
             )
-            research_tool_set.append(duckduckgo_search_tool())
+            _defautl_research_tool_set.append(duckduckgo_search_tool())
         else:
-            research_tool_set.append(tavily_search_tool(tavily_api_key))
+            _defautl_research_tool_set.append(tavily_search_tool(tavily_api_key))
 
         self._researcher_agent = researcher_agent or Agent(
             model=self._retry_model,
-            name="_default_Research_Agent",  # Use a cheap model for simple tasks
+            name="_default_Research_Agent", 
             system_prompt=RESEARCH_AGENT_SYS_PROMPT,
-            tools=research_tool_set,
+            tools=_defautl_research_tool_set,
             deps_type=TaskRunDeps,
             output_type=TaskResult,
         )
 
-        self.agent_registry = self._setup_default_sub_agents(
+        self._capability_registry = self._setup_capabilities(
             additonal_capabilities=sub_agents
         )
 
@@ -451,7 +448,7 @@ class DeepAgent:
 
         return AsyncClient(transport=transport)
 
-    def _setup_default_sub_agents(
+    def _setup_capabilities(
         self, additonal_capabilities: Union[None, list[CapabilityDescription]] = None
     ) -> Dict:
         """Create the default sub-agent capability registry.
@@ -487,13 +484,13 @@ class DeepAgent:
         producer = CapabilityDescription(
             name="producer_agent",
             description="Produces output based on information from various sources and sub agents.",
-            tool_func=producer_agent,
+            tool_func=as_runner(producer_agent),
         )
 
         researcher = CapabilityDescription(
             name="research_agent",
             description="Tool to research information. This could include searching the web or querying a data source.",
-            tool_func=self._researcher_agent,
+            tool_func=as_runner(self._researcher_agent),
         )
 
         general_worker_agent = Agent(
@@ -520,20 +517,20 @@ class DeepAgent:
                 "code or log interpretation, and other non-research tasks that operate on "
                 "existing context."
             ),
-            tool_func=general_worker_agent,
+            tool_func=as_runner(general_worker_agent),
         )
 
-        _sub_agents_list = [producer, researcher, gen_worker]
+        _capabilities_list = [producer, researcher, gen_worker]
 
         # if additional sub agents been supplied then add those to the registry
         if additonal_capabilities:
-            _sub_agents_list.extend(additonal_capabilities)
+            _capabilities_list.extend(additonal_capabilities)
 
-        _sub_agent_registry = {
-            sub_agent.name: sub_agent for sub_agent in _sub_agents_list
+        _capability_registry = {
+            sub_agent.name: sub_agent for sub_agent in _capabilities_list
         }
         # each agent gets its own unique id
-        return _sub_agent_registry
+        return _capability_registry
 
     # def _create_agent_from_spec(
     #     self,
@@ -773,7 +770,7 @@ class DeepAgent:
         Each line is of the form: ``- <capability_name>: <description>``.
         """
         lines = []
-        for name, desc in self.agent_registry.items():
+        for name, desc in self._capability_registry.items():
             description = getattr(desc, "description", "")
             lines.append(f"- {name}: {description}")
         return "\n".join(lines)
@@ -1097,7 +1094,7 @@ Error that triggered recovery (for debugging only):
         async with self._plan_lock:
             for task_id, task in sorted(ctx.plan.items(), key=lambda kv: kv[0]):
                 # Unknown capability detection.
-                if task.capability and task.capability not in self.agent_registry:
+                if task.capability and task.capability not in self._capability_registry:
                     if not self._is_terminal_status(task.status):
                         if task.status != TaskStatus.ERRORED:
                             changes.append(
@@ -1174,7 +1171,7 @@ Error that triggered recovery (for debugging only):
                 continue
 
             # Compute a human-readable reason.
-            if task.capability not in self.agent_registry:
+            if task.capability not in self._capability_registry:
                 blocked.append(
                     f"- Task {task_id} [{task.status.value}]: unknown capability {task.capability!r}"
                 )
@@ -1234,7 +1231,7 @@ Error that triggered recovery (for debugging only):
             and the final ``RuntimeState``.
         """
         runtime_state = self._initialize_runtime_state(
-            objective=self.objective, registry=self.agent_registry
+            objective=self.objective, registry=self._capability_registry
         )
         self._apply_seed_plan(runtime_state)
         self._replay_checkpoint(runtime_state)
@@ -1418,7 +1415,7 @@ Error that triggered recovery (for debugging only):
         # Dedupe while preserving order (supervisor can occasionally emit duplicates).
         requested_ids: list[int] = list(dict.fromkeys(tasks.tasks_to_execute or []))
 
-        # Be defensive: supervisor might reference missing IDs.
+        # Supervisor might reference missing IDs.
         candidate_steps: list[TaskItem] = [
             ctx.plan[task_id] for task_id in requested_ids if task_id in ctx.plan
         ]
@@ -1486,7 +1483,7 @@ Error that triggered recovery (for debugging only):
             logger.info("\n")
 
             # grab the tool that the plan or supervisor  decides
-            worker = self.agent_registry.get(step.capability)
+            worker = self._capability_registry.get(step.capability)
             if worker:
                 # We wrap the agent run in a small wrapper to update the step status after
                 ready_tasks.append(self.execute(worker.tool_func, step, ctx))
@@ -1524,6 +1521,7 @@ Error that triggered recovery (for debugging only):
         and result based on success or failure.
         """
 
+        # check to see if there was feedback or additional instructions for the task from the supervisor
         _feedback_for_agent = None
         if isinstance(step.parameters, dict):
             _feedback_for_agent = step.parameters.get("supervisor_feedback")

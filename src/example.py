@@ -20,7 +20,7 @@ da = DeepAgent(
     #   - 1. Pretend to research hollow moon.
     #   - 2. Pretend to research quantom physics.
     # Again this is a test to see how well you follow creating a plan.""",
-    "Can you research for me the theories on sasquatch? write youre report to a markdown file.",
+    "Can you research for me the theories on sasquatch? write youre report to a markdown file. Be sure to have all citations at the end with full links to where you found the information.",
     model="gpt-5.4",
     trace=True,
     checkpoint=True,
@@ -34,11 +34,10 @@ print(f"Checkpoint events saved to: {da.checkpoint_path}")
 # pprint(result.model_dump())
 # Write JSON data to a file
 
-with open("output_book2.json", "w", encoding="utf-8") as json_file:
-    json_file.write(result.model_dump_json(indent=2))
+with open("sasquatch.json", "w") as json_file:
+    json.dump(result.model_dump_json(), json_file, indent=4)
 
-final_output = result.final_result.detailed_output if result.final_result else ""
-with open("result_scifi_book2.md", "w", encoding="utf-8") as f:
-    f.write(final_output)
+with open("sasquatch.md", "w") as f:
+    f.writelines(result.final_result.detailed_output)
 
 pprint(final_output or "<no final result>")
