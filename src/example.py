@@ -7,7 +7,7 @@ import asyncio
 
 load_dotenv(find_dotenv())
 
-checkpoint_dir = Path("_checkpoint") / "sasquatch_run"
+checkpoint_dir = Path("_checkpoint") / "dulce_run"
 
 da = DeepAgent(
     # "I need a report of the news for today. Give me a high level summary and then a detailed version of major pieces of news as it pertains to the US and world. Output the report as markdown withj citations in the report. You must cite all sources at the end of the article.",
@@ -20,7 +20,7 @@ da = DeepAgent(
     #   - 1. Pretend to research hollow moon.
     #   - 2. Pretend to research quantom physics.
     # Again this is a test to see how well you follow creating a plan.""",
-    "Can you research for me the theories on sasquatch? write youre report to a markdown file.",
+    "Research for me the dulce base incident. Try to find primary sources but be sure to also search for any other sources in case tehre are no strong primary sources. write youre report to a markdown file. Be sure your document has all citations fully listed at the end. Make sure its cited in a format that allows the reader to check sources.",
     model="gpt-5.4",
     trace=True,
     checkpoint=True,
@@ -34,11 +34,11 @@ print(f"Checkpoint events saved to: {da.checkpoint_path}")
 # pprint(result.model_dump())
 # Write JSON data to a file
 
-with open("output_book2.json", "w", encoding="utf-8") as json_file:
+with open("dulce_output.json", "w", encoding="utf-8") as json_file:
     json_file.write(result.model_dump_json(indent=2))
 
 final_output = result.final_result.detailed_output if result.final_result else ""
-with open("result_scifi_book2.md", "w", encoding="utf-8") as f:
+with open("dulce_base_incident.md", "w", encoding="utf-8") as f:
     f.write(final_output)
 
 pprint(final_output or "<no final result>")
