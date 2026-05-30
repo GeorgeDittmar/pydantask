@@ -34,11 +34,11 @@ print(f"Checkpoint events saved to: {da.checkpoint_path}")
 # pprint(result.model_dump())
 # Write JSON data to a file
 
-with open("dulce_output.json", "w", encoding="utf-8") as json_file:
+with open("output_book2.json", "w", encoding="utf-8") as json_file:
     json_file.write(result.model_dump_json(indent=2))
 
 final_output = result.final_result.detailed_output if result.final_result else ""
-with open("dulce_base_incident.md", "w", encoding="utf-8") as f:
+with open("result_scifi_book2.md", "w", encoding="utf-8") as f:
     f.write(final_output)
 
 pprint(final_output or "<no final result>")
