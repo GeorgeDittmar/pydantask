@@ -1404,6 +1404,33 @@ Error that triggered recovery (for debugging only):
                 return False
         return True
 
+    async def _cascade_cancellations(self, ctx: RuntimeState):
+        """Transitively marks downstream tasks as CANCELLED if they rely
+        on an upstream task that has been cancelled.
+        """
+        async with self._plan_lock:
+            changed = True
+            while changed:
+                changed = False
+                for task in ctx.plan.values():
+                    # We only care about steps waiting to run or currently eligible
+                    if task.status in {TaskStatus.PENDING, TaskStatus.READY}:
+                        for dep_id in task.sub_task_dependencies or []:
+                            dep_task = ctx.plan.get(dep_id)
+                            if dep_task and dep_task.status == TaskStatus.CANCELLED:
+                                task.status = TaskStatus.CANCELLED
+                                task.error_msg = (
+                                    f"Upstream dependency Task {dep_id} was cancelled."
+                                )
+                                self._record_task_status_event(
+                                    task.task_id,
+                                    TaskStatus.CANCELLED,
+                                    reason=f"Upstream task {dep_id} cancelled; dropping downstream branch.",
+                                    error_msg=task.error_msg,
+                                )
+                                changed = True
+                                break
+
     @traced(capture_input=False)
     async def _execute_ready_tasks(
         self, tasks: SupervisorDecision, ctx: RuntimeState
@@ -1414,6 +1441,9 @@ Error that triggered recovery (for debugging only):
         an ``asyncio.TaskGroup``. The returned list contains the updated
         ``TaskItem`` instances after execution.
         """
+        # 1. Clean out the graph first. If the supervisor just canceled something via tool,
+        # this ensures children are marked CANCELLED right now.
+        await self._cascade_cancellations(ctx)
 
         # Dedupe while preserving order (supervisor can occasionally emit duplicates).
         requested_ids: list[int] = list(dict.fromkeys(tasks.tasks_to_execute or []))
