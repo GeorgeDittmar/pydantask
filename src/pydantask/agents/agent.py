@@ -34,14 +34,7 @@ from pydantic_ai.usage import UsageLimits
 from pydantask.capabilities.runner import as_runner
 from pathlib import Path
 from pydantic_ai.models import Model
-# from pydantask.prompts.prompts import (
-#     CRITIC_SYS_PROMPT,
-#     PRODUCER_SYS_PROMPT,
-#     RESEARCH_AGENT_SYS_PROMPT,
-#     SUPERVISOR_INPUT_PROMPT,
-#     WORKER_AGENT_SYS_PROMPT,
-#     DYNAMIC_SUPERVISOR_SYS_PROMPT,
-# )
+from pydantic_ai.settings import ModelSettings
 
 from pydantask.prompts.prompts_v2 import (
     CRITIC_SYS_PROMPT,
@@ -86,6 +79,10 @@ from pydantask.observe.tracing import (
 from pydantic_ai.retries import AsyncTenacityTransport, RetryConfig, wait_retry_after
 
 EVENT_RESULT_DETAIL_TRUNCATION = 4_000
+# When a task result is too large to keep inline in the event log, we persist
+# the full JSON payload under the checkpoint directory and store only a pointer
+# (plus a truncated preview) in events.jsonl.
+TASK_RESULT_ARTIFACT_DIRNAME = "task_results"
 
 CheckpointEventType = Literal[
     "task_added",
@@ -160,6 +157,7 @@ class DeepAgent:
         trace: bool = False,
         checkpoint: bool = False,
         checkpoint_dir: Path | str | None = None,
+        run_from_checkpoint: bool = False,
         verbose_logging: bool = False,
     ):
         """Initialize a DeepAgent instance.
@@ -238,10 +236,21 @@ class DeepAgent:
         self.seed_plan: Union[Plan, None] = seed_plan
         self._retry_client = self._create_retrying_client()
 
-        if checkpoint_dir is not None:
+        # Checkpointing / resume semantics:
+        # - `checkpoint=True` enables writing events.
+        # - `checkpoint_dir=...` forces checkpointing on and chooses the directory.
+        # - `run_from_checkpoint=True` requires `checkpoint_dir` and will replay
+        #   events from that directory on `run()`.
+        if run_from_checkpoint and checkpoint_dir is None:
+            raise ValueError(
+                "checkpoint_dir must be provided when run_from_checkpoint=True"
+            )
+
+        if checkpoint_dir is not None or run_from_checkpoint:
             checkpoint = True
 
         self.checkpoint = checkpoint
+        self.run_from_checkpoint = run_from_checkpoint
 
         # Concurrency guardrails:
         # - `_plan_lock` protects plan-level mutations and task claiming (READY->RUNNING).
@@ -532,36 +541,6 @@ class DeepAgent:
         # each agent gets its own unique id
         return _capability_registry
 
-    # def _create_agent_from_spec(
-    #     self,
-    #     model: Model,
-    #     agent_spec: BaseAgentSpec,
-    #     name: str = "Agent",
-    #     deps_type: Type[RuntimeState] = RuntimeState,
-    #     output_type=None,
-    #     tools: list[Callable] | None = None,
-    #     end_strategy="exhaustive",
-    # ) -> Agent:
-    #     """Instantiate an ``Agent`` and bind its system prompt from a spec.
-
-    #     The provided ``BaseAgentSpec`` is used to dynamically generate the
-    #     system prompt at runtime via ``spec.system_prompt(ctx)``.
-    #     """
-    #     spec = agent_spec
-    #     agent = Agent(
-    #         model=model,
-    #         name=name,
-    #         deps_type=deps_type,
-    #         output_type=output_type,
-    #         tools=tools or [],
-    #         end_strategy=end_strategy,
-    #     )
-
-    #     @agent.system_prompt
-    #     def _prompt(ctx):
-    #         return spec.system_prompt(ctx)
-
-    #     return agent
 
     def _initialize_runtime_state(self, objective: str, registry: dict) -> RuntimeState:
         """Create the initial :class:`RuntimeState` for a new DeepAgent run.
@@ -579,7 +558,7 @@ class DeepAgent:
             ``next_task_id`` set to ``1``.
         """
         runtime_state = RuntimeState(
-            objective=objective, agent_registry=registry, next_task_id=1
+            objective=objective, capability_registry=registry, next_task_id=1
         )
         runtime_state.checkpoint_recorder = self._checkpoint_recorder
         return runtime_state
@@ -674,6 +653,14 @@ class DeepAgent:
                 or task_id not in runtime_state.plan
             ):
                 return
+
+            # If the event references a sidecar file, prefer that full payload.
+            full_path = payload.get("full_result_path")
+            if isinstance(full_path, str) and full_path:
+                loaded = self._load_full_task_result_payload(full_path)
+                if loaded is not None:
+                    result_payload = loaded
+
             runtime_state.plan[task_id].result = TaskResult(**result_payload)
             return
 
@@ -741,21 +728,73 @@ class DeepAgent:
             payload["error_msg"] = error_msg
         self._record_event("task_status_updated", payload)
 
+    def _persist_full_task_result_payload(
+        self, task_id: int, result_payload: Dict[str, Any]
+    ) -> str | None:
+        """Persist the full TaskResult payload under the checkpoint directory.
+
+        Returns a *relative* path (from checkpoint root) that can be stored in
+        the event log, or ``None`` if persistence is unavailable.
+        """
+        if self.checkpoint_path is None:
+            return None
+
+        artifacts_dir = self.checkpoint_path / TASK_RESULT_ARTIFACT_DIRNAME
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+        relpath = f"{TASK_RESULT_ARTIFACT_DIRNAME}/task_{task_id}.json"
+        path = self.checkpoint_path / relpath
+        with path.open("w", encoding="utf-8") as fh:
+            json.dump(result_payload, fh, ensure_ascii=False)
+
+        return relpath
+
+    def _load_full_task_result_payload(self, relpath: str) -> Dict[str, Any] | None:
+        """Load a full TaskResult payload previously persisted by this agent."""
+        if self.checkpoint_path is None:
+            return None
+
+        path = self.checkpoint_path / relpath
+        if not path.exists():
+            return None
+
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            return None
+
+        return None
+
     def _record_task_result(self, task: TaskItem) -> None:
         if not self._checkpoint_recorder or not task.result:
             return
 
-        result_payload = task.result.model_dump()
-        detailed_output = result_payload.get("detailed_output")
+        # Use JSON mode so datetimes (e.g. SourceRef.accessed_at) are serializable.
+        result_payload: Dict[str, Any] = task.result.model_dump(mode="json")
+
+        full_result_path: str | None = None
+        detailed_output = (result_payload.get("detailed_output") or "")
         if detailed_output and len(detailed_output) > EVENT_RESULT_DETAIL_TRUNCATION:
-            truncation_notice = f"\n\n...[TRUNCATED {len(detailed_output) - EVENT_RESULT_DETAIL_TRUNCATION} chars]..."
+            # Persist the full payload to a sidecar file so replay can restore it.
+            full_result_path = self._persist_full_task_result_payload(
+                task.task_id, result_payload
+            )
+
+            truncation_notice = (
+                f"\n\n...[TRUNCATED {len(detailed_output) - EVENT_RESULT_DETAIL_TRUNCATION} chars]..."
+            )
             result_payload["detailed_output"] = (
                 detailed_output[:EVENT_RESULT_DETAIL_TRUNCATION] + truncation_notice
             )
-        self._record_event(
-            "task_result",
-            {"task_id": task.task_id, "result": result_payload},
-        )
+
+        payload: Dict[str, Any] = {"task_id": task.task_id, "result": result_payload}
+        if full_result_path:
+            payload["full_result_path"] = full_result_path
+
+        self._record_event("task_result", payload)
 
     def _record_metadata_append(self, task_id: int, key: str, value: Any) -> None:
         if not self._checkpoint_recorder:
@@ -1340,7 +1379,7 @@ Error that triggered recovery (for debugging only):
 
         return_result = DeepAgentRunResult(
             objective=self.objective,
-            final_result=task.result if "task" in locals() else None,
+            final_result=self._select_final_result(runtime_state),
             plan=runtime_state.plan,
             runtime_state=runtime_state,
             errors=errors,
