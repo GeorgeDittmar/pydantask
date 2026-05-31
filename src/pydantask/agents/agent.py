@@ -43,6 +43,8 @@ from pydantask.prompts.prompts_v2 import (
     SUPERVISOR_INPUT_PROMPT,
     WORKER_AGENT_SYS_PROMPT,
     DYNAMIC_SUPERVISOR_SYS_PROMPT,
+    BOOTSTRAP_INSTURCT,
+    ORCHESTRATION_INSTRUCT
 )
 
 from pydantask.models import (
@@ -891,7 +893,7 @@ class DeepAgent:
 
         _prompt = f"""
             
-            Evaluate if the following worker output completed the specified task.
+            Evaluate if the following worker output completed the specified task it was given.
 
             Overall Objective:
             {ctx.objective}
@@ -1287,9 +1289,11 @@ Error that triggered recovery (for debugging only):
             # Deterministic scheduler pass to normalize readiness and surface issues.
             self._last_scheduler_report = await self._scheduler_pass(runtime_state)
 
+            current_instruction = BOOTSTRAP_INSTURCT if len(runtime_state.plan) == 0 else ORCHESTRATION_INSTRUCT
             supervisor_response = await self._supervisor_agent.run(
                 self._format_supervisor_input_prompt(runtime_state),
                 deps=runtime_state,
+                instructions=current_instruction
             )
             supervisor_response = supervisor_response.output
 
