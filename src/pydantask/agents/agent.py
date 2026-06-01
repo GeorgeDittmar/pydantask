@@ -95,6 +95,7 @@ CheckpointEventType = Literal[
     "scratch_note_appended",
     "supervisor_decision",
     "critic_feedback",
+    "final_task_set",
 ]
 
 
@@ -378,6 +379,7 @@ class DeepAgent:
         mutating_tools = [
             self.add_task,
             self.patch_task,
+            self.mark_final_task,
         ]
 
         if self.planning_mode == "fixed":
@@ -621,6 +623,21 @@ class DeepAgent:
                 task.sub_task_objective = payload["sub_task_objective"]
             if "dependencies" in payload:
                 task.sub_task_dependencies = payload["dependencies"]
+            if "is_final" in payload:
+                task.is_final = bool(payload["is_final"])
+            return
+
+        if event_type == "final_task_set":
+            task_id = payload.get("task_id")
+            if task_id is None:
+                return
+
+            # Enforce the invariant: at most one task is marked final.
+            for t in runtime_state.plan.values():
+                t.is_final = False
+
+            if task_id in runtime_state.plan:
+                runtime_state.plan[task_id].is_final = True
             return
 
         if event_type == "task_status_updated":
@@ -842,6 +859,7 @@ class DeepAgent:
         for t in ctx.plan.values():
             line = (
                 f"- Task ID: {t.task_id} | Status: [{t.status.value}] "
+                f"| Final: {getattr(t, 'is_final', False)} "
                 f"| Objective: {t.sub_task_objective} "
                 f"| Dependencies: {t.sub_task_dependencies}"
             )
@@ -1109,6 +1127,37 @@ Error that triggered recovery (for debugging only):
 
             return f"Task {task_id} updated successfully."
 
+    async def mark_final_task(
+        self,
+        ctx: RunContext[RuntimeState],
+        task_id: int,
+        reason: str | None = None,
+    ) -> str:
+        """Tool: Mark Final Task.
+
+        Mark exactly one task as the final deliverable for the run.
+
+        This tool should be called by the supervisor (planner/orchestrator), not
+        by workers. It enables deterministic "final_result" selection on resume.
+
+        The invariant enforced is: at most one task has `is_final=True`.
+        """
+        async with self._plan_lock:
+            if task_id not in ctx.deps.plan:
+                return f"Error: No task with id {task_id} found in plan."
+
+            for t in ctx.deps.plan.values():
+                t.is_final = False
+
+            ctx.deps.plan[task_id].is_final = True
+
+            payload: Dict[str, Any] = {"task_id": task_id}
+            if reason:
+                payload["reason"] = reason
+            self._record_event("final_task_set", payload)
+
+            return f"Task {task_id} marked as final."
+
     def _is_terminal_status(self, status: TaskStatus) -> bool:
         """Return True if a task is in a terminal state.
 
@@ -1190,6 +1239,44 @@ Error that triggered recovery (for debugging only):
             out.append("Warnings:")
             out.extend(warnings)
         return "\n".join(out)
+
+    def _select_final_result(self, runtime_state: RuntimeState) -> TaskResult | None:
+        """Select the run's final output deterministically.
+
+        Priority:
+        1) A COMPLETED task with `is_final=True`.
+        2) A COMPLETED task with non-empty `result.detailed_output`.
+        3) A COMPLETED `producer_agent` task.
+        4) Otherwise the newest COMPLETED task with any result.
+
+        This ensures checkpoint resume returns a stable final deliverable even
+        if the supervisor immediately declares completion.
+        """
+        completed: list[TaskItem] = [
+            t
+            for t in runtime_state.plan.values()
+            if t.status == TaskStatus.COMPLETED and t.result is not None
+        ]
+        if not completed:
+            return None
+
+        finals = [t for t in completed if getattr(t, "is_final", False)]
+        if finals:
+            return max(finals, key=lambda t: t.task_id).result
+
+        with_detail = [
+            t
+            for t in completed
+            if (t.result and (t.result.detailed_output or "").strip())
+        ]
+        if with_detail:
+            return max(with_detail, key=lambda t: t.task_id).result
+
+        producers = [t for t in completed if t.capability == "producer_agent"]
+        if producers:
+            return max(producers, key=lambda t: t.task_id).result
+
+        return max(completed, key=lambda t: t.task_id).result
 
     def _build_deadlock_report(
         self, ctx: RuntimeState, decision: SupervisorDecision | None = None
@@ -1303,8 +1390,56 @@ Error that triggered recovery (for debugging only):
             )
 
             if supervisor_response.all_tasks_completed:
+                # Deterministic guardrail: do not allow "completion" unless the
+                # task marked as final is actually COMPLETED.
+                final_tasks = [
+                    t for t in runtime_state.plan.values() if getattr(t, "is_final", False)
+                ]
+
+                completion_ok = True
+                reasons: list[str] = []
+
+                if not final_tasks:
+                    completion_ok = False
+                    reasons.append("no task is marked Final: True")
+                elif len(final_tasks) > 1:
+                    completion_ok = False
+                    reasons.append(
+                        f"multiple tasks are marked Final: True ({[t.task_id for t in final_tasks]})"
+                    )
+                else:
+                    ft = final_tasks[0]
+                    if ft.status != TaskStatus.COMPLETED:
+                        completion_ok = False
+                        reasons.append(
+                            f"final task {ft.task_id} status is {ft.status.value!r} (expected 'completed')"
+                        )
+                    if ft.result is None:
+                        completion_ok = False
+                        reasons.append(f"final task {ft.task_id} has no TaskResult")
+
+                if not completion_ok:
+                    msg = (
+                        "Supervisor returned all_tasks_completed=True, but completion invariants "
+                        f"are not met: {', '.join(reasons)}. Overriding to continue."
+                    )
+                    logger.warning(msg)
+                    self._last_scheduler_report = (
+                        self._last_scheduler_report
+                        + "\n\nCOMPLETION OVERRIDE (deterministic):\n- "
+                        + msg
+                    ).strip()
+
+                    # Treat this as a no-progress cycle so we eventually fail-safe.
+                    no_progress_cycles += 1
+                    if self.checkpoint:
+                        self._checkpoint_state(runtime_state)
+                    runtime_state.runtime_steps += 1
+                    step_count += 1
+                    continue
+
                 logger.info(
-                    "--- Supervisor declared completion. Ending execution loop. ---"
+                    "--- Supervisor declared completion and final task is completed. Ending execution loop. ---"
                 )
                 stop_execution = True
                 break

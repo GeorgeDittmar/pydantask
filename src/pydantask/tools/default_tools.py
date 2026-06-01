@@ -348,23 +348,3 @@ async def read_scratch_notes(
     existing = ctx.deps.task.metadata.get(key, "")
     return _truncate_text(existing, max_chars=max_chars)
 
-async def _mark_final_task(ctx: RunContext[RuntimeState], task_id: int):
-    """
-    Tool: Mark Final Task
-    Description: Tool used to mark in a plan the final task in the workflow
-
-    When to use:
-        - When planning and setting an initial final_task flag.
-        - When replanning or when a patch_task occured and needing to set a new TaskItem as a final_task.
-    """
-    if task_id not in ctx.deps.plan:
-         return f"CRITICAL: No task with id {task_id}."
-    
-
-
-    recorder = getattr(ctx.deps, "checkpoint_recorder", None)
-    if recorder is not None:
-        recorder.record(
-            "scratch_note_appended",
-            {"task_id": task_id, "note": f"Marked TaskId: {task_id} as final task in the current plan."},
-        )

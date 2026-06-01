@@ -52,14 +52,14 @@ def env_vars(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.fixture
 def runtime_state() -> RuntimeState:
-    return RuntimeState(objective="obj", agent_registry={}, next_task_id=1)
+    return RuntimeState(objective="obj", capability_registry={}, next_task_id=1)
 
 
 def make_minimal_deep_agent(prompt: str = "obj") -> agent_mod.DeepAgent:
     """Create a DeepAgent without running its heavy __init__."""
     da = agent_mod.DeepAgent.__new__(agent_mod.DeepAgent)
     da.objective = prompt
-    da.agent_registry = {}
+    da._capability_registry = {}
     da._max_steps = 3
     da.checkpoint = False
     da.seed_plan = None
@@ -70,6 +70,7 @@ def make_minimal_deep_agent(prompt: str = "obj") -> agent_mod.DeepAgent:
     da._supervisor_agent = MagicMock()
     da._critic_agent = MagicMock()
     da._retry_model = MagicMock()
+    da.planning_mode = "llm"
     return da
 
 
@@ -112,8 +113,8 @@ def test_deep_agent_init_sets_registry_keys(monkeypatch: pytest.MonkeyPatch):
         deep_agent = agent_mod.DeepAgent("Test Goal", trace=False)
 
     assert deep_agent.objective == "Test Goal"
-    assert "research_agent" in deep_agent.agent_registry
-    assert "producer_agent" in deep_agent.agent_registry
+    assert "research_agent" in deep_agent._capability_registry
+    assert "producer_agent" in deep_agent._capability_registry
 
     # Soft-disabled filesystem tools should not be registered by default.
     all_tools: list[object] = []
@@ -293,7 +294,7 @@ async def test_execute_ready_tasks_filters_deps_and_injects_feedback(
     )
 
     worker_impl = MagicMock(name="worker_impl")
-    da.agent_registry = {
+    da._capability_registry = {
         "worker_agent": agent_mod.CapabilityDescription(
             name="worker_agent",
             description="",
@@ -388,6 +389,10 @@ def test_replay_checkpoint_rebuilds_state(runtime_state: RuntimeState):
             payload={"task": task_payload, "next_task_id": 4},
         ),
         agent_mod.CheckpointEvent(
+            type="final_task_set",
+            payload={"task_id": 3, "reason": "unit test"},
+        ),
+        agent_mod.CheckpointEvent(
             type="task_status_updated",
             payload={
                 "task_id": 3,
@@ -412,6 +417,7 @@ def test_replay_checkpoint_rebuilds_state(runtime_state: RuntimeState):
 
     assert 3 in runtime_state.plan
     task = runtime_state.plan[3]
+    assert task.is_final is True
     assert task.status == TaskStatus.RUNNING
     assert task.attempt_count == 2
     assert task.task_feedback and task.task_feedback.reasoning == "fail"
@@ -467,6 +473,20 @@ async def test_append_scratch_note_records_checkpoint_event(
 @pytest.mark.asyncio
 async def test_run_stops_when_supervisor_says_done(runtime_state: RuntimeState):
     da = make_minimal_deep_agent(prompt="overall")
+
+    # Pre-populate the runtime with a completed final task so the deterministic
+    # completion guardrail accepts the supervisor's completion signal.
+    final_result = TaskResult(task_id=1, summary="final", detailed_output="ok")
+    runtime_state.plan[1] = TaskItem(
+        task_id=1,
+        overall_objective=runtime_state.objective,
+        sub_task_objective="final",
+        capability="worker_agent",
+        status=TaskStatus.COMPLETED,
+        result=final_result,
+        is_final=True,
+    )
+
     da._initialize_runtime_state = MagicMock(return_value=runtime_state)
     da._format_supervisor_input_prompt = MagicMock(return_value="prompt")
 
@@ -486,6 +506,70 @@ async def test_run_stops_when_supervisor_says_done(runtime_state: RuntimeState):
     result = await da.run()
 
     assert result.objective == "overall"
-    assert result.final_result is None
+    assert result.final_result is not None
+    assert result.final_result.summary == "final"
     assert result.plan == runtime_state.plan
     supervisor.run.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_mark_final_task_sets_flag_and_emits_event(runtime_state: RuntimeState):
+    da = make_minimal_deep_agent(prompt="overall")
+    recorder = DummyRecorder()
+    da._checkpoint_recorder = recorder
+
+    # Two tasks, mark the second as final.
+    runtime_state.plan[1] = TaskItem(
+        task_id=1,
+        overall_objective=runtime_state.objective,
+        sub_task_objective="t1",
+        capability="worker_agent",
+        status=TaskStatus.READY,
+        is_final=True,
+    )
+    runtime_state.plan[2] = TaskItem(
+        task_id=2,
+        overall_objective=runtime_state.objective,
+        sub_task_objective="t2",
+        capability="worker_agent",
+        status=TaskStatus.READY,
+        is_final=False,
+    )
+
+    ctx = SimpleNamespace(deps=runtime_state)
+    msg = await da.mark_final_task(ctx, task_id=2, reason="unit")
+
+    assert "marked as final" in msg
+    assert runtime_state.plan[1].is_final is False
+    assert runtime_state.plan[2].is_final is True
+
+    assert recorder.events
+    evt_type, payload = recorder.events[-1]
+    assert evt_type == "final_task_set"
+    assert payload["task_id"] == 2
+
+
+@pytest.mark.asyncio
+async def test_run_overrides_completion_when_no_final_task(runtime_state: RuntimeState):
+    da = make_minimal_deep_agent(prompt="overall")
+    da._initialize_runtime_state = MagicMock(return_value=runtime_state)
+    da._format_supervisor_input_prompt = MagicMock(return_value="prompt")
+
+    supervisor = MagicMock(name="supervisor")
+    supervisor.run = AsyncMock(
+        return_value=SimpleNamespace(
+            output=SupervisorDecision(
+                reasoning="done",
+                tasks_to_execute=[],
+                feedback_to_subagents=None,
+                all_tasks_completed=True,
+            )
+        )
+    )
+    da._supervisor_agent = supervisor
+
+    result = await da.run()
+
+    # The completion guardrail prevents early stop; we run until max_steps.
+    assert supervisor.run.await_count == da._max_steps
+    assert result.final_result is None

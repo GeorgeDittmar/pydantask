@@ -286,6 +286,15 @@ class TaskItem(BaseModel):
         default_factory=dict, description="Optional metadata for this task."
     )
 
+    is_final: bool = Field(
+        default=False,
+        description=(
+            "Marks this task as a final deliverable for the overall run. "
+            "This should be set deterministically by the supervisor (via a tool), "
+            "not guessed by workers."
+        ),
+    )
+
     @property
     def latest_output(self):
         return self.iteration_history[-1].output if self.iteration_history else None
