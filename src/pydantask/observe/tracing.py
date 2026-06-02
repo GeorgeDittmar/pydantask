@@ -180,6 +180,7 @@ LangSmithRunType = Literal[
     "retriever",
     "embedding",
     "prompt",
+    "task",
 ]
 
 _ACTIVE_BACKEND: ContextVar[TracingBackend] = ContextVar(

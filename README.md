@@ -103,7 +103,7 @@ from pydantask.agents.agent import DeepAgent
 
 async def main() -> None:
     agent = DeepAgent(
-        prompt="Write an overview of ghost lights folklore and summarize scientific explanations.",
+        objective="Write an overview of ghost lights folklore and summarize scientific explanations.",
         model="gpt-4.1-mini",  # or any compatible OpenAIChatModel name
         max_steps=10,
     )
@@ -165,7 +165,7 @@ custom_capability = CapabilityDescription(
 )
 
 agent = DeepAgent(
-    prompt="Assess the security posture of this web application.",
+    objective="Assess the security posture of this web application.",
     sub_agents=[custom_capability],
 )
 
@@ -189,7 +189,7 @@ utility_capability = CapabilityDescription(
     tool_func=my_utility_tool,
 )
 
-agent = DeepAgent(prompt="Some goal...", sub_agents=[utility_capability])
+agent = DeepAgent(objective="Some goal...", sub_agents=[utility_capability])
 ```
 
 For more customization details, see:

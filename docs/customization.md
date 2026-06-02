@@ -33,7 +33,7 @@ custom_description = CapabilityDescription(
     tool_func=my_sub_agent,
 )
 
-agent = DeepAgent(prompt="...", sub_agents=[custom_description])
+agent = DeepAgent(objective="...", sub_agents=[custom_description])
 ```
 
 ### Example: simple tool as a capability
@@ -56,7 +56,7 @@ my_utility_capability = CapabilityDescription(
     tool_func=my_utility_tool,
 )
 
-agent = DeepAgent(prompt="...", sub_agents=[my_utility_capability])
+agent = DeepAgent(objective="...", sub_agents=[my_utility_capability])
 ```
 
 The planner sees the `name` and `description` in `CapabilityDescription` and may choose that capability when constructing `TaskItem.capability` values.

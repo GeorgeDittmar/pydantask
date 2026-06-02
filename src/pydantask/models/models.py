@@ -286,6 +286,15 @@ class TaskItem(BaseModel):
         default_factory=dict, description="Optional metadata for this task."
     )
 
+    is_final: bool = Field(
+        default=False,
+        description=(
+            "Marks this task as a final deliverable for the overall run. "
+            "This should be set deterministically by the supervisor (via a tool), "
+            "not guessed by workers."
+        ),
+    )
+
     @property
     def latest_output(self):
         return self.iteration_history[-1].output if self.iteration_history else None
@@ -346,7 +355,7 @@ class RuntimeState(BaseModel):
     Attributes:
         plan: Mapping from task_id to :class:`TaskItem` for the current plan.
         objective: The overall user objective being solved.
-        agent_registry: Mapping from capability name to its description/
+        capability_registry: Mapping from capability name to its description/
             implementation (excluded from serialization).
         completed_steps: Set of task_ids that have been completed.
         runtime_steps: Number of outer control-loop cycles executed so far.
@@ -363,8 +372,8 @@ class RuntimeState(BaseModel):
         default_factory=dict,
     )
     objective: str = Field(description="The overall objective to solve for.")
-    agent_registry: Dict[str, Any] = Field(
-        description="Agents available to perform tasks.",
+    capability_registry: Dict[str, Any] = Field(
+        description="Capabilities available to perform tasks.",
         default_factory=dict,
         exclude=True,
     )
@@ -391,6 +400,11 @@ class RuntimeState(BaseModel):
             "notes or intermediate artifacts."
         ),
         default_factory=dict,
+    )
+    checkpoint_recorder: Any | None = Field(
+        default=None,
+        description="Optional recorder used for event-sourced checkpointing.",
+        exclude=True,
     )
 
 
@@ -511,4 +525,11 @@ class DeepAgentRunResult(BaseModel):
     errors: list[str] = Field(
         default_factory=list,
         description="Any top-level errors or important warnings.",
+    )
+
+
+class TaskRunDeps(BaseModel):
+    runtime_state: RuntimeState
+    task: TaskItem = Field(
+        description="The task item we mute. This is a deep copy of the taskitem stored in the plan"
     )

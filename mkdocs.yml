@@ -4,6 +4,7 @@ nav:
   - Quickstart: quickstart.md
   - Use Cases: use_cases.md
   - Agent Concepts: agents.md
+  - Workflows / DAGs: dags.md
   - Models: models.md
   - Tools: tools.md
   - Observability: observability.md
