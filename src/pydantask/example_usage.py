@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 deep_agent = DeepAgent(
-    prompt="Write a market analysis for LLM tooling in 2026.",
+    objective="Write a market analysis for LLM tooling in 2026.",
     model="gpt-5.4",
     verbose_logging=True,
     trace=True,

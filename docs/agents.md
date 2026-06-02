@@ -4,7 +4,7 @@ Agents are the core entities in Pydantask.
 
 At a high level, agents:
 
-- Accept an objective (a prompt)
+- Accept an objective (a task description)
 - Can call tools via function calling
 - Can share mutable state via `RuntimeState` (`deps_type=RuntimeState`)
 
@@ -18,7 +18,7 @@ This page documents how `DeepAgent` works **as implemented today**.
 
 The public constructor accepts several optional overrides; the parameters that materially affect the current orchestration behavior are:
 
-- `prompt`: overall objective
+- `objective`: overall objective
 - `model`: model identifier or `pydantic_ai.models.Model` instance. Strings may be
   bare model names (defaulting to the OpenAI provider) or provider-prefixed
   values such as `"openai:gpt-4.1-mini"` or `"anthropic:claude-sonnet-4-5"`.
@@ -32,7 +32,7 @@ from pydantask.agents import DeepAgent
 from pydantask.models import TaskResult
 
 agent = DeepAgent(
-    prompt="...",
+    objective="...",
     model="gpt-4.1-mini",
     max_steps=20,
     trace=True,

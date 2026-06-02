@@ -3,7 +3,7 @@
 A **tool** is any callable an agent may use. Tools may include:
 
 - Simple functions (e.g., time, file IO, reflection)
-- Sub-agents (agents with their own prompt, state access, and toolsets)
+- Sub-agents (agents with their own system instructions, state access, and toolsets)
 
 Tools are ordinary async Python functions (or `Agent` instances) that Pydantic AI can call via function calling. They usually accept a `RunContext[RuntimeState]` when they need access to the shared plan and document store.
 

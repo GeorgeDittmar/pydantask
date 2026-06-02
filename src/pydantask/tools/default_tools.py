@@ -7,11 +7,36 @@ from pydantic import BaseModel
 from pydantic_ai import Agent, RunContext
 from pathlib import Path
 
-from pydantask.models import RuntimeState
+from pydantask.models import RuntimeState, TaskRunDeps
+from pydantask.models.models import TaskItem
 
 BASE_DIR = Path(__file__).parent.resolve()  # Directory where this script is
 DEFAULT_DIR = BASE_DIR / "tmp_files"  # TODO: make this configurable
 DEFAULT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _truncate_text(text: str, max_chars: int | None) -> str:
+    """Best-effort truncation helper to reduce tool output size.
+
+    This is primarily used to avoid blowing up model context windows (common with
+    smaller local models).
+
+    If truncation occurs, we keep both the head and tail of the text.
+    """
+    if max_chars is None:
+        return text
+    if max_chars <= 0:
+        return ""
+    if len(text) <= max_chars:
+        return text
+
+    head_chars = max_chars // 2
+    tail_chars = max_chars - head_chars
+    return (
+        text[:head_chars]
+        + f"\n\n...[TRUNCATED {len(text) - max_chars} chars; original_len={len(text)}]...\n\n"
+        + text[-tail_chars:]
+    )
 
 
 async def ask_user(ctx: RunContext[RuntimeState], question_for_user: str) -> str:
@@ -133,7 +158,7 @@ async def read_from_file_system(
         )
 
 
-# Tools used by the supervisor or planner agents
+# Tools used by the supervisor or researcher mostly
 async def get_current_datetime() -> str:
     """
     Get the current date and time in ISO 8601 format.
@@ -167,18 +192,20 @@ async def list_documents(ctx: RunContext[RuntimeState]) -> str:
     return "\n".join(lines)
 
 
-async def list_completed_tasks(ctx: RunContext[RuntimeState]) -> str:
+async def list_completed_tasks(ctx: RunContext[TaskRunDeps]) -> str:
     """List all tasks that have completed, with brief summaries.
 
     Useful for agents that need to review prior work before deciding next steps.
     """
-    if not ctx.deps.plan:
+    if not ctx.deps.runtime_state.plan:
         return "No tasks in plan."
 
     from pydantask.models import TaskStatus  # local import to avoid cycles
 
     lines: list[str] = []
-    for task_id, task in sorted(ctx.deps.plan.items(), key=lambda kv: kv[0]):
+    for task_id, task in sorted(
+        ctx.deps.runtime_state.plan.items(), key=lambda kv: kv[0]
+    ):
         if task.status != TaskStatus.COMPLETED:
             continue
         summary = task.result.summary if task.result is not None else "<no result>"
@@ -196,7 +223,7 @@ async def list_completed_tasks(ctx: RunContext[RuntimeState]) -> str:
 
 
 async def save_task_context(
-    ctx: RunContext[RuntimeState],
+    ctx: RunContext[TaskRunDeps],
     task_id: int,
     content: str,
     kind: str = "notes",
@@ -229,7 +256,7 @@ async def save_task_context(
 
 
 async def read_task_context(
-    ctx: RunContext[RuntimeState],
+    ctx: RunContext[TaskRunDeps],
     task_id: int,
     kind: str = "notes",
 ) -> str:
@@ -249,50 +276,75 @@ async def read_task_context(
     return await read_from_file_system(ctx, file_name=file_name)
 
 
-async def get_task_result(ctx: RunContext[RuntimeState], task_id: int) -> str:
+async def get_task_result(
+    ctx: RunContext[TaskRunDeps],
+    task_id: int,
+    max_chars: int | None = 20_000,
+) -> str:
     """Return the full TaskResult for a given task_id as JSON.
 
     When to use:
         - When you need to inspect the detailed output of a prior task.
         - Before synthesizing or critiquing based on earlier work.
     """
-    task = ctx.deps.plan.get(task_id)
+
+    # check if task_id if valid. if not then return saying incorrect id
+
+    if task_id not in ctx.deps.runtime_state.plan:
+        return f"CRITICAL: task id: {task_id} does not exist in the plan. Attempt call again and double check the task id before trying again."
+
+    task = ctx.deps.runtime_state.plan.get(task_id, None)
+
     if task is None:
-        return f"No task with id {task_id}."
+        return f"CRITICAL: No task with id {task_id}."
 
     if task.result is None:
         return f"Task {task_id} has no result yet. Current status: {task.status}."
 
-    return task.result.model_dump_json(indent=2)
+    result_json = task.result.model_dump_json(indent=2)
+    return _truncate_text(result_json, max_chars=max_chars)
 
 
 async def append_scratch_note(
-    ctx: RunContext[RuntimeState],
+    ctx: RunContext[TaskRunDeps],
     task_id: int,
     note: str,
 ) -> str:
     """
     Tool: Append Scratch Note
-    Description: Append a short note to the in-memory scratchpad for this task.
+    Description: Append a short note to the tasks notepad / memory
 
     When to use:
         - You want to store intermediate notes or thoughts about your work and any.
     When not to use:
         - Writing final full reports / analysis or answers.
     """
-    key = f"scratch_task_{task_id}"
-    existing = ctx.deps.document_store.get(key, "")
-    ctx.deps.document_store[key] = existing + f"\n\n{note}"
+    key = "scratch_notes"
+    existing = ctx.deps.task.metadata.get(key, "")
+    ctx.deps.task.metadata[key] = existing + f"\n\n{note}"
+
+    recorder = getattr(ctx.deps.runtime_state, "checkpoint_recorder", None)
+    if recorder is not None:
+        recorder.record(
+            "scratch_note_appended",
+            {"task_id": task_id, "note": _truncate_text(note, max_chars=1_000)},
+        )
+
     return f"Appended note to scratchpad {key}"
 
 
-async def read_scratch_notes(ctx: RunContext[RuntimeState], task_id: int):
+async def read_scratch_notes(
+    ctx: RunContext[TaskRunDeps],
+    task_id: int,
+    max_chars: int | None = 8_000,
+):
     """
     Tool: Read Scratch Notes
     Description: Reads any notes in the in-memory scratchpad for this task. Use to see if there are any thoughts you need to reason over.
     Pass in the task_id you are working on to view all the notes.
     """
 
-    key = f"scratch_task_{task_id}"
-    existing = ctx.deps.document_store.get(key, "")
-    return existing
+    key = f"scratch_notes"
+    existing = ctx.deps.task.metadata.get(key, "")
+    return _truncate_text(existing, max_chars=max_chars)
+
