@@ -148,9 +148,8 @@ from pydantask.tools.default_tools import append_scratch_note
 ```
 
 - **Signature**:
-  - `async def append_scratch_note(ctx: RunContext[RuntimeState], task_id: int, note: str) -> str`
+  - `async def append_scratch_note(ctx: RunContext[RuntimeState], note: str) -> str`
 - **Behavior**:
-  - Appends `note` to an in‑memory scratchpad entry `scratch_task_{task_id}` in `ctx.deps.document_store`.
   - Intended for lightweight, transient “running memory” during a task, not final reports.
 
 ---
