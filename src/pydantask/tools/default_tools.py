@@ -307,7 +307,6 @@ async def get_task_result(
 
 async def append_scratch_note(
     ctx: RunContext[TaskRunDeps],
-    task_id: int,
     note: str,
 ) -> str:
     """
@@ -327,7 +326,10 @@ async def append_scratch_note(
     if recorder is not None:
         recorder.record(
             "scratch_note_appended",
-            {"task_id": task_id, "note": _truncate_text(note, max_chars=1_000)},
+            {
+                "task_id": ctx.deps.task.task_id,
+                "note": _truncate_text(note, max_chars=1_000),
+            },
         )
 
     return f"Appended note to scratchpad {key}"
@@ -335,16 +337,13 @@ async def append_scratch_note(
 
 async def read_scratch_notes(
     ctx: RunContext[TaskRunDeps],
-    task_id: int,
     max_chars: int | None = 8_000,
 ):
     """
     Tool: Read Scratch Notes
     Description: Reads any notes in the in-memory scratchpad for this task. Use to see if there are any thoughts you need to reason over.
-    Pass in the task_id you are working on to view all the notes.
     """
 
     key = f"scratch_notes"
     existing = ctx.deps.task.metadata.get(key, "")
     return _truncate_text(existing, max_chars=max_chars)
-

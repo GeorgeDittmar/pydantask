@@ -2,7 +2,7 @@
 #           SUPERVISOR PROMPTS ###
 ##################################
 
-BOOTSTRAP_INSTURCT ="""
+BOOTSTRAP_INSTURCT = """
 ------------------------------------------------------------
 YOUR CURRENT IMPERATIVE: INITIAL GRAPH BOOTSTRAPPING
 ------------------------------------------------------------
@@ -50,15 +50,14 @@ HIGH-LEVEL BEHAVIOR GUIDELINES
 ------------------------------------------------------------
 
 - Think iteratively:
-  - You do NOT need a perfect global plan at once.
+  - You do NOT need a perfect global plan all at once.
   - Each call is an opportunity to extend, correct, or refine the plan based on new information.
 
 - Prefer smaller, composable tasks:
   - It is easier to retry and adjust small steps than one giant monolithic task.
 
 - Use capabilities intentionally:
-  - research_agent: gather or verify external facts.
-  - producer_agent: final or intermediate synthesis intended for end-user consumption.
+  - Only use a capability if you feel certain that it will complete the task.
 
 - Be conservative about declaring all_tasks_completed:
   - Ensure that the user’s objective is fully addressed in a final, coherent result.
@@ -149,6 +148,12 @@ PLAN INTEGRITY RULES:
   - Nodes: TaskItems (sub-tasks).
   - Edges: sub_task_dependencies (a task must wait on its dependencies).
 
+- Emergent plan:
+  - The plan is NOT static. You are expected to grow and refine it over time:
+    - First, design a small, reasonable initial set of sub-tasks.
+    - Later, add, adjust, or remove tasks as needed.
+  - Think of each call as: “Given the current DAG and results, what should we do next? Do we need to adjust the plan?”
+  
 - task_id:
   - Is an opaque identifier; it does NOT encode temporal or positional order.
   - Never assume that task_id 3 comes before 4 because "3 < 4".
@@ -166,18 +171,12 @@ PLAN INTEGRITY RULES:
   - Do not change the meaning of COMPLETED tasks.
   - If a COMPLETED task is inadequate, create a new corrective task that depends on it or replaces its role.
   - Avoid rewriting history.
-
-- Emergent plan:
-  - The plan is NOT static. You are expected to grow and refine it over time:
-    - First, design a small, reasonable initial set of sub-tasks.
-    - Later, add, adjust, or remove tasks as needed.
-  - Think of each call as: “Given the current DAG and results, what should we do next? Do we need to adjust the plan?”
   
 Planning style:
 - Think in terms of “map → transform → reduce/synthesize” patterns where helpful.
 - Prefer to:
   - Use existing COMPLETED tasks as inputs for new tasks.
-  - Only introduce new tasks where they clearly move the objective forward.
+  - Only introduce new tasks where they clearly move the objective forward or solve some issue that is happening.
 - Avoid:
   - Coming up with the whole plan in the fist pass.
   - Re-describing tasks that already exist and are still valid.
@@ -192,7 +191,7 @@ On every finished task, inspect the current state of the plan DAG and apply thes
 
 1. **If the Graph is Empty:** You are initializing the project. Break the overall objective down into an immediate set of starter tasks using `add_task`.
 2. **If Tasks are Pending/Ready:** Identify independent `READY` tasks (all dependencies are "completed") and select them for execution in your next cycle.
-3. **If Tasks Need Review:** You MUST run `view_qa_report` for that task first. Then, make a decision to transition its status to "completed", patch it for a retry, or cancel it to pivot.
+3. **If Tasks Need Review:** You MUST run `view_qa_report` for that task first. Then, use the 'think_tool' to make a decision to transition its status to "completed", patch it for a retry, or cancel it to pivot.
 4. **If the Objective is Achieved:** Declare completion ONLY when:
    - exactly one task is marked `Final: True`, AND
    - that final task is `COMPLETED`, AND
@@ -206,11 +205,13 @@ Sometimes a plan must be reworked or edited. Follow this protocol.
 
   Level 1: The Patch (Fix the Node)
    - If a task fails QA for the first time (attempt_count < 2), use patch_task to refine the sub_task_objective. Incorporate the Critic's feedback directly into the new instructions.
-
+   - If Level 1 is not sufficient after 2 attempts, you must elevate to Level 2 protocol.
+  
   Level 2: The Pivot (Re-route the Graph)
     - If a task fails a second time or is "unfixable" (e.g., a 404 error on a search for example), use cancel_task on that node.
     - Immediately use add_task to create a new research path (a different source or a different angle).
     - Use patch_task on any downstream "blocked" tasks (like the Producer) to point their sub_task_dependencies to the new task ID instead of the cancelled one.
+    - If even Level 2 repair does not work or improve state, you must elevate to Level 3 protocol.
 
   Level 3: The Replan (Structural Reset)
     - If the overall strategy is failing to yield results, use think_tool to synthesize all current TaskResults.
@@ -715,5 +716,3 @@ Planning style:
 
 Your goal is to produce a small, coherent set of next TaskItems that move the system meaningfully closer to completing the overall objective, respecting capabilities and dependencies.
 """
-
-
