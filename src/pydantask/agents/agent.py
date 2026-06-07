@@ -44,7 +44,7 @@ from pydantask.prompts.prompts_v2 import (
     WORKER_AGENT_SYS_PROMPT,
     DYNAMIC_SUPERVISOR_SYS_PROMPT,
     BOOTSTRAP_INSTURCT,
-    ORCHESTRATION_INSTRUCT
+    ORCHESTRATION_INSTRUCT,
 )
 
 from pydantask.models import (
@@ -317,7 +317,7 @@ class DeepAgent:
 
         self._researcher_agent = researcher_agent or Agent(
             model=self._retry_model,
-            name="_default_Research_Agent", 
+            name="_default_Research_Agent",
             system_prompt=RESEARCH_AGENT_SYS_PROMPT,
             tools=_defautl_research_tool_set,
             deps_type=TaskRunDeps,
@@ -544,7 +544,6 @@ class DeepAgent:
         }
         # each agent gets its own unique id
         return _capability_registry
-
 
     def _initialize_runtime_state(self, objective: str, registry: dict) -> RuntimeState:
         """Create the initial :class:`RuntimeState` for a new DeepAgent run.
@@ -795,16 +794,14 @@ class DeepAgent:
         result_payload: Dict[str, Any] = task.result.model_dump(mode="json")
 
         full_result_path: str | None = None
-        detailed_output = (result_payload.get("detailed_output") or "")
+        detailed_output = result_payload.get("detailed_output") or ""
         if detailed_output and len(detailed_output) > EVENT_RESULT_DETAIL_TRUNCATION:
             # Persist the full payload to a sidecar file so replay can restore it.
             full_result_path = self._persist_full_task_result_payload(
                 task.task_id, result_payload
             )
 
-            truncation_notice = (
-                f"\n\n...[TRUNCATED {len(detailed_output) - EVENT_RESULT_DETAIL_TRUNCATION} chars]..."
-            )
+            truncation_notice = f"\n\n...[TRUNCATED {len(detailed_output) - EVENT_RESULT_DETAIL_TRUNCATION} chars]..."
             result_payload["detailed_output"] = (
                 detailed_output[:EVENT_RESULT_DETAIL_TRUNCATION] + truncation_notice
             )
@@ -997,7 +994,7 @@ Recovery instructions (IMPORTANT):
 - Continue the task from the checkpoint above.
 - Keep responses concise. Avoid pasting large blobs.
 - If you need prior task outputs, call `get_task_result(task_id=..., max_chars=6000)` (or smaller).
-- After each major step, call `append_scratch_note(task_id={step.task_id}, note=...)` with a short checkpoint:
+- After each major step, call `append_scratch_note(note=...)` with a short checkpoint:
   "what I did" + "what I will do next" + "open questions".
 - If you feel you're approaching the context limit again, STOP calling tools and output the best possible `TaskResult`.
 
@@ -1376,11 +1373,15 @@ Error that triggered recovery (for debugging only):
             # Deterministic scheduler pass to normalize readiness and surface issues.
             self._last_scheduler_report = await self._scheduler_pass(runtime_state)
 
-            current_instruction = BOOTSTRAP_INSTURCT if len(runtime_state.plan) == 0 else ORCHESTRATION_INSTRUCT
+            current_instruction = (
+                BOOTSTRAP_INSTURCT
+                if len(runtime_state.plan) == 0
+                else ORCHESTRATION_INSTRUCT
+            )
             supervisor_response = await self._supervisor_agent.run(
                 self._format_supervisor_input_prompt(runtime_state),
                 deps=runtime_state,
-                instructions=current_instruction
+                instructions=current_instruction,
             )
             supervisor_response = supervisor_response.output
 
@@ -1393,7 +1394,9 @@ Error that triggered recovery (for debugging only):
                 # Deterministic guardrail: do not allow "completion" unless the
                 # task marked as final is actually COMPLETED.
                 final_tasks = [
-                    t for t in runtime_state.plan.values() if getattr(t, "is_final", False)
+                    t
+                    for t in runtime_state.plan.values()
+                    if getattr(t, "is_final", False)
                 ]
 
                 completion_ok = True
