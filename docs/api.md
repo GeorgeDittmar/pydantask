@@ -54,6 +54,18 @@ These models define the task/plan structure, runtime state, and capability descr
 
 ---
 
+### Workflow YAML Config Models
+
+These models define the strict user-facing YAML contract for seeded workflows.
+
+::: pydantask.models.WorkflowYamlConfig
+
+---
+
+::: pydantask.models.WorkflowTaskConfig
+
+---
+
 ### Runtime and Capability Models
 
 ::: pydantask.models.RuntimeState
@@ -65,6 +77,18 @@ These models define the task/plan structure, runtime state, and capability descr
 ---
 
 ::: pydantask.models.KnowledgeRecord
+
+---
+
+---
+
+## Workflow Utilities
+
+### import_yaml_workflow
+
+Load and validate a YAML-defined workflow (DAG) and convert it to a canonical `Plan`.
+
+::: pydantask.agents.utils.import_yaml_workflow
 
 ---
 

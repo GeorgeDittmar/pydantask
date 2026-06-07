@@ -14,6 +14,8 @@ from pydantask.models.models import (
     TaskSpec,
     TracingBackend,
     TaskRunDeps,
+    WorkflowYamlConfig,
+    WorkflowTaskConfig,
 )
 
 __all__ = [
@@ -32,4 +34,6 @@ __all__ = [
     "TaskSpec",
     "TracingBackend",
     "TaskRunDeps",
+    "WorkflowYamlConfig",
+    "WorkflowTaskConfig",
 ]
