@@ -1797,7 +1797,7 @@ Error that triggered recovery (for debugging only):
 Context-budget note:
 - You may be running on a smaller-context model.
 - Prefer small tool outputs. When calling tools that can return large text, request truncation.
-- Checkpoint progress frequently via `append_scratch_note(task_id={step.task_id}, note=...)`.
+- Checkpoint progress frequently via `append_scratch_note(note=...)`.
 """
 
         max_resume_attempts = 2

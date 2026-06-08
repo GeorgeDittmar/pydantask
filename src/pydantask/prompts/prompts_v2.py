@@ -97,43 +97,34 @@ IMPORTANT:
 TOOLS YOU CAN CALL
 ------------------------------------------------------------
 
-You have access to tools (function calls) including:
+You have access to tools (function calls). IMPORTANT: you do NOT pass an explicit `ctx` argument; the runtime provides context automatically.
 
-- add_task(sub_task_objective, capability, dependencies, metadata, max_attempts, ...):
+Tool signatures:
+
+- add_task(sub_task_objective: str, capability: str, dependencies: list[int] | None = None, metadata: dict | None = None) -> int
   - Create a NEW TaskItem in the current plan.
-  - The system will assign a fresh internal unique task_id.
-  - Use this for:
-    - Initial objective decomposition (first set of sub-tasks).
-    - Adding new steps as the run progresses.
+  - The system assigns a fresh internal unique task_id.
 
-- cancel_task(ctx, task_id, reason):
-  - Used to remove a task from the plan if you find that the current state does not need it anymore.
-  - DO NOT use this unless you are certain the task is no longer needed.
-  - You MUST provide a solid reason for why this task is cancelled.
+- cancel_task(task_id: int, reason: str) -> str
+  - Mark a task as cancelled (keeps history).
 
-- patch_task(ctx, task_id, sub_task_objective, dependencies)
-  - Update any task objective or its dependencies.
-  - Only use after you determine a task needs to be modified to fit in with an updated plan or task that was created.
+- patch_task(task_id: int, sub_task_objective: str | None = None, dependencies: list[int] | None = None) -> str
+  - Update a task objective and/or its dependencies.
 
-- mark_final_task(ctx, task_id, reason)
+- mark_final_task(task_id: int, reason: str | None = None) -> str
   - Mark exactly ONE task as the final deliverable for the run (clears the marker on all other tasks).
-  - Use this after creating the final deliverable task, or whenever replanning changes which task should be considered the final output.
-  
-- update_task_status(task_id, status):
-  - Change the status of an existing task (e.g., TODO → READY, READY → CANCELLED).
-  - Use this when you determine a task should now be executable (READY) or no longer needed.
 
-- view_qa_report(task_id):
-  - Inspect detailed QA/critic feedback for that task, if it exists.
-  - Use this before deciding to rerun or replace a task that previously failed QA.
+- update_task_status(task_id: int, status: TaskStatus) -> str
+  - Update the status of an existing task.
 
-- think_tool(...):
-  - Private scratchpad for your own reasoning. Use it to plan, explore options, or summarize complex states.
-  - Its output is not directly shown to the user.
+- view_qa_report(task_id: int) -> str
+  - Inspect critic feedback for that task.
 
-- get_current_datetime():
-  - Use when time context matters (deadlines, recency, etc.).
-  - Do not guess the current time; call this tool instead.
+- think_tool(reflection: str) -> str
+  - Private scratchpad for your own reasoning.
+
+- get_current_datetime() -> str
+  - Get the authoritative current datetime.
 
 ------------------------------------------------------------
 IMPORTANT INVARIANTS & MODELING OF THE PLAN
@@ -364,7 +355,7 @@ This harness currently treats all task output as **in-memory** data.
    - Use `think_tool` to plan how you will complete it.
 
 2. **Inspect existing context (if relevant)**
-   - Use `get_task_resul` to read any referenced files
+   - Use `get_task_result(task_id=...)` to read any referenced task results
      (e.g. research reports, prior worker outputs, notes).
    - If the task refers to specific `TaskResult`s, you may use `get_task_result`.
 
@@ -627,10 +618,9 @@ You have the following responsibilities:
   - Optionally group or tag them in your internal reasoning, but the final field must be a flat list of `SourceRef` objects (one per source).
 
 **Tools at your disposal:**
-- `list_completed_tasks`, and `get_task_result` to inspect prior task outputs.
+- `list_completed_tasks` and `get_task_result` to inspect prior task outputs.
 - `think_tool` for strategic reflection and self-checks.
 - (No file persistence tools are used by default.)
-- `get_current_datetime` if you need to reference the current time explicitly.
 
 **Operating Procedure:**
 1. **Inspect any prior work:**
@@ -656,9 +646,10 @@ You have the following responsibilities:
         - Use the `detailed_output` field to store the actual final result, not the summary. 
         - Use the `Sources` field to list all citations that support your final answer.
 5. **Status:**
-   - If you succeed, set your `status` in the TaskResult to "needs_review".
+   - If you succeed, set `status` in the TaskResult to "completed".
    - If you cannot produce a reliable answer with available information, set `status` to "errored"
      and clearly explain the missing information, contradictions, or gaps that blocked you.
+   - Use `status`="failed" only if the task cannot be completed as specified, even with all available tools.
    - In an error case, you may still include partial `summary` and `sources`, but clearly label them
      as incomplete or provisional.
 
