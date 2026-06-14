@@ -16,27 +16,30 @@ This page documents how `DeepAgent` works **as implemented today**.
 
 ### Constructor
 
-The public constructor accepts several optional overrides; the parameters that materially affect the current orchestration behavior are:
+The public constructor accepts several optional overrides; the parameters that materially affect orchestration are:
 
 - `objective`: overall objective
 - `model`: model identifier or `pydantic_ai.models.Model` instance. Strings may be
   bare model names (defaulting to the OpenAI provider) or provider-prefixed
   values such as `"openai:gpt-4.1-mini"` or `"anthropic:claude-sonnet-4-5"`.
+- `seed_plan`: optional predefined `Plan` (useful for fixed/hybrid DAGs)
+- `planning_mode`: `"llm" | "fixed" | "hybrid"`
 - `max_steps`: outer-loop limit
 - `sub_agents`: additional capabilities to register
 - `trace`: whether to enable tracing auto-detection
-- `output_type`: the producer’s output type (defaults to `TaskResult`)
+- `checkpoint`: enable event-sourced checkpointing
+- `checkpoint_dir`: optionally specify a checkpoint directory
+- `run_from_checkpoint`: replay checkpoint events from `checkpoint_dir`
 
 ```python docs/agents.md
 from pydantask.agents import DeepAgent
-from pydantask.models import TaskResult
 
 agent = DeepAgent(
     objective="...",
     model="gpt-4.1-mini",
     max_steps=20,
     trace=True,
-    output_type=TaskResult,
+    checkpoint=True,
 )
 ```
 
@@ -84,16 +87,20 @@ Each cycle:
 3. **Critic / QA**
    - For each executed task, the critic agent evaluates whether the produced `TaskResult` satisfies the task objective.
    - The critic returns `TaskQAResult(passed=..., reasoning=...)`.
-   - `handle_critic_result(...)` currently records the latest critic review and
-     increments the task’s `attempt_count`, but does **not** automatically
-     change `TaskItem.status`. Any transition to `COMPLETED`, `FAILED`, or
-     other states must be driven by higher-level logic (e.g., via
-     `update_task_status(...)`).
+   - `handle_critic_result(...)` applies a deterministic transition to the `TaskItem`:
+     - if `passed=True` → `TaskItem.status = COMPLETED`
+     - else if `attempt_count >= max_attempts` → `TaskItem.status = FAILED`
+     - otherwise → `TaskItem.status = RERUN` and the critic feedback is appended to the task objective
 
-Between cycles, the `RuntimeState` is mutated in-place and, as implemented
- today, a JSON checkpoint of the state is written under `_checkpoint/` for the
- current run. The supervisor therefore sees the updated status board on the
- next iteration.
+Between cycles, the `RuntimeState` is mutated in-place.
+
+If `checkpoint=True`, DeepAgent uses an **event-sourced checkpoint log** under `_checkpoint/<run-id>/` (or `checkpoint_dir` if provided):
+
+- `events.jsonl`: append-only event log (task added/patched/status updates/results/etc.)
+- `summaries.jsonl`: lightweight runtime summaries per cycle
+- `task_results/`: optional sidecar JSON files when a `TaskResult.detailed_output` is too large for the event log
+
+The supervisor therefore sees the updated status board on the next iteration.
 
 ## RuntimeState, TaskItem, and status
 
@@ -111,11 +118,13 @@ The shared state is the `RuntimeState` model (see `docs/models.md`). The key fie
 
 A task is executed by a capability named in `TaskItem.capability`.
 
-Capabilities are stored in `DeepAgent.agent_registry` as `CapabilityDescription` entries:
+Capabilities are stored in the agent's capability registry (implementation: `DeepAgent._capability_registry`) as `CapabilityDescription` entries:
 
 - `name`: the string used in `TaskItem.capability`
 - `description`: human-readable summary (shown to the supervisor)
 - `tool_func`: an `Agent` instance (or callable) used to execute that task
+
+At runtime, the capability registry is also passed into `RuntimeState.capability_registry` (excluded from serialization) so tools and agents can reference it.
 
 ### Default capabilities
 

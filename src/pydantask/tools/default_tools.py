@@ -1,14 +1,11 @@
-import os
-import json
+from __future__ import annotations
 
-import asyncio
-from loguru import logger
-from pydantic import BaseModel
-from pydantic_ai import Agent, RunContext
 from pathlib import Path
 
+from loguru import logger
+from pydantic_ai import RunContext
+
 from pydantask.models import RuntimeState, TaskRunDeps
-from pydantask.models.models import TaskItem
 
 BASE_DIR = Path(__file__).parent.resolve()  # Directory where this script is
 DEFAULT_DIR = BASE_DIR / "tmp_files"  # TODO: make this configurable
@@ -37,6 +34,13 @@ def _truncate_text(text: str, max_chars: int | None) -> str:
         + f"\n\n...[TRUNCATED {len(text) - max_chars} chars; original_len={len(text)}]...\n\n"
         + text[-tail_chars:]
     )
+
+
+def _get_runtime_state(deps: RuntimeState | TaskRunDeps) -> RuntimeState:
+    """Return the RuntimeState regardless of whether deps is RuntimeState or TaskRunDeps."""
+    if isinstance(deps, RuntimeState):
+        return deps
+    return deps.runtime_state
 
 
 async def ask_user(ctx: RunContext[RuntimeState], question_for_user: str) -> str:
@@ -68,25 +72,31 @@ async def think_tool(reflection: str) -> str:
 
 
 async def write_to_file_system(
-    ctx: RunContext[RuntimeState],
+    ctx: RunContext[RuntimeState | TaskRunDeps],
     file_name: str,
     content: str,
     overwrite: bool = False,
 ) -> str:
-    """
-    Write content to a file in the agent's workspace file system.
-    write_to_file_system: Tool for saving content to a file in the agent's workspace.
+    """Write content to a file in the agent's workspace filesystem.
+
+    This tool is designed to work with both:
+    - `deps_type=RuntimeState` (supervisor-style tools), and
+    - `deps_type=TaskRunDeps` (worker/research/producer tasks)
+
+    Regardless of deps type, the *logical* file key is recorded in
+    `RuntimeState.document_store` so other agents can discover and read it.
 
     IMPORTANT:
-        - `file_name` must be the logical name used when writing
-        (e.g. 'agent_frameworks_survey_task2.md'), *not* the full filesystem path.
-        - This function appends to the file by default. If you want to overwrite, set overwrite=True.
+        - `file_name` must be a logical name (e.g. `agent_notes.md`), not a full path.
+        - Content is appended by default; pass `overwrite=True` to replace.
+
     Args:
-        file_name: Logical file name key used in write_to_file_system.
-        content: The string content to write to the file.
+        file_name: Logical file name key.
+        content: Text content to write.
         overwrite: If True, overwrite the file instead of appending.
+
     Returns:
-        Confirmation message indicating where the content was written and how to read it back.
+        A confirmation message including how to read it back.
     """
     # Ensure the base directory exists
     # At top:
@@ -97,8 +107,9 @@ async def write_to_file_system(
     with open(path, mode, encoding="utf-8") as f:
         f.write(content + "\n")
 
+    runtime = _get_runtime_state(ctx.deps)
     # Store by the logical file_name key so agents can read it back with that name
-    ctx.deps.document_store[file_name] = file_name
+    runtime.document_store[file_name] = file_name
 
     return (
         f"Content written to {path}.\n"
@@ -126,20 +137,26 @@ async def delete_from_file_system(path: str) -> str:
 
 
 async def read_from_file_system(
-    ctx: RunContext[RuntimeState],
+    ctx: RunContext[RuntimeState | TaskRunDeps],
     file_name: str,
 ) -> str:
-    """
-    Read from a file on the file system. If the file dos not exist, returns a message indicating so.
+    """Read a previously written file by logical name.
+
+    Looks up `file_name` in `RuntimeState.document_store` first (if present), then
+    falls back to reading `DEFAULT_DIR / file_name`.
+
+    Works with both `deps_type=RuntimeState` and `deps_type=TaskRunDeps`.
 
     Args:
-        file_name: = str The path to the file to read.
+        file_name: Logical file name key (recommended) or raw filename.
+
     Returns:
-        String of file contents
+        File contents as a string, or an informative error message.
     """
     try:
+        runtime = _get_runtime_state(ctx.deps)
         # First try lookup in doc store, fallback to the file_name
-        logical_file = ctx.deps.document_store.get(file_name, file_name)
+        logical_file = runtime.document_store.get(file_name, file_name)
         path = DEFAULT_DIR / logical_file
         logger.info(
             f"Attempting to read file with logical name '{file_name}' from document store. Found path: {path}"
@@ -150,7 +167,8 @@ async def read_from_file_system(
             return f.read()
 
     except FileNotFoundError as e:
-        existing = ", ".join(ctx.deps.document_store.keys()) or "<none>"
+        runtime = _get_runtime_state(ctx.deps)
+        existing = ", ".join(runtime.document_store.keys()) or "<none>"
         return (
             f"File '{file_name}' not found at path '{path}'.\n"
             f"Known document keys: {existing}\n"
@@ -177,16 +195,21 @@ async def get_current_datetime() -> str:
     return str(datetime.now().isoformat())
 
 
-async def list_documents(ctx: RunContext[RuntimeState]) -> str:
+async def list_documents(ctx: RunContext[RuntimeState | TaskRunDeps]) -> str:
     """List all documents that have been written in this run.
 
-    Returns a human-readable list of logical names and their filesystem paths.
+    Documents are tracked by logical key in `RuntimeState.document_store`.
+
+    Returns:
+        A human-readable list of logical names and their filesystem paths.
     """
-    if not ctx.deps.document_store:
+    runtime = _get_runtime_state(ctx.deps)
+
+    if not runtime.document_store:
         return "No documents have been written yet."
 
     lines: list[str] = []
-    for name, logical in ctx.deps.document_store.items():
+    for name, logical in runtime.document_store.items():
         path = DEFAULT_DIR / logical  # Convert logical name to full path for display
         lines.append(f"- name: {name}\n  path: {path}")
     return "\n".join(lines)

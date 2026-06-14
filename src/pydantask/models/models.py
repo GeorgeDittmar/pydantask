@@ -1,11 +1,10 @@
-from typing import Literal, List, Union
-from enum import Enum
-from attr import field
-from pydantic import BaseModel, Field, ConfigDict, model_validator
-from typing import List, Optional, Literal, Any, Dict, Callable
+from __future__ import annotations
+
 from datetime import datetime
-from pydantic_ai import Agent
-from regex import F
+from enum import Enum
+from typing import Any, Dict, List, Literal, Optional
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class TracingBackend(Enum):

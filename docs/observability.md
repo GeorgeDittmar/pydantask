@@ -23,7 +23,7 @@ set the appropriate environment variables for your chosen backend.
 from pydantask.agents import DeepAgent
 
 agent = DeepAgent(
-    prompt="Research the best open source LLMs of 2024.",
+    objective="Research the best open source LLMs of 2024.",
     model="gpt-4.1-mini",
     trace=True,  # enable tracing with auto-detected backend
 )
@@ -86,7 +86,7 @@ init_tracing_backend(TracingBackend.LANGFUSE)
 # or: init_tracing_backend(TracingBackend.LOGFIRE)
 
 agent = DeepAgent(
-    prompt="...",
+    objective="...",
     model="gpt-5.2",
     trace=False,  # keep False so your manual choice is not overridden
 )
