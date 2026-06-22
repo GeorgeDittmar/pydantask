@@ -7,6 +7,7 @@ Supported backends (as implemented today):
 
 - **Langfuse**
 - **Logfire**
+- **LangSmith**
 - **NONE** (no tracing)
 
 Tracing is completely optional and is off by default.
@@ -36,7 +37,7 @@ When `trace=True`:
 
 - `DeepAgent` calls `init_tracing_backend(autodetect_tracing_backend())`.
 - `autodetect_tracing_backend()` inspects environment variables and selects a
-  backend (Langfuse, Logfire, or NONE).
+  backend (Langfuse, Logfire, LangSmith, or NONE).
 - Key orchestration methods (such as `DeepAgent.run`) are traced and reported
   to the active backend.
 
@@ -51,7 +52,8 @@ variables, in the following order:
 
 1. **Langfuse** if both `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are set.
 2. **Logfire** if `LOGFIRE_API_KEY` is set.
-3. **NONE** if none of the above are present.
+3. **LangSmith** if `LANGSMITH_API_KEY` or `LANGCHAIN_API_KEY` is set (or if `LANGCHAIN_TRACING_V2` is truthy).
+4. **NONE** if none of the above are present.
 
 Examples:
 
@@ -62,6 +64,10 @@ export LANGFUSE_SECRET_KEY="lf_sec_..."
 
 # or, Logfire
 export LOGFIRE_API_KEY="logfire_..."
+
+# or, LangSmith
+export LANGSMITH_API_KEY="ls_..."  # or LANGCHAIN_API_KEY
+export LANGCHAIN_TRACING_V2="true"
 ```
 
 With these variables set, constructing `DeepAgent(..., trace=True)` is enough
@@ -81,9 +87,10 @@ from pydantask.agents import DeepAgent
 from pydantask.observe.tracing import init_tracing_backend
 from pydantask.models import TracingBackend
 
-# Explicitly choose Langfuse or Logfire
+# Explicitly choose a backend
 init_tracing_backend(TracingBackend.LANGFUSE)
 # or: init_tracing_backend(TracingBackend.LOGFIRE)
+# or: init_tracing_backend(TracingBackend.LANGSMITH)
 
 agent = DeepAgent(
     objective="...",
@@ -124,6 +131,12 @@ Use this if you want full control over when and how tracing is configured.
   - Pydantic AI agents
   - HTTPX calls used by model providers
   are traced automatically.
+
+### LangSmith
+
+- Requires `LANGSMITH_API_KEY` or `LANGCHAIN_API_KEY`.
+- Pydantask can route spans via the `@traced(...)` decorator when LangSmith is selected.
+- Note: LangSmith initialization in this alpha is intentionally lightweight; if you already use LangSmith in your stack, the existing LangSmith environment configuration will generally be enough.
 
 ---
 

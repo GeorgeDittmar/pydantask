@@ -14,11 +14,12 @@ It focuses on *what the supervisor can do*, *which tools it has*, and *how task 
 
 At runtime, `DeepAgent.run()` repeatedly:
 
-1. Builds a composite “status board” prompt for the supervisor (`_format_supervisor_input_prompt(runtime_state)`).
-2. Calls the supervisor agent, which returns a `SupervisorDecision` (e.g. tasks to execute next, optional feedback, and optionally an “all done” flag).
-3. Executes tasks that are **READY** (and dependency-satisfied) concurrently (`_execute_ready_tasks`).
-4. Sends each executed task result to the critic for QA and applies a deterministic state transition (`handle_critic_result`).
-5. Repeats until the supervisor signals completion or `max_steps` is reached.
+1. Runs a deterministic scheduler pass to normalize readiness (`PENDING ↔ READY`) based on dependencies.
+2. Builds a composite “status board” prompt for the supervisor (`_format_supervisor_input_prompt(runtime_state)`).
+3. Calls the supervisor agent, which returns a `SupervisorDecision` (e.g. tasks to execute next, optional feedback, and optionally an “all done” flag).
+4. Executes tasks that are **READY** (and dependency-satisfied) concurrently (`_execute_ready_tasks`).
+5. Sends each executed task result to the critic for QA and applies a deterministic state transition (`handle_critic_result`).
+6. Repeats until the supervisor signals completion, `max_steps` is reached, or a safety-stop triggers.
 
 The plan is represented as a DAG stored in memory:
 
@@ -31,6 +32,7 @@ The plan is represented as a DAG stored in memory:
   - `status` (`TaskStatus` state machine)
   - `result` (structured `TaskResult` from the worker)
   - `task_feedback` (latest `TaskQAResult` from the critic)
+  - `is_final: bool` (exactly one task should be marked final; DeepAgent uses this as a completion guardrail and to select `final_result`)
 
 ---
 
@@ -70,7 +72,7 @@ After a task runs, the critic’s decision is applied in `handle_critic_result()
 - If `review.passed` is `True` → task becomes `COMPLETED`.
 - Else:
   - If `attempt_count >= max_attempts` → task becomes `FAILED`.
-  - Otherwise → task becomes `READY` again, and the objective is appended with the critic feedback (so the next attempt is guided).
+  - Otherwise → task becomes `RERUN`, and the objective is appended with the critic feedback (so the next attempt is guided).
 
 This means:
 
@@ -82,7 +84,7 @@ This means:
 
 ## Planning modes (seeded vs dynamic vs hybrid)
 
-The supervisor’s freedom is constrained by `planning_mode` via tool registration in `_supervisor_tools()`.
+The supervisor’s freedom is constrained by `planning_mode` via tool registration in `DeepAgent._default_supervisor_tools()`.
 
 ### 1) Fully seeded DAG (`planning_mode="fixed"`)
 
@@ -174,6 +176,7 @@ Notes:
 
 - `add_task(...)`
 - `patch_task(...)`
+- `mark_final_task(...)` *(you should set `is_final: true` in the seed plan/YAML instead)*
 
 **Workflow style:** Strict DAG executor. Best for reproducibility and controlled pipelines.
 
@@ -194,6 +197,7 @@ Everything in fixed mode, plus:
 
 - `add_task(sub_task_objective, capability, dependencies=None, metadata=None) -> int`
 - `patch_task(task_id, sub_task_objective=None, dependencies=None)`
+- `mark_final_task(task_id, reason=None)`
 
 **Workflow style:** The supervisor can:
 
@@ -211,7 +215,7 @@ Everything in fixed mode, plus:
 **Requirements:**
 
 - `seed_plan` is required.
-- Supervisor tools include `add_task` and `patch_task` (same as `llm`).
+- Supervisor tools include `add_task`, `patch_task`, and `mark_final_task` (same as `llm`).
 
 **Workflow style:** Structured but resilient—useful when you want a known baseline workflow plus dynamic recovery/extension.
 
@@ -239,7 +243,7 @@ Execution detail: `_execute_ready_tasks()` uses an `asyncio.TaskGroup`, so tasks
 
 Use when tasks may fail QA and need retries.
 
-- Critic failure automatically returns the task to `READY` (until `max_attempts`) with appended feedback.
+- Critic failure automatically returns the task to `RERUN` (until `max_attempts`) with appended feedback.
 - In `llm`/`hybrid`, the supervisor can also `patch_task(...)` to clarify objectives or fix dependencies.
 
 ### D) Soft conditional branches
@@ -276,7 +280,7 @@ Practical uses:
 
 ## Related code
 
-- Supervisor tool gating: `DeepAgent._supervisor_tools()`
+- Supervisor tool gating: `DeepAgent._default_supervisor_tools()`
 - Seed plan validation/loading: `DeepAgent._apply_seed_plan()`
 - Dependency checks: `DeepAgent._dependencies_satisfied()`
 - Concurrent execution: `DeepAgent._execute_ready_tasks()`

@@ -6,7 +6,7 @@ At a high level, agents:
 
 - Accept an objective (a task description)
 - Can call tools via function calling
-- Can share mutable state via `RuntimeState` (`deps_type=RuntimeState`)
+- Can share mutable state via `RuntimeState` (either as `deps_type=RuntimeState` or via `deps_type=TaskRunDeps` where `TaskRunDeps.runtime_state` is the shared state)
 
 This page documents how `DeepAgent` works **as implemented today**.
 
@@ -25,11 +25,13 @@ The public constructor accepts several optional overrides; the parameters that m
 - `seed_plan`: optional predefined `Plan` (useful for fixed/hybrid DAGs)
 - `planning_mode`: `"llm" | "fixed" | "hybrid"`
 - `max_steps`: outer-loop limit
+- `set_token_budget`: optional best-effort global token budget (the run stops when exceeded)
 - `sub_agents`: additional capabilities to register
 - `trace`: whether to enable tracing auto-detection
 - `checkpoint`: enable event-sourced checkpointing
 - `checkpoint_dir`: optionally specify a checkpoint directory
 - `run_from_checkpoint`: replay checkpoint events from `checkpoint_dir`
+- `verbose_logging`: log richer debugging information during execution
 
 ```python docs/agents.md
 from pydantask.agents import DeepAgent
@@ -54,37 +56,47 @@ The default `research_agent` capability uses Tavily web search when `TAVILY_API_
 - `final_result: TaskResult | None`
 - `plan: Dict[int, TaskItem]`
 - `runtime_state: RuntimeState`
+- `errors: list[str]` (top-level warnings/errors, e.g. safety-stop reasons)
 
 ## What happens in `run()`
 
-`DeepAgent.run()` is an outer loop that repeats until either:
+`DeepAgent.run()` is an outer loop that repeats until one of these happens:
 
-- the supervisor says the work is complete (`all_tasks_completed=True`), or
-- `max_steps` is reached.
+- **Completion (guarded):** the supervisor returns `all_tasks_completed=True` *and* a single task is marked `is_final=True` and is `COMPLETED` with a `TaskResult`.
+- **Safety stop:** `max_steps` is reached.
+- **No-progress stop:** the harness detects repeated cycles where no tasks can run and stops to avoid an infinite loop (the final cycle includes a deterministic deadlock report in the supervisor prompt).
 
 Each cycle:
 
-1. **Supervisor decision**
+1. **Deterministic scheduler pass (no LLM)**
+   - Before calling the supervisor, DeepAgent normalizes task readiness:
+     - `PENDING → READY` when dependencies are satisfied.
+     - `READY → PENDING` when dependencies are *not* satisfied (keeps the status board honest).
+     - Non-terminal tasks with an unknown capability are marked `ERRORED`.
+
+2. **Supervisor decision (LLM)**
    - `DeepAgent` calls the supervisor agent with a formatted “mission control board” view of:
      - the current plan (`RuntimeState.plan`)
      - task statuses and dependency edges
      - available capability names/descriptions
+     - deterministic scheduler notes (if any)
    - The supervisor returns a `SupervisorDecision` with:
      - `tasks_to_execute`: task IDs it wants to run next
      - `feedback_to_subagents`: optional per-task guidance
      - `all_tasks_completed`: whether to stop
-   - The supervisor can also update the plan at runtime using DeepAgent tools:
-     - `add_task`, `cancel_task`, `patch_task`, `update_task_status`.
+   - The supervisor can also update the plan at runtime using DeepAgent tools (depending on `planning_mode`):
+     - always: `cancel_task`, `update_task_status`, `view_qa_report`
+     - in `llm`/`hybrid`: `add_task`, `patch_task`, `mark_final_task`
 
-2. **Execute ready tasks (parallel)**
+3. **Execute ready tasks (parallel)**
    - `DeepAgent._execute_ready_tasks(...)` filters the supervisor’s requested tasks to those whose dependencies are satisfied.
    - Dependency rule: a task can run only if every `sub_task_dependency` task has status `COMPLETED`.
    - Eligible tasks execute concurrently via `asyncio.TaskGroup`.
    - When a task runs:
-     - it is set to `RUNNING`
-     - once the sub-agent returns, it is set to `NEEDS_REVIEW` and its `result` is stored.
+     - it is atomically claimed (`READY`/`RERUN` → `RUNNING`) under a lock (prevents double-scheduling)
+     - once the sub-agent returns, it is set to `NEEDS_REVIEW` and its `result` is stored
 
-3. **Critic / QA**
+4. **Critic / QA**
    - For each executed task, the critic agent evaluates whether the produced `TaskResult` satisfies the task objective.
    - The critic returns `TaskQAResult(passed=..., reasoning=...)`.
    - `handle_critic_result(...)` applies a deterministic transition to the `TaskItem`:
@@ -112,7 +124,11 @@ The shared state is the `RuntimeState` model (see `docs/models.md`). The key fie
 
 `TaskItem.status` uses `TaskStatus` values such as:
 
-- `READY`, `RUNNING`, `NEEDS_REVIEW`, `COMPLETED`, `FAILED`, `CANCELLED`
+- `PENDING`, `READY`, `RUNNING`, `NEEDS_REVIEW`, `COMPLETED`
+- `RERUN` (retry requested after QA failure)
+- `FAILED` (QA rejected too many times)
+- `ERRORED` (exception during execution; intentionally *not* treated as terminal so the supervisor can patch + rerun)
+- `CANCELLED`
 
 ## Capabilities (sub-agents)
 
@@ -122,7 +138,7 @@ Capabilities are stored in the agent's capability registry (implementation: `Dee
 
 - `name`: the string used in `TaskItem.capability`
 - `description`: human-readable summary (shown to the supervisor)
-- `tool_func`: an `Agent` instance (or callable) used to execute that task
+- `tool_func`: a runnable capability implementation (typically a `pydantic_ai.Agent`, or a runner wrapper created with `pydantask.capabilities.runner.as_runner(...)`)
 
 At runtime, the capability registry is also passed into `RuntimeState.capability_registry` (excluded from serialization) so tools and agents can reference it.
 

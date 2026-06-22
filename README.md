@@ -2,18 +2,62 @@
 
 ![Pydantask Logo](docs/imgs/pydantask_logo_v3.png)
 
-PydanTask is a Harness for building deep, autonomous agents that don't just respond—they **reason**, **decompose**, and **execute**.
+PydanTask is an **alpha** harness for building deep, multi-step agents on top of [Pydantic AI](https://ai.pydantic.dev/).
 
-It builds on top of [Pydantic AI](https://ai.pydantic.dev/) and adds:
+If you want agents that can **plan**, **execute**, **self-critique**, and **ship a final artifact** (not just chat), this gives you the backbone.
 
-- Long‑horizon planning and hierarchical task management
-- A reusable orchestration loop (`DeepAgent`) with supervisor (dynamic planner) → worker/researcher/producer → critic
-- Shared runtime state across agents (`RuntimeState`)
-- Extensible capabilities via `CapabilityDescription` and custom tools/agents
+What you get:
 
-The goal is to give you a solid “agentic backbone” you can adapt, without having to reinvent multi‑step planning and control logic yourself.
+- **Dynamic task DAGs**: a supervisor creates/patches a task graph at runtime
+- **Parallel execution**: run dependency-satisfied tasks concurrently
+- **Critic QA + retries**: failed tasks become `RERUN` until `max_attempts`, then `FAILED`
+- **Observability**: optional tracing (Langfuse, Logfire, LangSmith)
+- **Recovery/auditability**: optional event-sourced checkpointing (`events.jsonl` + summaries + large-result sidecars)
+- **Extensibility**: register your own capabilities via `CapabilityDescription`
 
-For the most up‑to‑date implementation details and API docs, see the hosted documentation: **[PydanTask Documentation](https://pydantask.readthedocs.io/en/latest/)**.
+### Try it in ~3 minutes
+
+1) Install:
+
+```bash
+pip install pydantask
+```
+
+2) Set env vars:
+
+```bash
+export OPENAI_API_KEY="..."
+# Optional: enables Tavily web search; otherwise DuckDuckGo-based search is used
+export TAVILY_API_KEY="..."
+```
+
+3) Run a minimal agent:
+
+```python
+import asyncio
+from pydantask.agents import DeepAgent
+
+
+async def main() -> None:
+    agent = DeepAgent(
+        objective="Compare 3 open-source LLMs for local inference and recommend one.",
+        model="openai:gpt-4.1-mini",  # or "anthropic:..." or pass a Model instance
+        trace=False,
+        checkpoint=False,
+        max_steps=10,
+    )
+
+    result = await agent.run()
+    print(result.final_result.detailed_output if result.final_result else result.errors)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+> Alpha note: the core loop is working and tested, but the API and prompts are still evolving. If you hit rough edges, please open an issue with a minimal repro.
+
+For deeper docs and API reference, see: **[pydantask.readthedocs.io](https://pydantask.readthedocs.io/en/latest/)**
 
 ---
 
@@ -52,7 +96,7 @@ Key concepts:
 - **RuntimeState**:
   - `plan: Dict[int, TaskItem]`
   - `objective: str`
-  - `agent_registry: Dict[str, CapabilityDescription]`
+  - `capability_registry: Dict[str, CapabilityDescription]` *(excluded from serialization)*
   - `document_store`, `knowledge_store`, `runtime_steps`, etc.
 
 The control loop in `DeepAgent.run()`:
@@ -63,7 +107,10 @@ The control loop in `DeepAgent.run()`:
    - Supervisor decides which tasks to execute next based on plan progress, task dependencies, and self reflection.
    - Ready tasks, so long as dependencies are satisfied, are executed by the appropriate capability (sub‑agent).
    - Critic reviews each result and produces a "QA" report for the supervisor to review if the task failed.
-4. Loop stops when the Supervisor sets `all_tasks_completed = True` or `max_steps` is reached.
+4. Loop stops when:
+   - the Supervisor sets `all_tasks_completed = True` **and** the run’s completion invariants are met (exactly one task is marked `is_final=True`, and that task is `COMPLETED` with a `TaskResult`), or
+   - `max_steps` is reached, or
+   - the harness stops after several no-progress cycles (safety guardrail).
 
 For more detail, see `docs/agents.md`.
 
@@ -71,7 +118,7 @@ For more detail, see `docs/agents.md`.
 
 ## Installation & Setup
 
-PydanTask assumes you already have Pydantic AI and an OpenAI‑compatible model configured. You’ll also need a Tavily API key for the built‑in research agent.
+PydanTask assumes you already have Pydantic AI and an OpenAI‑compatible model configured. A Tavily API key is **optional** for the built‑in research agent (it falls back to DuckDuckGo search if omitted).
 
 ### 1. Install dependencies
 
@@ -88,7 +135,7 @@ pip install pydantask
 Set the following environment variables (e.g. in your shell or a `.env` file):
 
 - `OPENAI_API_KEY` – for the underlying OpenAIChatModel (or whatever your Pydantic AI provider expects).
-- `TAVILY_API_KEY` – used by the `research_agent` (via `tavily_search_tool`). If this key is not set, defaults to DuckDuckGo search.
+- `TAVILY_API_KEY` – *(optional)* used by the `research_agent` (via `tavily_search_tool`). If this key is not set, it defaults to DuckDuckGo search.
 
 ---
 
@@ -130,11 +177,17 @@ What this does:
 2. Supervisor (dynamic DAG architect) breaks down the objective into `TaskItem`s using built-in capabilities.
 3. Supervisor picks tasks to run in each loop iteration.
 4. Researcher and Producer execute those tasks and return structured `TaskResult`s.
-5. Critic evaluates each task result and marks tasks as `COMPLETED`, retryable (`READY`/`RERUN`), or `FAILED` based on configured retry limits.
+5. Critic evaluates each task result and marks tasks as:
+   - `COMPLETED` when QA passes
+   - `RERUN` when QA fails but retries remain (critic feedback is appended to the task objective)
+   - `FAILED` when QA fails and `max_attempts` is exceeded
 6. When done, you get a `RuntimeState` with the full plan and results.
 
-> Note: this harness currently treats task artifacts as **in-memory** outputs (e.g. `TaskResult.detailed_output`).
-> File persistence is intentionally out-of-scope for now.
+> Note: by default, this harness treats task artifacts as **in-memory** outputs (e.g. `TaskResult.detailed_output`).
+>
+> However, it *does* support optional **event-sourced checkpointing** (`checkpoint=True`) which persists an append-only `events.jsonl` log (plus summaries and, when needed, sidecar JSON files for large results) under `_checkpoint/`.
+>
+> Filesystem tools exist in `pydantask.tools.default_tools`, but they are **not enabled by default** in the built-in agents.
 
 ---
 
@@ -147,15 +200,15 @@ You can add custom sub‑agents or tools via `CapabilityDescription` and the `su
 ```python
 from pydantic_ai import Agent
 from pydantask.agents.agent import DeepAgent
-from pydantask.models import CapabilityDescription, RuntimeState, TaskResult
+from pydantask.models import CapabilityDescription, TaskResult, TaskRunDeps
 
 my_special_agent = Agent(
     model=...,  # e.g. the same OpenAIChatModel
     name="_my_special_agent",
     system_prompt="You are a specialized agent for security analysis.",
-    deps_type=RuntimeState,
+    deps_type=TaskRunDeps,   # gives tools access to deps.runtime_state + deps.task
     output_type=TaskResult,
-    tools=[...],  # any tools it needs
+    tools=[...],  # tools should typically accept RunContext[TaskRunDeps]
 )
 
 custom_capability = CapabilityDescription(
@@ -172,21 +225,25 @@ agent = DeepAgent(
 # Now the Planner can choose `security_agent` as a capability in the plan.
 ```
 
-### Example: simple function capability
+### Example: simple function capability (runnable capability)
+
+`DeepAgent` expects a *capability* to be runnable (i.e. something with a `.run(prompt, deps, usage_limits=...)` method). For plain functions, wrap them with `as_runner(...)`.
 
 ```python
-from pydantic_ai import RunContext
 from pydantask.agents.agent import DeepAgent
-from pydantask.models import CapabilityDescription, RuntimeState
+from pydantask.capabilities.runner import as_runner
+from pydantask.models import CapabilityDescription, TaskResult, TaskRunDeps
 
-async def my_utility_tool(ctx: RunContext[RuntimeState], payload: str) -> str:
-    # do something simple with ctx.deps and payload
-    return f"processed: {payload}"
+
+async def my_utility_capability(prompt: str, deps: TaskRunDeps) -> TaskResult:
+    # prompt is the task prompt; deps.runtime_state + deps.task give you context
+    return TaskResult(task_id=deps.task.task_id, summary="processed", detailed_output=prompt)
+
 
 utility_capability = CapabilityDescription(
     name="my_utility_tool",
-    description="Utility capability that performs a simple transformation.",
-    tool_func=my_utility_tool,
+    description="Utility capability that processes a prompt and returns a TaskResult.",
+    tool_func=as_runner(my_utility_capability),
 )
 
 agent = DeepAgent(objective="Some goal...", sub_agents=[utility_capability])

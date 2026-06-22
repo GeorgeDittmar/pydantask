@@ -20,7 +20,7 @@ Before you start, make sure you have:
 - Dependencies for Pydantask installed (for example: `pip install -e .` in this repo).
 - Environment variables set:
   - `OPENAI_API_KEY` – for the language model.
-  - `TAVILY_API_KEY` – for the research agent’s web search tool.
+  - `TAVILY_API_KEY` – *(optional)* for the research agent’s Tavily web search tool. If omitted, the research agent falls back to a DuckDuckGo-based search tool.
 - (Optional) tracing configured (auto-detected) if you want run traces:
   - Langfuse: `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY`
   - Logfire: `LOGFIRE_API_KEY` (example)
@@ -41,7 +41,7 @@ At a high level, a deep research run with `DeepAgent` follows a simple loop:
    - if QA passes → the task becomes `COMPLETED`
    - if QA fails but retries remain → the task becomes `RERUN` (and the feedback is appended to the task objective)
    - if QA fails and retries are exhausted → the task becomes `FAILED`
-5. **Repeat until done.** The loop continues until the supervisor sets `all_tasks_completed=True` (or `max_steps` is reached).
+5. **Repeat until done.** The loop continues until the supervisor sets `all_tasks_completed=True` **and** a final task has been marked (`is_final=True`) and completed (or until `max_steps` is reached / the harness safety-stops after repeated no-progress cycles).
 6. **You get a final report.** `DeepAgent.run()` returns a `DeepAgentRunResult` with:
    - `final_result` (a `TaskResult`, when a producer task ran)
    - the final `plan`
@@ -71,7 +71,7 @@ from pydantask.agents import DeepAgent
 
 # Load environment variables from a .env file (if present):
 # - OPENAI_API_KEY (for the language model)
-# - TAVILY_API_KEY (for the research_agent's web search tool)
+# - TAVILY_API_KEY (optional; enables Tavily web search, otherwise DuckDuckGo-based search is used)
 load_dotenv(find_dotenv())
 
 async def main():
@@ -146,8 +146,10 @@ When you run the script above:
   - A **supervisor agent** (system prompt: `DYNAMIC_SUPERVISOR_SYS_PROMPT`) that:
     - inspects the current task DAG (“mission control board”)
     - decides which tasks to run next (`SupervisorDecision.tasks_to_execute`)
-    - can mutate the plan at runtime using tools:
-      - `add_task`, `patch_task`, `cancel_task`, `update_task_status`
+    - can mutate the plan at runtime using tools (depending on `planning_mode`):
+      - `add_task`, `patch_task` *(llm/hybrid only)*
+      - `mark_final_task` *(llm/hybrid only; sets the single final deliverable task)*
+      - `cancel_task`, `update_task_status`
       - `view_qa_report` (inspect critic feedback if it was stored)
 
   - A **critic agent** (system prompt: `CRITIC_SYS_PROMPT`) that:
@@ -171,12 +173,13 @@ When you run the script above:
 - Execution is dependency-aware and parallelized:
   - The supervisor may schedule multiple tasks.
   - `DeepAgent` only runs tasks whose dependencies are all `COMPLETED`, and runs eligible tasks concurrently.
+  - Each cycle also includes a deterministic scheduler pass that normalizes readiness (`PENDING ↔ READY`) based on dependencies and surfaces unknown-capability errors.
 
 This gives you:
 
 - A high-level final answer in `final_result`.
 - A fully inspectable execution trace in `plan` and `runtime_state`.
-- A set of intermediate artifacts (files, notes, summaries) you can reuse in future runs.
+- A set of intermediate artifacts (in-memory task results + scratch notes). If `checkpoint=True`, an event log is persisted under `_checkpoint/` for replay/resume and auditing.
 
 ---
 

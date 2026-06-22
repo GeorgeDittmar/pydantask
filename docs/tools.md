@@ -40,6 +40,10 @@ It returns a simple confirmation string and does not modify state.
 
 These tools work within a workspace directory (`pydantask/tools/tmp_files`) and also update `RuntimeState.document_store` so agents can find files by logical name.
 
+Important:
+- These filesystem tools **exist**, but they are **not enabled by default** in the built-in agents created by `DeepAgent` (the harness is intentionally in-memory-first).
+- You can still wire them into your own custom capabilities/agents if you want file persistence inside the agent workspace.
+
 #### `write_to_file_system`
 
 ```python
@@ -175,23 +179,33 @@ from pydantask.tools.default_tools import ask_user
 
 ---
 
-## Registering Tools and Sub‑agents
+## DeepAgent tool wiring (default agents)
 
 Built‑in agents are constructed inside `DeepAgent` with specific tool lists (see
-`pydantask/agents/agent.py`). In the current implementation:
+`pydantask/agents/agent.py`). As implemented today:
+
+### Cross-agent consult tool (important)
+
+Running task agents (research/worker/producer) are also given a bounded cross-agent tool:
+
+- `consult_capability(capability=..., question=..., task_ids=None, max_chars=...)`
+
+This lets a sub-agent ask *another* capability a narrow question **without** involving the supervisor (and without creating new tasks). The consult run is intentionally bounded (tool calls disabled) and the answer is persisted into task metadata/checkpoints.
+
+### Default tool access by capability
 
 - The **research agent** capability (`research_agent`) has access to:
-  - `tavily_search_tool` when `TAVILY_API_KEY` is set, otherwise a DuckDuckGo‑based
-    search tool.
+  - a web search tool: `tavily_search_tool(...)` when `TAVILY_API_KEY` is set, otherwise `duckduckgo_search_tool()`
   - `think_tool`
-  - `append_scratch_note`
-  - `read_scratch_notes`
+  - `append_scratch_note`, `read_scratch_notes`
   - `get_current_datetime`
+  - `consult_capability`
 
 - The **producer agent** capability (`producer_agent`) has access to:
   - `list_completed_tasks`
   - `get_task_result`
   - `think_tool`
+  - `consult_capability`
 
 - The **general worker agent** capability (`worker_agent`) has access to:
   - `list_completed_tasks`
@@ -199,14 +213,21 @@ Built‑in agents are constructed inside `DeepAgent` with specific tool lists (s
   - `think_tool`
   - `append_scratch_note`, `read_scratch_notes`
   - `get_current_datetime`
+  - `consult_capability`
 
-- The **supervisor agent** (top-level orchestrator agent) can call DeepAgent methods as tools:
-  - `add_task`, `cancel_task`, `patch_task`
-  - `update_task_status`
-  - `view_qa_report`
-  - plus `get_current_datetime` and `think_tool`
+- The **supervisor agent** (top-level orchestrator) can call DeepAgent methods as tools:
+  - always available:
+    - `update_task_status`
+    - `cancel_task`
+    - `view_qa_report`
+    - `get_current_datetime`, `think_tool`
+  - additionally available in `planning_mode="llm" | "hybrid"`:
+    - `add_task`, `patch_task`
+    - `mark_final_task` *(used to set the single final deliverable task)*
 
-Additional tools or sub‑agents can be registered by creating `CapabilityDescription`
+## Registering Tools and Sub‑agents
+
+Additional capabilities can be registered by creating `CapabilityDescription`
 instances and passing them via the `sub_agents` parameter to
 `DeepAgent.__init__`. Those capabilities then become available to the
-supervisor via `RuntimeState.capability_registry`.
+supervisor (as choices for `TaskItem.capability`) via `RuntimeState.capability_registry`.
