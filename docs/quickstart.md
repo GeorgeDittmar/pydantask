@@ -50,4 +50,6 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
+If `final_result` is `None`, inspect `run_result.plan` and `run_result.errors`. In current versions, the harness expects the supervisor to mark a single task as the final deliverable (`is_final=True`) before it will accept completion.
+
 For more depth, see the [Agent Concepts](agents.md) page.
