@@ -66,6 +66,7 @@ from pydantask.models import (
 # Filesystem tools still exist in `pydantask.tools.default_tools` but are not enabled by default.
 from pydantask.tools.default_tools import (
     append_scratch_note,
+    fetch_url_content,
     get_current_datetime,
     get_task_result,
     list_completed_tasks,
@@ -309,6 +310,7 @@ class DeepAgent:
             append_scratch_note,
             read_scratch_notes,
             get_current_datetime,
+            fetch_url_content,
             # Cross-agent "consult" (bounded, logged)
             self.consult_capability,
         ]
@@ -1031,12 +1033,15 @@ Error that triggered recovery (for debugging only):
         )
 
     def _remaining_token_budget(self, runtime_state: RuntimeState) -> int | None:
-        """Return remaining global token budget (best-effort), or None if unlimited."""
-        if self.token_budget is None:
+        """Return remaining global token budget (best-effort), or None if unlimited.
+
+        Note: Some unit tests construct `DeepAgent` without calling `__init__`.
+        Use `getattr` to avoid AttributeError in those scenarios.
+        """
+        budget = getattr(self, "token_budget", None)
+        if budget is None:
             return None
-        remaining = int(self.token_budget) - int(
-            getattr(runtime_state, "tokens_used", 0) or 0
-        )
+        remaining = int(budget) - int(getattr(runtime_state, "tokens_used", 0) or 0)
         return max(0, remaining)
 
     def _make_usage_limits(self, **kwargs) -> UsageLimits | None:
@@ -1647,13 +1652,12 @@ Instructions:
             logger.info(f"\n--- DeepAgent Cycle {step_count} ---")
 
             # Best-effort global token budget enforcement.
-            if (
-                self.token_budget is not None
-                and runtime_state.tokens_used >= self.token_budget
-            ):
+            # Use getattr() so unit tests can construct DeepAgent without __init__.
+            token_budget = getattr(self, "token_budget", None)
+            if token_budget is not None and runtime_state.tokens_used >= token_budget:
                 msg = (
                     f"Global token budget exceeded: tokens_used={runtime_state.tokens_used} "
-                    f">= token_budget={self.token_budget}. Stopping execution."
+                    f">= token_budget={token_budget}. Stopping execution."
                 )
                 logger.warning(msg)
                 errors.append(msg)
