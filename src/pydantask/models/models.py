@@ -1,11 +1,10 @@
-from typing import Literal, List, Union
-from enum import Enum
-from attr import field
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional, Literal, Any, Dict, Callable
+from __future__ import annotations
+
 from datetime import datetime
-from pydantic_ai import Agent
-from regex import F
+from enum import Enum
+from typing import Any, Dict, List, Literal, Optional
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class TracingBackend(Enum):
@@ -248,7 +247,7 @@ class TaskItem(BaseModel):
         metadata: Optional free-form metadata for this task.
     """
 
-    task_id: int = Field(description="Unique task id. Should be an integer")
+    task_id: int = Field(default=-1, description="Unique task id. Should be an integer")
     overall_objective: str = Field(
         description="The overall objective this task is contributing to solving."
     )
@@ -533,3 +532,141 @@ class TaskRunDeps(BaseModel):
     task: TaskItem = Field(
         description="The task item we mute. This is a deep copy of the taskitem stored in the plan"
     )
+
+
+# =========================
+# YAML workflow config models
+# =========================
+class WorkflowTaskConfig(BaseModel):
+    """A strict user-facing task config used in YAML-defined workflows.
+
+    This is the *contract* for YAML workflows. Keys are strict (no aliases) and
+    unknown keys are rejected (``extra='forbid'``).
+
+    It is designed to be converted into a canonical :class:`TaskItem`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: int = Field(
+        description="Unique integer task id. (YAML key must be exactly: task_id)"
+    )
+
+    overall_objective: Optional[str] = Field(
+        default=None,
+        description=(
+            "Overall objective for this task. If omitted, the workflow's top-level "
+            "objective will be used."
+        ),
+    )
+
+    sub_task_objective: str = Field(
+        description=(
+            "Specific objective for this task. (YAML key must be exactly: sub_task_objective)"
+        )
+    )
+
+    capability: str = Field(
+        description="Capability/sub-agent name to execute this task (e.g. research_agent)."
+    )
+
+    sub_task_dependencies: List[int] = Field(
+        default_factory=list,
+        description=(
+            "Upstream task IDs that must be completed before this task can run. "
+            "(YAML key must be exactly: sub_task_dependencies)"
+        ),
+    )
+
+    status: TaskStatus = Field(
+        default=TaskStatus.PENDING,
+        description="Initial task status when seeding a workflow.",
+    )
+
+    time_scope: Optional[str] = Field(
+        default=None,
+        description="Optional temporal scope string ('2026', 'last 7 days', etc.).",
+    )
+
+    parameters: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Optional structured parameters for the sub-agent (tool inputs, etc.).",
+    )
+
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Optional free-form metadata for the task.",
+    )
+
+    attempt_count: int = Field(
+        default=0,
+        description="How many times this task has been attempted.",
+    )
+
+    max_attempts: int = Field(
+        default=3,
+        description="Maximum times this task is allowed to be attempted.",
+    )
+
+    is_final: bool = Field(
+        default=False,
+        description="Whether this task is the final deliverable for the run.",
+    )
+
+
+class WorkflowYamlConfig(BaseModel):
+    """Top-level YAML configuration for a user-defined workflow (seed plan).
+
+    This is the recommended format to accept from end-users. It can be converted
+    into a canonical :class:`Plan` used by :class:`DeepAgent`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    objective: str = Field(
+        description="Top-level objective for the workflow. (Required)"
+    )
+
+    reasoning_steps: Optional[str] = Field(
+        default=None,
+        description="Optional notes about why this workflow/DAG is structured this way.",
+    )
+
+    tasks: List[WorkflowTaskConfig] = Field(
+        description="Ordered list of tasks in the workflow (DAG)."
+    )
+
+    @model_validator(mode="after")
+    def _validate_workflow(self) -> "WorkflowYamlConfig":
+        if not self.tasks:
+            raise ValueError("Workflow YAML must contain a non-empty 'tasks' list")
+        return self
+
+    def to_plan(self) -> "Plan":
+        """Convert this YAML config into the canonical :class:`Plan` object."""
+
+        plan_tasks: List[TaskItem] = []
+        for t in self.tasks:
+            overall = t.overall_objective or self.objective
+
+            plan_tasks.append(
+                TaskItem(
+                    task_id=t.task_id,
+                    overall_objective=overall,
+                    sub_task_objective=t.sub_task_objective,
+                    status=t.status,
+                    capability=t.capability,
+                    sub_task_dependencies=t.sub_task_dependencies,
+                    time_scope=t.time_scope,
+                    parameters=t.parameters,
+                    attempt_count=t.attempt_count,
+                    max_attempts=t.max_attempts,
+                    metadata=t.metadata,
+                    is_final=t.is_final,
+                )
+            )
+
+        return Plan(
+            reasoning_steps=self.reasoning_steps or "Loaded from YAML workflow",
+            tasks=plan_tasks,
+        )

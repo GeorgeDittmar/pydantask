@@ -5,7 +5,14 @@ A **tool** is any callable an agent may use. Tools may include:
 - Simple functions (e.g., time, file IO, reflection)
 - Sub-agents (agents with their own system instructions, state access, and toolsets)
 
-Tools are ordinary async Python functions (or `Agent` instances) that Pydantic AI can call via function calling. They usually accept a `RunContext[RuntimeState]` when they need access to the shared plan and document store.
+Tools are ordinary async Python functions (or `Agent` instances) that Pydantic AI can call via function calling.
+
+Depending on where the tool is used, it may receive either:
+
+- `RunContext[RuntimeState]` (supervisor-style tools that operate on the whole run), or
+- `RunContext[TaskRunDeps]` (task-level tools used by worker/research/producer agents).
+
+In both cases, the shared state ultimately lives in `RuntimeState`.
 
 ---
 
@@ -33,6 +40,10 @@ It returns a simple confirmation string and does not modify state.
 
 These tools work within a workspace directory (`pydantask/tools/tmp_files`) and also update `RuntimeState.document_store` so agents can find files by logical name.
 
+Important:
+- These filesystem tools **exist**, but they are **not enabled by default** in the built-in agents created by `DeepAgent` (the harness is intentionally in-memory-first).
+- You can still wire them into your own custom capabilities/agents if you want file persistence inside the agent workspace.
+
 #### `write_to_file_system`
 
 ```python
@@ -40,11 +51,11 @@ from pydantask.tools.default_tools import write_to_file_system
 ```
 
 - **Signature**:
-  - `async def write_to_file_system(ctx: RunContext[RuntimeState], file_name: str, content: str, overwrite: bool = False) -> str`
+  - `async def write_to_file_system(ctx: RunContext[RuntimeState | TaskRunDeps], file_name: str, content: str, overwrite: bool = False) -> str`
 - **Behavior**:
   - Writes `content` to `tmp_files/<file_name>`.
   - Appends by default; set `overwrite=True` to replace the file.
-  - Registers `file_name` in `ctx.deps.document_store` so it can be listed and read later.
+  - Registers `file_name` in `RuntimeState.document_store` so it can be listed and read later.
 
 #### `read_from_file_system`
 
@@ -53,9 +64,9 @@ from pydantask.tools.default_tools import read_from_file_system
 ```
 
 - **Signature**:
-  - `async def read_from_file_system(ctx: RunContext[RuntimeState], file_name: str) -> str`
+  - `async def read_from_file_system(ctx: RunContext[RuntimeState | TaskRunDeps], file_name: str) -> str`
 - **Behavior**:
-  - Resolves `file_name` via `ctx.deps.document_store` (logical name → path) and reads the file from `tmp_files`.
+  - Resolves `file_name` via `RuntimeState.document_store` (logical name → path) and reads the file from `tmp_files`.
   - Returns an informative message if the file does not exist.
 
 #### `delete_from_file_system`
@@ -76,9 +87,9 @@ from pydantask.tools.default_tools import list_documents
 ```
 
 - **Signature**:
-  - `async def list_documents(ctx: RunContext[RuntimeState]) -> str`
+  - `async def list_documents(ctx: RunContext[RuntimeState | TaskRunDeps]) -> str`
 - **Behavior**:
-  - Lists logical document names and their resolved filesystem paths from `document_store`.
+  - Lists logical document names and their resolved filesystem paths from `RuntimeState.document_store`.
 
 ---
 
@@ -103,9 +114,9 @@ from pydantask.tools.default_tools import get_current_datetime
 from pydantask.tools.default_tools import list_completed_tasks
 ```
 
-- **Signature**: `async def list_completed_tasks(ctx: RunContext[RuntimeState]) -> str`
+- **Signature**: `async def list_completed_tasks(ctx: RunContext[TaskRunDeps]) -> str`
 - **Behavior**:
-  - Walks `ctx.deps.plan` and returns a human‑readable list of tasks whose `status == TaskStatus.COMPLETED` with brief summaries.
+  - Walks `ctx.deps.runtime_state.plan` and returns a human‑readable list of tasks whose `status == TaskStatus.COMPLETED` with brief summaries.
 
 #### `save_task_context`
 
@@ -114,7 +125,7 @@ from pydantask.tools.default_tools import save_task_context
 ```
 
 - **Signature**:
-  - `async def save_task_context(ctx: RunContext[RuntimeState], task_id: int, content: str, kind: str = "notes", overwrite: bool = False) -> str`
+  - `async def save_task_context(ctx: RunContext[TaskRunDeps], task_id: int, content: str, kind: str = "notes", overwrite: bool = False) -> str`
 - **Behavior**:
   - Writes `content` to a canonical file `task-{task_id}-{kind}.md` in `tmp_files` via `write_to_file_system`.
   - Useful for per‑task notes (`kind="notes"`), research (`"research"`), or final reports (`"final"`).
@@ -126,7 +137,7 @@ from pydantask.tools.default_tools import read_task_context
 ```
 
 - **Signature**:
-  - `async def read_task_context(ctx: RunContext[RuntimeState], task_id: int, kind: str = "notes") -> str`
+  - `async def read_task_context(ctx: RunContext[TaskRunDeps], task_id: int, kind: str = "notes") -> str`
 - **Behavior**:
   - Reads the canonical file `task-{task_id}-{kind}.md` via `read_from_file_system`.
 
@@ -137,9 +148,9 @@ from pydantask.tools.default_tools import get_task_result
 ```
 
 - **Signature**:
-  - `async def get_task_result(ctx: RunContext[RuntimeState], task_id: int) -> str`
+  - `async def get_task_result(ctx: RunContext[TaskRunDeps], task_id: int, max_chars: int | None = 20000) -> str`
 - **Behavior**:
-  - Looks up `task_id` in `ctx.deps.plan` and returns the `TaskResult` as pretty‑printed JSON, or a diagnostic message if none exists.
+  - Looks up `task_id` in `ctx.deps.runtime_state.plan` and returns the `TaskResult` as pretty‑printed JSON (truncated via `max_chars`), or a diagnostic message if none exists.
 
 #### `append_scratch_note`
 
@@ -148,9 +159,8 @@ from pydantask.tools.default_tools import append_scratch_note
 ```
 
 - **Signature**:
-  - `async def append_scratch_note(ctx: RunContext[RuntimeState], task_id: int, note: str) -> str`
+  - `async def append_scratch_note(ctx: RunContext[TaskRunDeps], note: str) -> str`
 - **Behavior**:
-  - Appends `note` to an in‑memory scratchpad entry `scratch_task_{task_id}` in `ctx.deps.document_store`.
   - Intended for lightweight, transient “running memory” during a task, not final reports.
 
 ---
@@ -169,23 +179,33 @@ from pydantask.tools.default_tools import ask_user
 
 ---
 
-## Registering Tools and Sub‑agents
+## DeepAgent tool wiring (default agents)
 
 Built‑in agents are constructed inside `DeepAgent` with specific tool lists (see
-`pydantask/agents/agent.py`). In the current implementation:
+`pydantask/agents/agent.py`). As implemented today:
+
+### Cross-agent consult tool (important)
+
+Running task agents (research/worker/producer) are also given a bounded cross-agent tool:
+
+- `consult_capability(capability=..., question=..., task_ids=None, max_chars=...)`
+
+This lets a sub-agent ask *another* capability a narrow question **without** involving the supervisor (and without creating new tasks). The consult run is intentionally bounded (tool calls disabled) and the answer is persisted into task metadata/checkpoints.
+
+### Default tool access by capability
 
 - The **research agent** capability (`research_agent`) has access to:
-  - `tavily_search_tool` when `TAVILY_API_KEY` is set, otherwise a DuckDuckGo‑based
-    search tool.
+  - a web search tool: `tavily_search_tool(...)` when `TAVILY_API_KEY` is set, otherwise `duckduckgo_search_tool()`
   - `think_tool`
-  - `append_scratch_note`
-  - `read_scratch_notes`
+  - `append_scratch_note`, `read_scratch_notes`
   - `get_current_datetime`
+  - `consult_capability`
 
 - The **producer agent** capability (`producer_agent`) has access to:
   - `list_completed_tasks`
   - `get_task_result`
   - `think_tool`
+  - `consult_capability`
 
 - The **general worker agent** capability (`worker_agent`) has access to:
   - `list_completed_tasks`
@@ -193,14 +213,21 @@ Built‑in agents are constructed inside `DeepAgent` with specific tool lists (s
   - `think_tool`
   - `append_scratch_note`, `read_scratch_notes`
   - `get_current_datetime`
+  - `consult_capability`
 
-- The **supervisor agent** (top-level orchestrator agent) can call DeepAgent methods as tools:
-  - `add_task`, `cancel_task`, `patch_task`
-  - `update_task_status`
-  - `view_qa_report`
-  - plus `get_current_datetime` and `think_tool`
+- The **supervisor agent** (top-level orchestrator) can call DeepAgent methods as tools:
+  - always available:
+    - `update_task_status`
+    - `cancel_task`
+    - `view_qa_report`
+    - `get_current_datetime`, `think_tool`
+  - additionally available in `planning_mode="llm" | "hybrid"`:
+    - `add_task`, `patch_task`
+    - `mark_final_task` *(used to set the single final deliverable task)*
 
-Additional tools or sub‑agents can be registered by creating `CapabilityDescription`
+## Registering Tools and Sub‑agents
+
+Additional capabilities can be registered by creating `CapabilityDescription`
 instances and passing them via the `sub_agents` parameter to
 `DeepAgent.__init__`. Those capabilities then become available to the
-supervisor via `RuntimeState.agent_registry`.
+supervisor (as choices for `TaskItem.capability`) via `RuntimeState.capability_registry`.

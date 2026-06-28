@@ -82,6 +82,22 @@ All content below is rendered from the code via mkdocstrings.
 
 ---
 
+## Workflow YAML Config Models
+
+These models define the strict YAML contract used by `import_yaml_workflow(...)`.
+
+### `WorkflowYamlConfig`
+
+::: pydantask.models.WorkflowYamlConfig
+
+---
+
+### `WorkflowTaskConfig`
+
+::: pydantask.models.WorkflowTaskConfig
+
+---
+
 ### `SubAgentInstruction`
 
 ::: pydantask.models.SubAgentInstruction

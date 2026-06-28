@@ -3,6 +3,7 @@ import json
 import os
 import threading
 import asyncio
+import inspect
 from httpx import AsyncClient, HTTPStatusError
 from tenacity import (
     wait_exponential_jitter,
@@ -44,7 +45,7 @@ from pydantask.prompts.prompts_v2 import (
     WORKER_AGENT_SYS_PROMPT,
     DYNAMIC_SUPERVISOR_SYS_PROMPT,
     BOOTSTRAP_INSTURCT,
-    ORCHESTRATION_INSTRUCT
+    ORCHESTRATION_INSTRUCT,
 )
 
 from pydantask.models import (
@@ -85,6 +86,9 @@ EVENT_RESULT_DETAIL_TRUNCATION = 4_000
 # the full JSON payload under the checkpoint directory and store only a pointer
 # (plus a truncated preview) in events.jsonl.
 TASK_RESULT_ARTIFACT_DIRNAME = "task_results"
+
+# Consult runs are intended to be quick and cheap.
+CONSULT_TOTAL_TOKENS_LIMIT = 1_200
 
 CheckpointEventType = Literal[
     "task_added",
@@ -305,6 +309,8 @@ class DeepAgent:
             append_scratch_note,
             read_scratch_notes,
             get_current_datetime,
+            # Cross-agent "consult" (bounded, logged)
+            self.consult_capability,
         ]
 
         if not tavily_api_key:
@@ -317,7 +323,7 @@ class DeepAgent:
 
         self._researcher_agent = researcher_agent or Agent(
             model=self._retry_model,
-            name="_default_Research_Agent", 
+            name="_default_Research_Agent",
             system_prompt=RESEARCH_AGENT_SYS_PROMPT,
             tools=_defautl_research_tool_set,
             deps_type=TaskRunDeps,
@@ -489,6 +495,8 @@ class DeepAgent:
                 # Plan / history inspection
                 list_completed_tasks,
                 get_task_result,
+                # Cross-agent "consult" (bounded, logged)
+                self.consult_capability,
                 # Reflection
                 think_tool,
             ],
@@ -516,6 +524,8 @@ class DeepAgent:
                 # list_documents,
                 list_completed_tasks,
                 get_task_result,
+                # Cross-agent "consult" (bounded, logged)
+                self.consult_capability,
                 think_tool,
                 append_scratch_note,
                 read_scratch_notes,
@@ -544,7 +554,6 @@ class DeepAgent:
         }
         # each agent gets its own unique id
         return _capability_registry
-
 
     def _initialize_runtime_state(self, objective: str, registry: dict) -> RuntimeState:
         """Create the initial :class:`RuntimeState` for a new DeepAgent run.
@@ -795,16 +804,14 @@ class DeepAgent:
         result_payload: Dict[str, Any] = task.result.model_dump(mode="json")
 
         full_result_path: str | None = None
-        detailed_output = (result_payload.get("detailed_output") or "")
+        detailed_output = result_payload.get("detailed_output") or ""
         if detailed_output and len(detailed_output) > EVENT_RESULT_DETAIL_TRUNCATION:
             # Persist the full payload to a sidecar file so replay can restore it.
             full_result_path = self._persist_full_task_result_payload(
                 task.task_id, result_payload
             )
 
-            truncation_notice = (
-                f"\n\n...[TRUNCATED {len(detailed_output) - EVENT_RESULT_DETAIL_TRUNCATION} chars]..."
-            )
+            truncation_notice = f"\n\n...[TRUNCATED {len(detailed_output) - EVENT_RESULT_DETAIL_TRUNCATION} chars]..."
             result_payload["detailed_output"] = (
                 detailed_output[:EVENT_RESULT_DETAIL_TRUNCATION] + truncation_notice
             )
@@ -997,13 +1004,279 @@ Recovery instructions (IMPORTANT):
 - Continue the task from the checkpoint above.
 - Keep responses concise. Avoid pasting large blobs.
 - If you need prior task outputs, call `get_task_result(task_id=..., max_chars=6000)` (or smaller).
-- After each major step, call `append_scratch_note(task_id={step.task_id}, note=...)` with a short checkpoint:
+- If you need a quick targeted answer from another capability, call `consult_capability(capability=..., question=...)`.
+- After each major step, call `append_scratch_note(note=...)` with a short checkpoint:
   "what I did" + "what I will do next" + "open questions".
 - If you feel you're approaching the context limit again, STOP calling tools and output the best possible `TaskResult`.
 
 Error that triggered recovery (for debugging only):
 {str(error)}
 """
+
+    def _truncate_text(self, text: str, max_chars: int | None) -> str:
+        """Best-effort truncation helper to reduce prompt/tool output size."""
+        if max_chars is None:
+            return text
+        if max_chars <= 0:
+            return ""
+        if len(text) <= max_chars:
+            return text
+
+        head_chars = max_chars // 2
+        tail_chars = max_chars - head_chars
+        return (
+            text[:head_chars]
+            + f"\n\n...[TRUNCATED {len(text) - max_chars} chars; original_len={len(text)}]...\n\n"
+            + text[-tail_chars:]
+        )
+
+    def _remaining_token_budget(self, runtime_state: RuntimeState) -> int | None:
+        """Return remaining global token budget (best-effort), or None if unlimited."""
+        if self.token_budget is None:
+            return None
+        remaining = int(self.token_budget) - int(
+            getattr(runtime_state, "tokens_used", 0) or 0
+        )
+        return max(0, remaining)
+
+    def _make_usage_limits(self, **kwargs) -> UsageLimits | None:
+        """Create a UsageLimits instance using only supported fields.
+
+        pydantic-ai's UsageLimits has changed field names across versions.
+        This helper filters kwargs by the actual constructor signature so we
+        can safely pass token limits when available.
+
+        NOTE: Tool-call limiting is a core safety feature in this harness.
+        If signature introspection fails, we still attempt to set
+        ``tool_calls_limit`` (if provided).
+        """
+        try:
+            sig = inspect.signature(UsageLimits)
+            allowed = {
+                k: v for k, v in kwargs.items() if v is not None and k in sig.parameters
+            }
+            return UsageLimits(**allowed) if allowed else None
+        except Exception:
+            # If anything about introspection fails, fall back conservatively.
+            tcl = kwargs.get("tool_calls_limit")
+            if tcl is not None:
+                try:
+                    return UsageLimits(tool_calls_limit=tcl)
+                except Exception:
+                    return None
+            return None
+
+    def _extract_total_tokens(self, run_result: Any) -> int | None:
+        """Best-effort extraction of total token usage from a pydantic-ai result."""
+        if run_result is None:
+            return None
+
+        usage = getattr(run_result, "usage", None)
+        try:
+            usage = usage() if callable(usage) else usage
+        except Exception:
+            # If calling `.usage()` fails, treat as missing.
+            usage = None
+
+        if usage is None:
+            return None
+
+        # Common shapes across versions: dict-like or object with attrs.
+        if isinstance(usage, dict):
+            for k in ("total_tokens", "total", "tokens", "all_tokens"):
+                v = usage.get(k)
+                if isinstance(v, (int, float)):
+                    return int(v)
+            return None
+
+        for attr in ("total_tokens", "total", "tokens", "all_tokens"):
+            v = getattr(usage, attr, None)
+            if isinstance(v, (int, float)):
+                return int(v)
+
+        return None
+
+    def _accumulate_usage(
+        self, runtime_state: RuntimeState, run_result: Any, *, label: str
+    ) -> None:
+        """Accumulate usage into runtime_state.tokens_used (best-effort)."""
+        total = self._extract_total_tokens(run_result)
+        if total is None:
+            return
+
+        runtime_state.tokens_used = int(
+            getattr(runtime_state, "tokens_used", 0) or 0
+        ) + int(total)
+        if self.verbose:
+            logger.info(
+                f"Usage recorded ({label}): +{total} tokens; total_used={runtime_state.tokens_used}"
+            )
+
+    async def consult_capability(
+        self,
+        ctx: RunContext[TaskRunDeps],
+        capability: str,
+        question: str,
+        task_ids: list[int] | None = None,
+        max_chars: int = 3_000,
+    ) -> str:
+        """Tool: Consult Capability (agent-to-agent, bounded & logged).
+
+        This lets a running sub-agent ask another registered capability a narrow
+        question *without* asking the supervisor to create new tasks.
+
+        Enterprise-friendly properties:
+        - bounded (tool calls disabled in the consulted agent run)
+        - logged (answer is appended to caller task metadata + checkpoint event)
+        - replayable (stored via task_metadata_appended events)
+
+        Args:
+            ctx: The current task execution deps (TaskRunDeps).
+            capability: Which capability to consult (e.g. "research_agent").
+            question: The question to ask.
+            task_ids: Optional list of task IDs whose results should be included as context.
+                Defaults to the caller task's dependencies.
+            max_chars: Max characters returned (and persisted) for the answer.
+
+        Returns:
+            A concise string answer from the consulted capability.
+        """
+        runtime_state = ctx.deps.runtime_state
+        caller_task = ctx.deps.task
+
+        cap = (capability or "").strip()
+        if not cap:
+            return "Error: 'capability' must be a non-empty string."
+
+        if cap not in self._capability_registry:
+            known = ", ".join(sorted(self._capability_registry.keys()))
+            return (
+                f"Error: unknown capability {cap!r}. "
+                f"Known capabilities: {known if known else '<none>'}."
+            )
+
+        # Build a compact context pack from selected upstream tasks.
+        include_ids = (
+            task_ids
+            if task_ids is not None
+            else list(getattr(caller_task, "sub_task_dependencies", []) or [])
+        )
+
+        ctx_chunks: list[str] = []
+        for tid in include_ids:
+            t = runtime_state.plan.get(tid)
+            if t is None or t.result is None:
+                continue
+            summary = (t.result.summary or "").strip()
+            detail = (t.result.detailed_output or "").strip()
+            if len(detail) > 1_200:
+                detail = detail[:1_200] + "\n...[detail truncated]..."
+
+            ctx_chunks.append(
+                "\n".join(
+                    [
+                        f"Task {tid} ({t.capability}) objective: {t.sub_task_objective}",
+                        f"summary: {summary}",
+                        f"detail: {detail}" if detail else "detail: <none>",
+                    ]
+                )
+            )
+
+        upstream_context = "\n\n".join(ctx_chunks)
+        upstream_context = self._truncate_text(upstream_context, max_chars=6_000)
+
+        consult_prompt = f"""
+You are being consulted by another agent for a narrow, targeted answer.
+
+Overall objective:
+{runtime_state.objective}
+
+Caller task:
+- task_id: {caller_task.task_id}
+- capability: {caller_task.capability}
+- objective: {caller_task.sub_task_objective}
+
+Question:
+{question}
+
+Relevant upstream context from completed tasks (may be empty):
+{upstream_context if upstream_context.strip() else '<none>'}
+
+Instructions:
+- Answer from the provided context only.
+- Do NOT call tools.
+- Keep it concise and actionable.
+- If you cannot answer, respond with: INSUFFICIENT_CONTEXT: <what is missing>.
+""".strip()
+
+        consulted = self._capability_registry[cap]
+        runner = getattr(consulted, "tool_func", None)
+        run_method = getattr(runner, "run", None)
+        if run_method is None:
+            return f"Error: capability {cap!r} is not runnable (missing .run)."
+
+        # Use a synthetic task for the consulted agent so it doesn't treat this
+        # as executing the caller's full TaskItem.
+        consult_task = TaskItem(
+            task_id=caller_task.task_id,
+            overall_objective=runtime_state.objective,
+            sub_task_objective=f"CONSULT: {question}",
+            status=TaskStatus.RUNNING,
+            capability=cap,
+            sub_task_dependencies=[],
+            metadata={"consult_for_task_id": caller_task.task_id},
+        )
+
+        consult_deps = TaskRunDeps(runtime_state=runtime_state, task=consult_task)
+
+        # Hard safety: no tool calls during consults.
+        consult_limits = self._make_usage_limits(
+            tool_calls_limit=0,
+            total_tokens_limit=min(
+                CONSULT_TOTAL_TOKENS_LIMIT,
+                self._remaining_token_budget(runtime_state)
+                or CONSULT_TOTAL_TOKENS_LIMIT,
+            ),
+        )
+        resp = await run_method(
+            consult_prompt,
+            deps=consult_deps,
+            usage_limits=consult_limits,
+        )
+        self._accumulate_usage(runtime_state, resp, label=f"consult:{cap}")
+        output = getattr(resp, "output", resp)
+
+        # Normalize to text.
+        answer_text: str
+        if isinstance(output, TaskResult):
+            answer_text = (output.detailed_output or "").strip() or (
+                output.summary or ""
+            ).strip()
+        elif isinstance(output, BaseModel):
+            answer_text = output.model_dump_json(indent=2)
+        else:
+            answer_text = str(output)
+
+        answer_text = self._truncate_text(answer_text, max_chars=max_chars)
+
+        entry = {
+            "ts": datetime.utcnow().isoformat(),
+            "to": cap,
+            "question": self._truncate_text(question, max_chars=1_500),
+            "answer": answer_text,
+            "task_ids": include_ids,
+        }
+
+        caller_task.metadata.setdefault("consultations", [])
+        if isinstance(caller_task.metadata.get("consultations"), list):
+            caller_task.metadata["consultations"].append(entry)
+        else:
+            caller_task.metadata["consultations"] = [entry]
+
+        # Persist as an event so checkpoint replay reconstructs it.
+        self._record_metadata_append(caller_task.task_id, "consultations", entry)
+
+        return answer_text
 
     async def add_task(
         self,
@@ -1373,16 +1646,39 @@ Error that triggered recovery (for debugging only):
 
             logger.info(f"\n--- DeepAgent Cycle {step_count} ---")
 
+            # Best-effort global token budget enforcement.
+            if (
+                self.token_budget is not None
+                and runtime_state.tokens_used >= self.token_budget
+            ):
+                msg = (
+                    f"Global token budget exceeded: tokens_used={runtime_state.tokens_used} "
+                    f">= token_budget={self.token_budget}. Stopping execution."
+                )
+                logger.warning(msg)
+                errors.append(msg)
+                stop_execution = True
+                break
+
             # Deterministic scheduler pass to normalize readiness and surface issues.
             self._last_scheduler_report = await self._scheduler_pass(runtime_state)
 
-            current_instruction = BOOTSTRAP_INSTURCT if len(runtime_state.plan) == 0 else ORCHESTRATION_INSTRUCT
-            supervisor_response = await self._supervisor_agent.run(
+            current_instruction = (
+                BOOTSTRAP_INSTURCT
+                if len(runtime_state.plan) == 0
+                else ORCHESTRATION_INSTRUCT
+            )
+            supervisor_limits = self._make_usage_limits(
+                total_tokens_limit=self._remaining_token_budget(runtime_state)
+            )
+            supervisor_run = await self._supervisor_agent.run(
                 self._format_supervisor_input_prompt(runtime_state),
                 deps=runtime_state,
-                instructions=current_instruction
+                instructions=current_instruction,
+                usage_limits=supervisor_limits,
             )
-            supervisor_response = supervisor_response.output
+            self._accumulate_usage(runtime_state, supervisor_run, label="supervisor")
+            supervisor_response = supervisor_run.output
 
             self._record_event(
                 "supervisor_decision",
@@ -1393,7 +1689,9 @@ Error that triggered recovery (for debugging only):
                 # Deterministic guardrail: do not allow "completion" unless the
                 # task marked as final is actually COMPLETED.
                 final_tasks = [
-                    t for t in runtime_state.plan.values() if getattr(t, "is_final", False)
+                    t
+                    for t in runtime_state.plan.values()
+                    if getattr(t, "is_final", False)
                 ]
 
                 completion_ok = True
@@ -1496,11 +1794,16 @@ Error that triggered recovery (for debugging only):
             for task_result in task_results or []:
                 logger.info(f"--- Evaluating Task Result for {task_result.task_id} ---")
 
-                qa_response = await self._critic_agent.run(
+                critic_limits = self._make_usage_limits(
+                    total_tokens_limit=self._remaining_token_budget(runtime_state)
+                )
+                qa_run = await self._critic_agent.run(
                     self._format_critic_input_prompt(task_result, runtime_state),
                     deps=runtime_state,
+                    usage_limits=critic_limits,
                 )
-                qa_response = qa_response.output
+                self._accumulate_usage(runtime_state, qa_run, label="critic")
+                qa_response = qa_run.output
                 if self.verbose:
                     logger.info("--- QA Response ---")
                     logger.info(qa_response.model_dump_json(indent=2))
@@ -1794,7 +2097,8 @@ Error that triggered recovery (for debugging only):
 Context-budget note:
 - You may be running on a smaller-context model.
 - Prefer small tool outputs. When calling tools that can return large text, request truncation.
-- Checkpoint progress frequently via `append_scratch_note(task_id={step.task_id}, note=...)`.
+- If you need a quick targeted answer from another capability, call `consult_capability(capability=..., question=...)`.
+- Checkpoint progress frequently via `append_scratch_note(note=...)`.
 """
 
         max_resume_attempts = 2
@@ -1804,10 +2108,17 @@ Context-budget note:
             tool_call_limit = 20 if resume_attempt == 0 else 10
 
             try:
+                task_limits = self._make_usage_limits(
+                    tool_calls_limit=tool_call_limit,
+                    total_tokens_limit=self._remaining_token_budget(runtime_state),
+                )
                 result = await sub_agent.run(
                     user_prompt,
                     deps=task_deps,
-                    usage_limits=UsageLimits(tool_calls_limit=tool_call_limit),
+                    usage_limits=task_limits,
+                )
+                self._accumulate_usage(
+                    runtime_state, result, label=f"task:{step.task_id}"
                 )
                 step.result = result.output
                 step.status = TaskStatus.NEEDS_REVIEW

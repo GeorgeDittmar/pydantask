@@ -13,7 +13,7 @@ jobs:
       url: https://pypi.org/p/pydantask  # Replace with your package name
     permissions:
       id-token: write  # MANDATORY for Trusted Publishing
-      contents: read
+      contents: write
 
     steps:
     - uses: actions/checkout@v4
