@@ -7,7 +7,7 @@ import asyncio
 
 load_dotenv(find_dotenv())
 
-checkpoint_dir = Path("_checkpoint") / "pydantask5"
+checkpoint_dir = Path("_checkpoint") / "pydantask7"
 
 da = DeepAgent(
     # "I need a report of the news for today. Give me a high level summary and then a detailed version of major pieces of news as it pertains to the US and world. Output the report as markdown withj citations in the report. You must cite all sources at the end of the article.",
@@ -20,7 +20,7 @@ da = DeepAgent(
     #   - 1. Pretend to research hollow moon.
     #   - 2. Pretend to research quantom physics.
     # Again this is a test to see how well you follow creating a plan.""",
-    "I need a compare and contrast report on pydantic ai's new harness ability and how that intersects with pydantask, a deep agent harness I have been working on. Pydantask can be found on github, https://github.com/GeorgeDittmar/pydantask,  as well as read teh docs, https://pydantask.readthedocs.io/en/latest/,  and pypi, https://pypi.org/project/pydantask/. I want a full report in markdown with a breakdown of the two, where they overlap and what layers of the stack they really solve for.",
+    "Research for me `pydantask` harness. It is a python project. Give me a report on what it is, what problem does it try to solve, its features, and an example usage. As well include a bio summary on the main author of the harness. Write this up in markdown format and be sure to cite your sources.",
     model="gpt-5.4",
     trace=True,
     checkpoint=True,
@@ -34,11 +34,11 @@ print(f"Checkpoint events saved to: {da.checkpoint_path}")
 # pprint(result.model_dump())
 # Write JSON data to a file
 
-with open("pydantask_overview.json", "w", encoding="utf-8") as json_file:
+with open("pydantask_overview_v2.json", "w", encoding="utf-8") as json_file:
     json_file.write(result.model_dump_json(indent=2))
 
 final_output = result.final_result.detailed_output if result.final_result else ""
-with open("pydantask_compare_contrast.md", "w", encoding="utf-8") as f:
+with open("pydantask_report.md", "w", encoding="utf-8") as f:
     f.write(final_output)
 
 pprint(final_output or "<no final result>")
