@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+import ipaddress
+import socket
+from urllib.parse import urlparse
 
+import httpx
 from loguru import logger
 from pydantic_ai import RunContext
 
@@ -331,6 +335,7 @@ async def get_task_result(
 async def append_scratch_note(
     ctx: RunContext[TaskRunDeps],
     note: str,
+    task_id: int | None = None,
 ) -> str:
     """
     Tool: Append Scratch Note
@@ -341,6 +346,14 @@ async def append_scratch_note(
     When not to use:
         - Writing final full reports / analysis or answers.
     """
+    # Backwards-compatible: some callers pass task_id explicitly.
+    # The authoritative task id is `ctx.deps.task.task_id`.
+    if task_id is not None and int(task_id) != int(ctx.deps.task.task_id):
+        return (
+            "Error: task_id does not match the active task. "
+            f"Got task_id={task_id}, active_task_id={ctx.deps.task.task_id}."
+        )
+
     key = "scratch_notes"
     existing = ctx.deps.task.metadata.get(key, "")
     ctx.deps.task.metadata[key] = existing + f"\n\n{note}"
@@ -370,3 +383,171 @@ async def read_scratch_notes(
     key = f"scratch_notes"
     existing = ctx.deps.task.metadata.get(key, "")
     return _truncate_text(existing, max_chars=max_chars)
+
+
+def _host_looks_local_or_private(host: str) -> tuple[bool, str]:
+    """Best-effort SSRF guard.
+
+    Blocks localhost and private/link-local/reserved IP space.
+
+    Notes:
+      - This is intentionally conservative.
+      - For production-hardening you'd also want to consider DNS rebinding,
+        allowlists, and/or running this behind an egress proxy.
+    """
+    h = (host or "").strip().lower()
+    if not h:
+        return True, "empty host"
+
+    if h in {"localhost"}:
+        return True, "localhost is not allowed"
+
+    # If host is an IP literal, validate directly.
+    try:
+        ip = ipaddress.ip_address(h)
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            return True, f"IP address {ip} is not allowed"
+        return False, ""
+    except ValueError:
+        pass
+
+    # Otherwise resolve DNS and validate the resulting IP(s).
+    try:
+        infos = socket.getaddrinfo(h, None)
+    except Exception:
+        # If we can't resolve, let the HTTP client handle the error.
+        return False, ""
+
+    for info in infos:
+        sockaddr = info[4]
+        ip_str = sockaddr[0]
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            continue
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            return True, f"resolved IP address {ip} for host {h!r} is not allowed"
+
+    return False, ""
+
+
+async def fetch_url_content(
+    url: str,
+    max_chars: int | None = 20_000,
+    *,
+    timeout_s: float = 20.0,
+    max_bytes: int = 1_000_000,
+) -> str:
+    """Fetch a URL and return its contents as text.
+
+    This is intended for lightweight research/document retrieval.
+
+    Safety/ergonomics features:
+    - Only allows http/https URLs
+    - Best-effort SSRF protection (blocks localhost/private IP ranges)
+    - Content-type gate (refuses obvious binary types)
+    - Byte cap + text truncation to protect the context window
+
+    Args:
+        url: The URL to fetch.
+        max_chars: Max characters returned to the model (tool output truncation).
+        timeout_s: Network timeout in seconds.
+        max_bytes: Max bytes downloaded from the response body.
+
+    Returns:
+        A string containing basic fetch metadata + the fetched text (possibly truncated).
+    """
+    parsed = urlparse((url or "").strip())
+    if parsed.scheme not in {"http", "https"}:
+        return "Error: only http/https URLs are supported."
+    if not parsed.netloc:
+        return "Error: URL must include a hostname."
+
+    host = parsed.hostname or ""
+    blocked, reason = _host_looks_local_or_private(host)
+    if blocked:
+        return f"Error: blocked URL host {host!r}: {reason}."
+
+    headers = {
+        "User-Agent": "pydantask-fetch/0.1 (+https://github.com/pydantic/pydantask)",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,application/json;q=0.7,*/*;q=0.1",
+    }
+
+    try:
+        async with httpx.AsyncClient(
+            follow_redirects=True, timeout=timeout_s
+        ) as client:
+            async with client.stream("GET", url, headers=headers) as resp:
+                status = resp.status_code
+                final_url = str(resp.url)
+                content_type = (resp.headers.get("content-type") or "").lower()
+
+                # Refuse obvious binary content.
+                allowed = any(
+                    ct in content_type
+                    for ct in (
+                        "text/",
+                        "application/json",
+                        "application/xml",
+                        "application/xhtml+xml",
+                        "application/javascript",
+                    )
+                )
+                if not allowed:
+                    return (
+                        f"Error: unsupported content-type {content_type!r} for {final_url}. "
+                        "This tool only returns text-like responses."
+                    )
+
+                resp.raise_for_status()
+
+                buf = bytearray()
+                truncated_bytes = False
+                async for chunk in resp.aiter_bytes():
+                    if not chunk:
+                        continue
+                    remaining = max_bytes - len(buf)
+                    if remaining <= 0:
+                        truncated_bytes = True
+                        break
+                    if len(chunk) > remaining:
+                        buf.extend(chunk[:remaining])
+                        truncated_bytes = True
+                        break
+                    buf.extend(chunk)
+
+                encoding = resp.encoding or "utf-8"
+                text = buf.decode(encoding, errors="replace")
+
+                if truncated_bytes:
+                    text += "\n\n...[TRUNCATED: response exceeded max_bytes limit]..."
+
+                text = _truncate_text(text, max_chars=max_chars)
+
+                return (
+                    f"Fetched: {final_url}\n"
+                    f"Status: {status}\n"
+                    f"Content-Type: {content_type or '<unknown>'}\n\n"
+                    f"{text}"
+                )
+
+    except httpx.HTTPStatusError as e:
+        return f"Error: HTTP {e.response.status_code} while fetching {url!r}."
+    except httpx.RequestError as e:
+        return f"Error: request failed while fetching {url!r}: {str(e)}"
+    except Exception as e:
+        return f"Error: unexpected failure while fetching {url!r}: {str(e)}"
