@@ -7,7 +7,7 @@ import asyncio
 
 load_dotenv(find_dotenv())
 
-checkpoint_dir = Path("_checkpoint") / "anti_grav"
+checkpoint_dir = Path("_checkpoint") / "pydantask7"
 
 da = DeepAgent(
     # "I need a report of the news for today. Give me a high level summary and then a detailed version of major pieces of news as it pertains to the US and world. Output the report as markdown withj citations in the report. You must cite all sources at the end of the article.",
@@ -20,7 +20,7 @@ da = DeepAgent(
     #   - 1. Pretend to research hollow moon.
     #   - 2. Pretend to research quantom physics.
     # Again this is a test to see how well you follow creating a plan.""",
-    "I want a report on any known anti-gravity research that has been done. Ideally from known labs and research institutions. Cite all sources in the final report. Write the report in Markdown Format.",
+    "Research for me `pydantask` harness. It is a python project. Give me a report on what it is, what problem does it try to solve, its features, and an example usage. As well include a bio summary on the main author of the harness. Write this up in markdown format and be sure to cite your sources.",
     model="gpt-5.4",
     trace=True,
     checkpoint=True,
@@ -34,11 +34,11 @@ print(f"Checkpoint events saved to: {da.checkpoint_path}")
 # pprint(result.model_dump())
 # Write JSON data to a file
 
-with open("anti_grav.json", "w", encoding="utf-8") as json_file:
+with open("pydantask_overview_v2.json", "w", encoding="utf-8") as json_file:
     json_file.write(result.model_dump_json(indent=2))
 
 final_output = result.final_result.detailed_output if result.final_result else ""
-with open("anti_grav.md", "w", encoding="utf-8") as f:
+with open("pydantask_report.md", "w", encoding="utf-8") as f:
     f.write(final_output)
 
 pprint(final_output or "<no final result>")
