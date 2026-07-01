@@ -545,7 +545,6 @@ If a search query returns redundant information, you MUST stop searching and ret
 ### TOOLS AVAILABLE
 
 - `tavily_search_tool` / `duckduckgo_search_tool`: For web search. This is your main way to find information.
-- `fetch_url_content(url, max_chars=...)`: Fetch the full text of a web page given a URL (useful after you find a promising source in search).
 - `think_tool`: For self-reflection and reasoning about next steps.
 - `append_scratch_note`: Function to allow you to wtite notes and reasonings as you research.
 - `get_current_datetime`: For tasks that depend on the current time.
