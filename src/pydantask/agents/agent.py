@@ -458,7 +458,7 @@ class DeepAgent:
                     max_wait=300,
                 ),
                 # Stop after 5 attempts
-                stop=stop_after_attempt(5),
+                stop=stop_after_attempt(3),
                 # Re-raise the last exception if all retries fail
                 reraise=True,
             ),
@@ -2023,7 +2023,6 @@ Instructions:
         return results
 
     @traced(run_type="task", capture_input=False)
-    @retry(wait=wait_exponential_jitter(), reraise=True, stop=stop_after_attempt(3))
     async def execute(
         self, sub_agent: Agent, step: TaskItem, runtime_state: RuntimeState
     ) -> TaskItem:
