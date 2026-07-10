@@ -22,8 +22,8 @@ da = DeepAgent(
     # "Research for me `pydantask` harness. It is a python project. Give me a report on what it is, what problem does it try to solve, its features, and an example usage. As well include a bio summary on the main author of the harness. Write this up in markdown format and be sure to cite your sources.",
     model="gpt-5.4",
     trace=True,
-    checkpoint=True,
-    checkpoint_dir=checkpoint_dir,
+    # checkpoint=True,
+    # checkpoint_dir=checkpoint_dir,
 )
 
 result = asyncio.run(da.run())

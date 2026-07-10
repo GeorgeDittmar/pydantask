@@ -73,7 +73,7 @@ from pydantask.tools.default_tools import (
     read_scratch_notes,
     think_tool,
 )
-
+from pydantask.manager.checkpointer import CheckpointEvent, CheckpointRecorder
 from pydantask.observe.tracing import (
     traced,
     init_tracing_backend,
@@ -103,47 +103,6 @@ CheckpointEventType = Literal[
     "final_task_set",
 ]
 
-
-class CheckpointEvent(BaseModel):
-    ts: datetime = Field(default_factory=lambda: datetime.utcnow())
-    event_id: str = Field(default_factory=lambda: uuid.uuid4().hex)
-    type: CheckpointEventType
-    payload: Dict[str, Any] = Field(default_factory=dict)
-
-
-class CheckpointRecorder:
-    def __init__(self, directory: Path):
-        self.directory = directory
-        self.directory.mkdir(parents=True, exist_ok=True)
-        self.log_path = directory / "events.jsonl"
-        self.summary_path = directory / "summaries.jsonl"
-        self._lock = threading.Lock()
-
-    def record(self, event_type: CheckpointEventType, payload: Dict[str, Any]) -> None:
-        event = CheckpointEvent(type=event_type, payload=payload)
-        self._append_json_line(self.log_path, event.model_dump_json())
-
-    def record_summary(self, summary: Dict[str, Any]) -> None:
-        self._append_json_line(self.summary_path, json.dumps(summary))
-
-    def load_events(self) -> list[CheckpointEvent]:
-        if not self.log_path.exists():
-            return []
-        events: list[CheckpointEvent] = []
-        with self.log_path.open("r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                events.append(CheckpointEvent.model_validate_json(line))
-        return events
-
-    def _append_json_line(self, path: Path, json_line: str) -> None:
-        with self._lock:
-            with path.open("a", encoding="utf-8") as fh:
-                fh.write(json_line + "\n")
-
-
 class DeepAgent:
     """Pydantic AI based DeepAgent that manages sub-agents to achieve complex goals."""
 
@@ -151,8 +110,8 @@ class DeepAgent:
         self,
         objective: str,
         model: str | Model = "gpt-5.2",
-        seed_plan: Plan | None = None,
-        planning_mode: Literal["llm", "fixed", "hybrid"] = "llm",
+        # seed_plan: Plan | None = None,
+        # planning_mode: Literal["llm", "fixed", "hybrid"] = "llm",
         critic_agent: Optional[Agent] = None,
         supervisor_agent: Optional[Agent] = None,
         researcher_agent: Optional[Agent] = None,
@@ -230,18 +189,18 @@ class DeepAgent:
         if objective is None:
             raise TypeError("DeepAgent requires 'objective' to be provided")
 
-        if planning_mode in {"fixed", "hybrid"} and seed_plan is None:
-            raise ValueError(
-                "seed_plan must be provided when planning_mode is 'fixed' or 'hybrid'"
-            )
+        # if planning_mode in {"fixed", "hybrid"} and seed_plan is None:
+        #     raise ValueError(
+        #         "seed_plan must be provided when planning_mode is 'fixed' or 'hybrid'"
+        #     )
 
         self.objective: str = objective
         self._max_steps: int = max_steps  # Max steps to prevent infinite loops
         self.token_budget: Union[int, None] = set_token_budget
         self.verbose = verbose_logging
         # self.output_type = output_type
-        self.planning_mode = planning_mode
-        self.seed_plan: Union[Plan, None] = seed_plan
+        self.planning_mode = ""
+        self.seed_plan: Union[Plan, None] = None
         self._retry_client = self._create_retrying_client()
 
         # Checkpointing / resume semantics:
@@ -249,12 +208,12 @@ class DeepAgent:
         # - `checkpoint_dir=...` forces checkpointing on and chooses the directory.
         # - `run_from_checkpoint=True` requires `checkpoint_dir` and will replay
         #   events from that directory on `run()`.
-        if run_from_checkpoint and checkpoint_dir is None:
+        if checkpoint and checkpoint_dir is None:
             raise ValueError(
                 "checkpoint_dir must be provided when run_from_checkpoint=True"
             )
 
-        if checkpoint_dir is not None or run_from_checkpoint:
+        if checkpoint_dir is not None or checkpoint:
             checkpoint = True
 
         self.checkpoint = checkpoint
@@ -1130,11 +1089,6 @@ Error that triggered recovery (for debugging only):
         This lets a running sub-agent ask another registered capability a narrow
         question *without* asking the supervisor to create new tasks.
 
-        Enterprise-friendly properties:
-        - bounded (tool calls disabled in the consulted agent run)
-        - logged (answer is appended to caller task metadata + checkpoint event)
-        - replayable (stored via task_metadata_appended events)
-
         Args:
             ctx: The current task execution deps (TaskRunDeps).
             capability: Which capability to consult (e.g. "research_agent").
@@ -1649,7 +1603,10 @@ Instructions:
         stop_execution = False
         while step_count < self._max_steps and not stop_execution:
 
-            logger.info(f"\n--- DeepAgent Cycle {step_count} ---")
+            logger.info(f"--- Step {step_count} ---")
+
+            if step_count == 0:
+                logger.info("====== Planning =======\n")
 
             # Best-effort global token budget enforcement.
             # Use getattr() so unit tests can construct DeepAgent without __init__.
@@ -1757,7 +1714,7 @@ Instructions:
             # `runtime_state.plan[task_id]` with returned TaskItems here; that can clobber
             # concurrent metadata updates (e.g. scratch notes/checkpoints).
 
-            if len(task_results) == 0:
+            if len(task_results) == 0 and step_count != 0:
                 # No tasks ran this cycle. This is not necessarily terminal in a
                 # dynamic planner: we may be blocked on deps, have errored tasks
                 # that need patching, or need the supervisor to add new nodes.
