@@ -11,16 +11,17 @@ checkpoint_dir = Path("_checkpoint") / "pydantask7"
 
 da = DeepAgent(
     # "I need a report of the news for today. Give me a high level summary and then a detailed version of major pieces of news as it pertains to the US and world. Output the report as markdown withj citations in the report. You must cite all sources at the end of the article.",
-    #     """I am testing your Deep Agent ability to plan and execute on an objective. I want to test your ability to create plans.
-    # Create 2 Research tasks. Besure to have mentioned in the instructions to not actually search but make something up.
-    #   - 1: Pretend to Research about the man on the moon.
-    #   - 2: Pretend to Research why stone henge is green.
-    # Then have a producer task that requires task 1 and 2 to be completed. Have the producer write a little song about cats in space.
-    # Then create 2 more Research tasks depending on the Producer task. Again these are pretend so have the instructions to teh researcher not actually perform the work and just make something up.
-    #   - 1. Pretend to research hollow moon.
-    #   - 2. Pretend to research quantom physics.
-    # Again this is a test to see how well you follow creating a plan.""",
-    "Research for me `pydantask` harness. It is a python project. Give me a report on what it is, what problem does it try to solve, its features, and an example usage. As well include a bio summary on the main author of the harness. Write this up in markdown format and be sure to cite your sources.",
+    """I am testing your Deep Agent ability to plan and execute on an objective. I want to test your ability to create DAGs.
+    Create 2 Research tasks. Besure to have mentioned in the instructions to not actually search but make something up.
+      - 1: Pretend to Research about the man on the moon.
+      - 2: Pretend to Research why stone henge is green.
+    Create a conditional task that checks the length of the previous too tasks and only allow the one with the longest summary pass the check.
+    Then have a producer task that takes whichever result of the conditional step and writes a little song about the task.
+    Then create 2 more Research tasks depending on the Producer task. Again these are pretend so have the instructions to teh researcher not actually perform the work and just make something up.
+      - 1. Pretend to research hollow moon.
+      - 2. Pretend to research quantom physics.
+    Again this is a test to see how well you follow creating a semi complex DAG.""",
+    # "Research for me `pydantask` harness. It is a python project. Give me a report on what it is, what problem does it try to solve, its features, and an example usage. As well include a bio summary on the main author of the harness. Write this up in markdown format and be sure to cite your sources.",
     model="gpt-5.4",
     trace=True,
     checkpoint=True,
