@@ -63,6 +63,7 @@ from pydantask.models import (
 # Filesystem tools still exist in `pydantask.tools.default_tools` but are not enabled by default.
 from pydantask.tools.default_tools import (
     append_scratch_note,
+    fetch_url_content,
     get_current_datetime,
     get_task_result,
     list_completed_tasks,
