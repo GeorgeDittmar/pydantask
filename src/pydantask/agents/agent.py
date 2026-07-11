@@ -261,7 +261,7 @@ class DeepAgent:
         # TODO: rework some of these tools
         tavily_api_key = os.getenv("TAVILY_API_KEY", None)
 
-        _defautl_research_tool_set = [
+        _default_research_tool_set = [
             think_tool,
             append_scratch_note,
             read_scratch_notes,
@@ -275,9 +275,9 @@ class DeepAgent:
             logger.info(
                 "Tavily api key not found. Defaulting to built in Duck Duck Go search tool."
             )
-            _defautl_research_tool_set.append(duckduckgo_search_tool())
+            _default_research_tool_set.append(duckduckgo_search_tool())
         else:
-            _defautl_research_tool_set.append(tavily_search_tool(tavily_api_key))
+            _default_research_tool_set.append(tavily_search_tool(tavily_api_key))
 
         self._researcher_agent = researcher_agent or Agent(
             model=self._retry_model,
