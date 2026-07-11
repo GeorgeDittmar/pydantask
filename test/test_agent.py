@@ -56,21 +56,39 @@ def runtime_state() -> RuntimeState:
 
 
 def make_minimal_deep_agent(prompt: str = "obj") -> agent_mod.DeepAgent:
-    """Create a DeepAgent without running its heavy __init__."""
+    """Create a DeepAgent without running its heavy __init__.
+
+    Since `__init__` is skipped, this function must define any attributes that
+    methods under test expect to exist.
+    """
     da = agent_mod.DeepAgent.__new__(agent_mod.DeepAgent)
+
+    # Core run() expectations
     da.objective = prompt
-    da._capability_registry = {}
     da._max_steps = 3
+    da.token_budget = None
+    da.verbose = False
+
+    # Checkpoint/resume flags
     da.checkpoint = False
-    da.seed_plan = None
-    da._plan_lock = DummyAsyncLock()
+    da.resume = False
     da._checkpoint_recorder = None
     da.checkpoint_path = None
+
+    # Planning / registry
+    da.seed_plan = None
+    da.planning_mode = "llm"
+    da._capability_registry = {}
+
+    # Concurrency + agents (mocked)
+    da._plan_lock = DummyAsyncLock()
     da._last_scheduler_report = ""
     da._supervisor_agent = MagicMock()
     da._critic_agent = MagicMock()
+
+    # Misc
     da._retry_model = MagicMock()
-    da.planning_mode = "llm"
+
     return da
 
 

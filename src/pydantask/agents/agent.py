@@ -540,7 +540,7 @@ class DeepAgent:
             return
 
         summary = {
-            "ts": datetime.utcnow().isoformat(),
+            "ts": datetime.now().isoformat(),
             "runtime_steps": runtime.runtime_steps,
             "total_tasks": len(runtime.plan),
             "status_counts": dict(
@@ -850,7 +850,7 @@ class DeepAgent:
             objective=ctx.objective,
             plan_display=plan_display,
             agent_display=capability_display,
-            now=datetime.now(),
+            now=datetime.now().isoformat(),
             current_year=datetime.now().year,
         )
 
@@ -1216,7 +1216,7 @@ Instructions:
         answer_text = self._truncate_text(answer_text, max_chars=max_chars)
 
         entry = {
-            "ts": datetime.utcnow().isoformat(),
+            "ts": datetime.now().isoformat(),
             "to": cap,
             "question": self._truncate_text(question, max_chars=1_500),
             "answer": answer_text,
