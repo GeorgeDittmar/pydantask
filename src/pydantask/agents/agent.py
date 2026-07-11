@@ -1,12 +1,10 @@
 # from asyncio import tasks
 import json
 import os
-import threading
 import asyncio
 import inspect
 from httpx import AsyncClient, HTTPStatusError
 from tenacity import (
-    wait_exponential_jitter,
     wait_exponential,
     retry,
     retry_if_exception_type,
@@ -18,7 +16,6 @@ from collections import Counter
 
 from loguru import logger
 
-from enum import Enum
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext
 from typing import List, Optional, Literal, Any, Dict, Callable, Union, Type
@@ -124,7 +121,7 @@ class DeepAgent:
         trace: bool = False,
         checkpoint: bool = False,
         checkpoint_dir: Path | str | None = None,
-        run_from_checkpoint: bool = False,
+        resume: bool = False,
         verbose_logging: bool = False,
     ):
         """Initialize a DeepAgent instance.
@@ -206,18 +203,18 @@ class DeepAgent:
         # Checkpointing / resume semantics:
         # - `checkpoint=True` enables writing events.
         # - `checkpoint_dir=...` forces checkpointing on and chooses the directory.
-        # - `run_from_checkpoint=True` requires `checkpoint_dir` and will replay
+        # - `resume=True` requires `checkpoint_dir` and will replay
         #   events from that directory on `run()`.
-        if checkpoint and checkpoint_dir is None:
+        if resume and checkpoint_dir is None:
             raise ValueError(
-                "checkpoint_dir must be provided when run_from_checkpoint=True"
+                "checkpoint_dir must be provided when resume=True"
             )
 
         if checkpoint_dir is not None or checkpoint:
             checkpoint = True
 
         self.checkpoint = checkpoint
-        self.run_from_checkpoint = run_from_checkpoint
+        self.resume = resume
 
         # Concurrency guardrails:
         # - `_plan_lock` protects plan-level mutations and task claiming (READY->RUNNING).
@@ -269,7 +266,7 @@ class DeepAgent:
             append_scratch_note,
             read_scratch_notes,
             get_current_datetime,
-            fetch_url_content,
+            # fetch_url_content,
             # Cross-agent "consult" (bounded, logged)
             self.consult_capability,
         ]
@@ -418,7 +415,7 @@ class DeepAgent:
                     fallback_strategy=wait_exponential(multiplier=1, max=60),
                     max_wait=300,
                 ),
-                # Stop after 5 attempts
+                #TODO: make this configurable
                 stop=stop_after_attempt(3),
                 # Re-raise the last exception if all retries fail
                 reraise=True,
@@ -537,7 +534,7 @@ class DeepAgent:
         runtime_state.checkpoint_recorder = self._checkpoint_recorder
         return runtime_state
 
-    def _checkpoint_state(self, runtime: RuntimeState):
+    async def _checkpoint_state(self, runtime: RuntimeState):
         """Persist a lightweight runtime summary when checkpointing is enabled."""
         if not self._checkpoint_recorder:
             return
@@ -551,13 +548,13 @@ class DeepAgent:
             ),
             "next_task_id": runtime.next_task_id,
         }
-        self._checkpoint_recorder.record_summary(summary)
+        await self._checkpoint_recorder.record_summary(summary)
 
-    def _replay_checkpoint(self, runtime_state: RuntimeState) -> None:
+    async def _replay_checkpoint(self, runtime_state: RuntimeState) -> None:
         if not self._checkpoint_recorder:
             return
 
-        events = self._checkpoint_recorder.load_events()
+        events = await self._checkpoint_recorder.load_events()
         if not events:
             return
 
@@ -696,13 +693,13 @@ class DeepAgent:
 
         # supervisor_decision and other audit events do not mutate state on replay.
 
-    def _record_event(
+    async def _record_event(
         self, event_type: CheckpointEventType, payload: Dict[str, Any]
     ) -> None:
         if self._checkpoint_recorder:
-            self._checkpoint_recorder.record(event_type, payload)
+            await self._checkpoint_recorder.record(event_type, payload)
 
-    def _record_task_status_event(
+    async def _record_task_status_event(
         self,
         task_id: int,
         status: TaskStatus,
@@ -715,9 +712,9 @@ class DeepAgent:
             payload["reason"] = reason
         if error_msg:
             payload["error_msg"] = error_msg
-        self._record_event("task_status_updated", payload)
+        await self._record_event("task_status_updated", payload)
 
-    def _persist_full_task_result_payload(
+    async def _persist_full_task_result_payload(
         self, task_id: int, result_payload: Dict[str, Any]
     ) -> str | None:
         """Persist the full TaskResult payload under the checkpoint directory.
@@ -734,7 +731,7 @@ class DeepAgent:
         relpath = f"{TASK_RESULT_ARTIFACT_DIRNAME}/task_{task_id}.json"
         path = self.checkpoint_path / relpath
         with path.open("w", encoding="utf-8") as fh:
-            json.dump(result_payload, fh, ensure_ascii=False)
+            await asyncio.to_thread(json.dump,result_payload, fh, ensure_ascii=False)
 
         return relpath
 
@@ -757,7 +754,7 @@ class DeepAgent:
 
         return None
 
-    def _record_task_result(self, task: TaskItem) -> None:
+    async def _record_task_result(self, task: TaskItem) -> None:
         if not self._checkpoint_recorder or not task.result:
             return
 
@@ -768,7 +765,7 @@ class DeepAgent:
         detailed_output = result_payload.get("detailed_output") or ""
         if detailed_output and len(detailed_output) > EVENT_RESULT_DETAIL_TRUNCATION:
             # Persist the full payload to a sidecar file so replay can restore it.
-            full_result_path = self._persist_full_task_result_payload(
+            full_result_path = await self._persist_full_task_result_payload(
                 task.task_id, result_payload
             )
 
@@ -781,12 +778,12 @@ class DeepAgent:
         if full_result_path:
             payload["full_result_path"] = full_result_path
 
-        self._record_event("task_result", payload)
+        await self._record_event("task_result", payload)
 
-    def _record_metadata_append(self, task_id: int, key: str, value: Any) -> None:
+    async def _record_metadata_append(self, task_id: int, key: str, value: Any) -> None:
         if not self._checkpoint_recorder:
             return
-        self._record_event(
+        await self._record_event(
             "task_metadata_appended", {"task_id": task_id, "key": key, "value": value}
         )
 
@@ -1233,7 +1230,7 @@ Instructions:
             caller_task.metadata["consultations"] = [entry]
 
         # Persist as an event so checkpoint replay reconstructs it.
-        self._record_metadata_append(caller_task.task_id, "consultations", entry)
+        await self._record_metadata_append(caller_task.task_id, "consultations", entry)
 
         return answer_text
 
@@ -1283,7 +1280,7 @@ Instructions:
                 status=TaskStatus.READY,
             )
             plan[new_id] = task
-            self._record_event(
+            await self._record_event(
                 "task_added",
                 {
                     "task": task.model_dump(),
@@ -1311,7 +1308,7 @@ Instructions:
                 # Instead of deleting, mark as CANCELLED to keep history
                 task.status = TaskStatus.CANCELLED
                 task.error_msg = reason
-                self._record_task_status_event(
+                await self._record_task_status_event(
                     task_id,
                     TaskStatus.CANCELLED,
                     reason=reason,
@@ -1355,7 +1352,7 @@ Instructions:
                 payload["dependencies"] = task.sub_task_dependencies
 
             if len(payload) > 1:
-                self._record_event("task_patched", payload)
+                await self._record_event("task_patched", payload)
 
             return f"Task {task_id} updated successfully."
 
@@ -1386,7 +1383,7 @@ Instructions:
             payload: Dict[str, Any] = {"task_id": task_id}
             if reason:
                 payload["reason"] = reason
-            self._record_event("final_task_set", payload)
+            await self._record_event("final_task_set", payload)
 
             return f"Task {task_id} marked as final."
 
@@ -1424,7 +1421,7 @@ Instructions:
                             )
                             task.status = TaskStatus.ERRORED
                             task.error_msg = f"Unknown capability: {task.capability!r}"
-                            self._record_task_status_event(
+                            await self._record_task_status_event(
                                 task_id,
                                 TaskStatus.ERRORED,
                                 reason="unknown capability",
@@ -1442,7 +1439,7 @@ Instructions:
                     changes.append(
                         f"- Task {task_id}: pending -> ready (deps satisfied)"
                     )
-                    self._record_task_status_event(
+                    await self._record_task_status_event(
                         task_id,
                         TaskStatus.READY,
                         reason="dependencies_satisfied",
@@ -1454,7 +1451,7 @@ Instructions:
                     changes.append(
                         f"- Task {task_id}: ready -> pending (deps not satisfied)"
                     )
-                    self._record_task_status_event(
+                    await self._record_task_status_event(
                         task_id,
                         TaskStatus.PENDING,
                         reason="dependencies_not_met",
@@ -1594,7 +1591,8 @@ Instructions:
             objective=self.objective, registry=self._capability_registry
         )
         self._apply_seed_plan(runtime_state)
-        self._replay_checkpoint(runtime_state)
+        if self.resume:
+            await self._replay_checkpoint(runtime_state)
 
         errors: list[str] = []
         no_progress_cycles = 0
@@ -1641,7 +1639,7 @@ Instructions:
             self._accumulate_usage(runtime_state, supervisor_run, label="supervisor")
             supervisor_response = supervisor_run.output
 
-            self._record_event(
+            await self._record_event(
                 "supervisor_decision",
                 supervisor_response.model_dump(),
             )
@@ -1692,7 +1690,7 @@ Instructions:
                     # Treat this as a no-progress cycle so we eventually fail-safe.
                     no_progress_cycles += 1
                     if self.checkpoint:
-                        self._checkpoint_state(runtime_state)
+                       await self._checkpoint_state(runtime_state)
                     runtime_state.runtime_steps += 1
                     step_count += 1
                     continue
@@ -1742,7 +1740,7 @@ Instructions:
                     stop_execution = True
 
                 if self.checkpoint:
-                    self._checkpoint_state(runtime_state)
+                    await self._checkpoint_state(runtime_state)
 
                 runtime_state.runtime_steps += 1
                 step_count += 1
@@ -1772,10 +1770,10 @@ Instructions:
                 task = runtime_state.plan[task_result.task_id]
 
                 # deterministic transition based on critic
-                self.handle_critic_result(task, qa_response)
+                await self.handle_critic_result(task, qa_response)
 
             if self.checkpoint:
-                self._checkpoint_state(runtime_state)
+                await self._checkpoint_state(runtime_state)
 
             runtime_state.runtime_steps += 1
             step_count += 1
@@ -1861,7 +1859,7 @@ Instructions:
                                 task.error_msg = (
                                     f"Upstream dependency Task {dep_id} was cancelled."
                                 )
-                                self._record_task_status_event(
+                                await self._record_task_status_event(
                                     task.task_id,
                                     TaskStatus.CANCELLED,
                                     reason=f"Upstream task {dep_id} cancelled; dropping downstream branch.",
@@ -1922,7 +1920,7 @@ Instructions:
                     continue
                 step.status = TaskStatus.RUNNING
                 claimed_steps.append(step)
-                self._record_task_status_event(
+                await self._record_task_status_event(
                     step.task_id,
                     TaskStatus.RUNNING,
                     reason="claimed_for_execution",
@@ -1963,7 +1961,7 @@ Instructions:
                 # No such capability; mark errored so supervisor/QA can see what happened.
                 step.status = TaskStatus.ERRORED
                 step.error_msg = f"Unknown capability: {step.capability!r}"
-                self._record_task_status_event(
+                await self._record_task_status_event(
                     step.task_id,
                     TaskStatus.ERRORED,
                     reason="unknown capability",
@@ -2083,8 +2081,8 @@ Context-budget note:
                 step.result = result.output
                 step.status = TaskStatus.NEEDS_REVIEW
                 step.error_msg = None
-                self._record_task_result(step)
-                self._record_task_status_event(step.task_id, TaskStatus.NEEDS_REVIEW)
+                await self._record_task_result(step)
+                await self._record_task_status_event(step.task_id, TaskStatus.NEEDS_REVIEW)
                 return step
             except Exception as e:
                 last_error = e
@@ -2100,7 +2098,7 @@ Context-budget note:
                     }
                     step.metadata.setdefault("context_overflow", [])
                     step.metadata["context_overflow"].append(overflow_entry)
-                    self._record_metadata_append(
+                    await self._record_metadata_append(
                         step.task_id, "context_overflow", overflow_entry
                     )
 
@@ -2110,7 +2108,7 @@ Context-budget note:
 
                 step.status = TaskStatus.ERRORED
                 step.error_msg = str(e)
-                self._record_task_status_event(
+                await self._record_task_status_event(
                     step.task_id,
                     TaskStatus.ERRORED,
                     error_msg=step.error_msg,
@@ -2120,7 +2118,7 @@ Context-budget note:
         # Should be unreachable, but keep a safe fallback.
         step.status = TaskStatus.ERRORED
         step.error_msg = str(last_error) if last_error else "Unknown error"
-        self._record_task_status_event(
+        await self._record_task_status_event(
             step.task_id, TaskStatus.ERRORED, error_msg=step.error_msg
         )
         return step
@@ -2144,16 +2142,16 @@ Context-budget note:
                 task = ctx.deps.plan.get(task_id)
                 if task is not None:
                     task.status = status
-                    self._record_task_status_event(task_id, status)
+                    await self._record_task_status_event(task_id, status)
                 return f"Status for {task_id} is now {status}."
             return f"Error: No task with {task_id} found in plan. Be sure task_id actually exists."
 
-    def handle_critic_result(self, task: TaskItem, review: TaskQAResult):
+    async def handle_critic_result(self, task: TaskItem, review: TaskQAResult):
         """Apply the critic's QA result to a task and emit checkpoint events."""
         task.attempt_count += 1
         task.task_feedback = review
 
-        self._record_event(
+        await self._record_event(
             "critic_feedback",
             {
                 "task_id": task.task_id,
@@ -2165,7 +2163,7 @@ Context-budget note:
         if review.passed:
             task.status = TaskStatus.COMPLETED
             task.error_msg = None
-            self._record_task_status_event(task.task_id, task.status)
+            await self._record_task_status_event(task.task_id, task.status)
             return
 
         if task.attempt_count >= task.max_attempts:
@@ -2173,7 +2171,7 @@ Context-budget note:
             task.error_msg = (
                 f"Max retries reached ({task.attempt_count}/{task.max_attempts})."
             )
-            self._record_task_status_event(
+            await self._record_task_status_event(
                 task.task_id, task.status, error_msg=task.error_msg
             )
             return
@@ -2181,8 +2179,8 @@ Context-budget note:
         task.status = TaskStatus.RERUN
         task.error_msg = None
         task.sub_task_objective = f"{task.sub_task_objective}\n\nPrevious attempt failed review; feedback: {review.reasoning}"
-        self._record_task_status_event(task.task_id, task.status)
-        self._record_event(
+        await self._record_task_status_event(task.task_id, task.status)
+        await self._record_event(
             "task_patched",
             {
                 "task_id": task.task_id,

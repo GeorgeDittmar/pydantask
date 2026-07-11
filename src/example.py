@@ -7,7 +7,7 @@ import asyncio
 
 load_dotenv(find_dotenv())
 
-checkpoint_dir = Path("_checkpoint") / "pydantask_test_dag"
+checkpoint_dir = Path("_checkpoint") / "pydantask_test_dag_2"
 
 da = DeepAgent(
     # "I need a report of the news for today. Give me a high level summary and then a detailed version of major pieces of news as it pertains to the US and world. Output the report as markdown withj citations in the report. You must cite all sources at the end of the article.",
@@ -22,8 +22,8 @@ da = DeepAgent(
     # "Research for me `pydantask` harness. It is a python project. Give me a report on what it is, what problem does it try to solve, its features, and an example usage. As well include a bio summary on the main author of the harness. Write this up in markdown format and be sure to cite your sources.",
     model="gpt-5.4",
     trace=True,
-    # checkpoint=True,
-    # checkpoint_dir=checkpoint_dir,
+    checkpoint=True,
+    checkpoint_dir=checkpoint_dir,
 )
 
 result = asyncio.run(da.run())

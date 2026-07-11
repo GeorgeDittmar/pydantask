@@ -33,13 +33,13 @@ class DummyRecorder:
         self.summaries: list[dict] = []
         self._events_to_load: list[agent_mod.CheckpointEvent] = []
 
-    def record(self, event_type, payload):
+    async def record(self, event_type, payload):
         self.events.append((event_type, payload))
 
-    def record_summary(self, summary):
+    async def record_summary(self, summary):
         self.summaries.append(summary)
 
-    def load_events(self):
+    async def load_events(self):
         return list(self._events_to_load)
 
 
@@ -199,7 +199,8 @@ def test_dependencies_satisfied_only_completed(runtime_state: RuntimeState):
     assert da._dependencies_satisfied(t2, runtime_state) is True
 
 
-def test_handle_critic_result_transitions():
+@pytest.mark.asyncio
+async def test_handle_critic_result_transitions():
     da = make_minimal_deep_agent()
 
     task = TaskItem(
@@ -210,7 +211,9 @@ def test_handle_critic_result_transitions():
         status=TaskStatus.NEEDS_REVIEW,
     )
 
-    da.handle_critic_result(task, TaskQAResult(task_id=1, passed=True, reasoning="ok"))
+    await da.handle_critic_result(
+        task, TaskQAResult(task_id=1, passed=True, reasoning="ok")
+    )
     assert task.status == TaskStatus.COMPLETED
 
     task2 = TaskItem(
@@ -222,7 +225,7 @@ def test_handle_critic_result_transitions():
         attempt_count=0,
         max_attempts=2,
     )
-    da.handle_critic_result(
+    await da.handle_critic_result(
         task2, TaskQAResult(task_id=2, passed=False, reasoning="not good")
     )
     assert task2.status == TaskStatus.RERUN
@@ -230,7 +233,7 @@ def test_handle_critic_result_transitions():
     assert "Previous attempt failed review" in task2.sub_task_objective
 
     task2.attempt_count = 2
-    da.handle_critic_result(
+    await da.handle_critic_result(
         task2, TaskQAResult(task_id=2, passed=False, reasoning="still bad")
     )
     assert task2.status == TaskStatus.FAILED
@@ -371,7 +374,8 @@ async def test_add_task_emits_checkpoint_event_when_enabled(
     assert payload["next_task_id"] == runtime_state.next_task_id
 
 
-def test_replay_checkpoint_rebuilds_state(runtime_state: RuntimeState):
+@pytest.mark.asyncio
+async def test_replay_checkpoint_rebuilds_state(runtime_state: RuntimeState):
     da = make_minimal_deep_agent()
     recorder = DummyRecorder()
 
@@ -413,7 +417,7 @@ def test_replay_checkpoint_rebuilds_state(runtime_state: RuntimeState):
     ]
 
     da._checkpoint_recorder = recorder
-    da._replay_checkpoint(runtime_state)
+    await da._replay_checkpoint(runtime_state)
 
     assert 3 in runtime_state.plan
     task = runtime_state.plan[3]
@@ -425,7 +429,8 @@ def test_replay_checkpoint_rebuilds_state(runtime_state: RuntimeState):
     assert runtime_state.next_task_id >= 4
 
 
-def test_checkpoint_state_records_summary(runtime_state: RuntimeState):
+@pytest.mark.asyncio
+async def test_checkpoint_state_records_summary(runtime_state: RuntimeState):
     da = make_minimal_deep_agent()
     recorder = DummyRecorder()
     da._checkpoint_recorder = recorder
@@ -438,7 +443,7 @@ def test_checkpoint_state_records_summary(runtime_state: RuntimeState):
         status=TaskStatus.READY,
     )
 
-    da._checkpoint_state(runtime_state)
+    await da._checkpoint_state(runtime_state)
     assert len(recorder.summaries) == 1
     summary = recorder.summaries[0]
     assert summary["total_tasks"] == 1

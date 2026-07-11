@@ -360,7 +360,7 @@ async def append_scratch_note(
 
     recorder = getattr(ctx.deps.runtime_state, "checkpoint_recorder", None)
     if recorder is not None:
-        recorder.record(
+        await recorder.record(
             "scratch_note_appended",
             {
                 "task_id": ctx.deps.task.task_id,
