@@ -113,6 +113,7 @@ class DeepAgent:
         supervisor_agent: Optional[Agent] = None,
         researcher_agent: Optional[Agent] = None,
         max_steps: int = 20,
+        max_steps_no_progress: int = 5,
         set_token_budget: Union[int, None] = None,
         sub_agents: Union[None, list[CapabilityDescription]] = None,
         # default output type for the producer agent, can be set to a default type or custom pydantic model for better structure and validation of final output
@@ -1281,7 +1282,7 @@ Instructions:
             await self._record_event(
                 "task_added",
                 {
-                    "task": task.model_dump(),
+                    "task": task.model_dump(mode="json"),
                     "next_task_id": ctx.deps.next_task_id,
                 },
             )
@@ -1320,6 +1321,7 @@ Instructions:
         ctx: RunContext[RuntimeState],
         task_id: int,
         sub_task_objective: Optional[str] = None,
+        capability: Optional[str] = None,
         dependencies: Optional[List[int]] = None,
     ):
         """Tool: Patch Task.
@@ -1333,6 +1335,7 @@ Instructions:
             ctx: ``RunContext`` carrying the current ``RuntimeState``.
             task_id: Identifier of the task to modify.
             sub_task_objective: New sub-task objective, if changing.
+            capability: New capability to use, if changing
             dependencies: Updated list of dependency IDs, if changing.
         """
         async with self._plan_lock:
@@ -1348,6 +1351,10 @@ Instructions:
             if dependencies is not None:
                 task.sub_task_dependencies = dependencies
                 payload["dependencies"] = task.sub_task_dependencies
+
+            if capability is not None:
+                task.capability = capability
+                payload["capability"] = task.capability
 
             if len(payload) > 1:
                 await self._record_event("task_patched", payload)
@@ -1639,7 +1646,7 @@ Instructions:
 
             await self._record_event(
                 "supervisor_decision",
-                supervisor_response.model_dump(),
+                supervisor_response.model_dump(mode="json"),
             )
 
             if supervisor_response.all_tasks_completed:
@@ -2155,7 +2162,7 @@ Context-budget note:
             "critic_feedback",
             {
                 "task_id": task.task_id,
-                "feedback": review.model_dump(),
+                "feedback": review.model_dump(mode="json"),
                 "attempt_count": task.attempt_count,
             },
         )
