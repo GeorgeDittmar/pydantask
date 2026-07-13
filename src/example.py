@@ -7,7 +7,7 @@ import asyncio
 
 load_dotenv(find_dotenv())
 
-checkpoint_dir = Path("_checkpoint") / "recommender_survey_2"
+checkpoint_dir = Path("_checkpoint") / "compression_tests"
 
 da = DeepAgent(
     # "I need a report of the news for today. Give me a high level summary and then a detailed version of major pieces of news as it pertains to the US and world. Output the report as markdown withj citations in the report. You must cite all sources at the end of the article.",
@@ -19,7 +19,8 @@ da = DeepAgent(
     # Then have a conditional check to see which research result from task 1 and 2 is longer. If the lenght of task 1 is larger than task 2, create either a task about hollow moon. Otherwise create a about quantom physics.
     # Finally take the song and whichever research topic passed the conditional check and combine them into a single output in song form. Jsut have the song do not let the producer agent output anything else with its task.
     # Again this is a test to see how well you follow creating a plan.""",
-    "Research for me `pydantask` harness. It is a python project. Give me a report on what it is, what problem does it try to solve, its features, and an example usage. As well include a bio summary on the main author of the harness. Write this up in markdown format and be sure to cite your sources.",
+    # "Research for me `pydantask` harness. It is a python project. Give me a report on what it is, what problem does it try to solve, its features, and an example usage. As well include a bio summary on the main author of the harness. Write this up in markdown format and be sure to cite your sources.",
+    "Write a story based on real science. I want it to be a realistic scifi novel about mankinds first contact with aliens. Base it in theoritically possible scientific basis. write 6 chapters.",
     model="gpt-5.4",
     trace=True,
     # checkpoint=True,
@@ -33,11 +34,11 @@ print(f"Checkpoint events saved to: {da.checkpoint_path}")
 # pprint(result.model_dump())
 # Write JSON data to a file
 
-with open("recommender_survey.json", "w", encoding="utf-8") as json_file:
+with open("Compression_test.json", "w", encoding="utf-8") as json_file:
     json_file.write(result.model_dump_json(indent=2))
 
 final_output = result.final_result.detailed_output if result.final_result else ""
-with open("recommender_survey.md", "w", encoding="utf-8") as f:
+with open("Compression_test.md", "w", encoding="utf-8") as f:
     f.write(final_output)
 
 pprint(final_output or "<no final result>")

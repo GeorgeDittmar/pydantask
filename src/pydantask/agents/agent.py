@@ -43,6 +43,8 @@ from pydantask.prompts.prompts_v2 import (
     DYNAMIC_SUPERVISOR_SYS_PROMPT,
     BOOTSTRAP_INSTURCT,
     ORCHESTRATION_INSTRUCT,
+    COMPRESSED_RESEARCH_SYS_PROMPT,
+    COMPRESSED_SUPER_PROMPT
 )
 
 from pydantask.models import (
@@ -250,7 +252,7 @@ class DeepAgent:
         self._supervisor_agent = supervisor_agent or Agent(
             model=self._retry_model,
             name="_dynamic_Supervisor_Agent",
-            system_prompt=DYNAMIC_SUPERVISOR_SYS_PROMPT,
+            system_prompt=COMPRESSED_SUPER_PROMPT,
             output_type=SupervisorDecision,
             deps_type=RuntimeState,
             tools=self._default_supervisor_tools(),
@@ -281,7 +283,7 @@ class DeepAgent:
         self._researcher_agent = researcher_agent or Agent(
             model=self._retry_model,
             name="_default_Research_Agent",
-            system_prompt=RESEARCH_AGENT_SYS_PROMPT,
+            system_prompt=COMPRESSED_RESEARCH_SYS_PROMPT,
             tools=_default_research_tool_set,
             deps_type=TaskRunDeps,
             output_type=TaskResult,
