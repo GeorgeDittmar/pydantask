@@ -44,7 +44,7 @@ from pydantask.prompts.prompts_v2 import (
     BOOTSTRAP_INSTURCT,
     ORCHESTRATION_INSTRUCT,
     COMPRESSED_RESEARCH_SYS_PROMPT,
-    COMPRESSED_SUPER_PROMPT
+    COMPRESSED_SUPER_PROMPT,
 )
 
 from pydantask.models import (
@@ -133,24 +133,6 @@ class DeepAgent:
             objective: The overall objective / task the deep agent is working on.
             model: Model identifier or ``pydantic_ai.models.Model`` instance to use
                 for all sub-agents. Defaults to ``"gpt-5.2"``.
-            seed_plan: Optional pre-defined :class:`~pydantask.models.Plan` to seed
-                the initial task DAG. If provided, it is loaded into
-                :class:`~pydantask.models.RuntimeState.plan` at the start of
-                :meth:`run`.
-
-                Notes:
-                * Task IDs are respected and used as keys in ``RuntimeState.plan``.
-                * ``RuntimeState.next_task_id`` is set to ``max(task_id) + 1``.
-                * Dependencies are validated to ensure they reference existing tasks.
-            planning_mode: Controls whether the supervisor is allowed to modify the
-                plan at runtime.
-
-                * ``"llm"``: The supervisor may add/patch tasks.
-                * ``"hybrid"``: Same as ``"llm"``, but typically used with
-                  ``seed_plan`` to provide an initial DAG the supervisor can extend.
-                * ``"fixed"``: The supervisor is not given the plan-mutation tools
-                  (``add_task``/``patch_task``) and can only execute/transition the
-                  existing tasks.
             critic_agent: Optional pre-configured critic ``Agent``. If omitted, a
                 default critic agent is created.
             supervisor_agent: Optional supervisor ``Agent`` used to manage the task
@@ -715,7 +697,7 @@ class DeepAgent:
             payload["error_msg"] = error_msg
         await self._record_event("task_status_updated", payload)
 
-    async def _persist_full_task_result_payload(
+    def _persist_full_task_result_payload(
         self, task_id: int, result_payload: Dict[str, Any]
     ) -> str | None:
         """Persist the full TaskResult payload under the checkpoint directory.
@@ -732,7 +714,7 @@ class DeepAgent:
         relpath = f"{TASK_RESULT_ARTIFACT_DIRNAME}/task_{task_id}.json"
         path = self.checkpoint_path / relpath
         with path.open("w", encoding="utf-8") as fh:
-            await asyncio.to_thread(json.dump, result_payload, fh, ensure_ascii=False)
+            json.dump(result_payload, fh, ensure_ascii=False)
 
         return relpath
 
@@ -766,9 +748,7 @@ class DeepAgent:
         detailed_output = result_payload.get("detailed_output") or ""
         if detailed_output and len(detailed_output) > EVENT_RESULT_DETAIL_TRUNCATION:
             # Persist the full payload to a sidecar file so replay can restore it.
-            full_result_path = await self._persist_full_task_result_payload(
-                task.task_id, result_payload
-            )
+            full_result_path = await asyncio.to_thread(self._persist_full_task_result_payload,task.task_id, result_payload)
 
             truncation_notice = f"\n\n...[TRUNCATED {len(detailed_output) - EVENT_RESULT_DETAIL_TRUNCATION} chars]..."
             result_payload["detailed_output"] = (
@@ -1909,9 +1889,6 @@ Instructions:
         ]
         # if no ready steps return empty list
         if len(ready_steps) == 0:
-            return []
-
-        if not ready_steps:
             return []
 
         # 2. Claim tasks (READY/RERUN -> RUNNING) atomically so we don't schedule the same
