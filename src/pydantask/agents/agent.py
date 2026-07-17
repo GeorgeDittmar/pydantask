@@ -45,6 +45,9 @@ from pydantask.prompts.prompts_v2 import (
     ORCHESTRATION_INSTRUCT,
     COMPRESSED_RESEARCH_SYS_PROMPT,
     COMPRESSED_SUPER_PROMPT,
+    COMPRESSED_CRITIC_SYS_PROMPT,
+    COMPRESSED_WORKER_SYS_PROMPT,
+    COMPRESSED_PRODUCER_SYS_PROMPT
 )
 
 from pydantask.models import (
@@ -224,7 +227,7 @@ class DeepAgent:
         self._critic_agent = critic_agent or Agent(
             model=self._retry_model,
             name="_default_Critic_Agent",
-            system_prompt=CRITIC_SYS_PROMPT,
+            system_prompt=COMPRESSED_CRITIC_SYS_PROMPT,
             output_type=TaskQAResult,
             deps_type=RuntimeState,
             tools=[get_current_datetime, think_tool],
@@ -429,7 +432,7 @@ class DeepAgent:
         producer_agent = Agent(
             model=self._retry_model,
             name="_default_Producer_agent",
-            system_prompt=PRODUCER_SYS_PROMPT,
+            system_prompt=COMPRESSED_PRODUCER_SYS_PROMPT,
             deps_type=TaskRunDeps,
             output_type=TaskResult,
             tools=[
@@ -458,7 +461,7 @@ class DeepAgent:
         general_worker_agent = Agent(
             model=self._retry_model,
             name="_default_General_Worker_Agent",
-            system_prompt=WORKER_AGENT_SYS_PROMPT,
+            system_prompt=COMPRESSED_WORKER_SYS_PROMPT,
             deps_type=TaskRunDeps,
             output_type=TaskResult,
             tools=[
