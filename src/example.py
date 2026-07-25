@@ -7,7 +7,7 @@ import asyncio
 
 load_dotenv(find_dotenv())
 
-checkpoint_dir = Path("_checkpoint") / "compression_tests"
+checkpoint_dir = Path("_checkpoint") / "automated_ontology_generation_v5"
 
 da = DeepAgent(
     # "I need a report of the news for today. Give me a high level summary and then a detailed version of major pieces of news as it pertains to the US and world. Output the report as markdown withj citations in the report. You must cite all sources at the end of the article.",
@@ -20,11 +20,11 @@ da = DeepAgent(
     # Finally take the song and whichever research topic passed the conditional check and combine them into a single output in song form. Jsut have the song do not let the producer agent output anything else with its task.
     # Again this is a test to see how well you follow creating a plan.""",
     # "Research for me `pydantask` harness. It is a python project. Give me a report on what it is, what problem does it try to solve, its features, and an example usage. As well include a bio summary on the main author of the harness. Write this up in markdown format and be sure to cite your sources.",
-    "Write a story based on real science. I want it to be a realistic scifi novel about mankinds first contact with aliens. Base it in theoritically possible scientific basis. write 6 chapters.",
+    "I need a deep survey of papers for automated taxonomy, ontology, and knowledge graph creation from unstructured text. This is something we want to use for the follow use case, insurance medical benefit booklets that need to be tied to an api layer that has information that needs to be tied to the unstructued contents of the booklets for regulatory reasons.",
     model="gpt-5.4",
     trace=True,
-    # checkpoint=True,
-    # checkpoint_dir=checkpoint_dir,
+    checkpoint=True,
+    checkpoint_dir=checkpoint_dir,
 )
 
 result = asyncio.run(da.run())
@@ -34,11 +34,11 @@ print(f"Checkpoint events saved to: {da.checkpoint_path}")
 # pprint(result.model_dump())
 # Write JSON data to a file
 
-with open("Compression_test.json", "w", encoding="utf-8") as json_file:
+with open("automated_ontology_generation_v5.json", "w", encoding="utf-8") as json_file:
     json_file.write(result.model_dump_json(indent=2))
 
 final_output = result.final_result.detailed_output if result.final_result else ""
-with open("Compression_test.md", "w", encoding="utf-8") as f:
+with open("automated_ontology_generation_v5.md", "w", encoding="utf-8") as f:
     f.write(final_output)
 
 pprint(final_output or "<no final result>")
