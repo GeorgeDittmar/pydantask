@@ -20,8 +20,8 @@ da = DeepAgent(
     # Finally take the song and whichever research topic passed the conditional check and combine them into a single output in song form. Jsut have the song do not let the producer agent output anything else with its task.
     # Again this is a test to see how well you follow creating a plan.""",
     # "Research for me `pydantask` harness. It is a python project. Give me a report on what it is, what problem does it try to solve, its features, and an example usage. As well include a bio summary on the main author of the harness. Write this up in markdown format and be sure to cite your sources.",
-    "I need a deep survey of papers for automated taxonomy, ontology, and knowledge graph creation from unstructured text. This is something we want to use for the follow use case, insurance medical benefit booklets that need to be tied to an api layer that has information that needs to be tied to the unstructued contents of the booklets for regulatory reasons.",
-    model="gpt-5.4",
+    "Write me a detailed report on harness engineering, loop engineering, and next trend in agentic engineering.",
+    model="qwen",
     trace=True,
     checkpoint=True,
     checkpoint_dir=checkpoint_dir,
