@@ -47,7 +47,7 @@ from pydantask.prompts.prompts_v2 import (
     COMPRESSED_SUPER_PROMPT,
     COMPRESSED_CRITIC_SYS_PROMPT,
     COMPRESSED_WORKER_SYS_PROMPT,
-    COMPRESSED_PRODUCER_SYS_PROMPT
+    COMPRESSED_PRODUCER_SYS_PROMPT,
 )
 
 from pydantask.models import (
@@ -114,13 +114,12 @@ class DeepAgent:
         model: str | Model = "gpt-5.2",
         # seed_plan: Plan | None = None,
         # planning_mode: Literal["llm", "fixed", "hybrid"] = "llm",
-        critic_agent: Optional[Agent] = None,
-        supervisor_agent: Optional[Agent] = None,
-        researcher_agent: Optional[Agent] = None,
+        default_capabilities_enabled: bool = False,
+        custom_supervisor: Agent = None,
         max_steps: int = 20,
         max_steps_no_progress: int = 5,
         set_token_budget: Union[int, None] = None,
-        sub_agents: Union[None, list[CapabilityDescription]] = None,
+        capabilities: Union[None, list[CapabilityDescription]] = None,
         # default output type for the producer agent, can be set to a default type or custom pydantic model for better structure and validation of final output
         # output_type: Type = TaskResult,
         # planning_mode: str = "dynamic",  # "static" | "dynamic"
@@ -222,19 +221,10 @@ class DeepAgent:
         # We inject the retrying httpx client into the provider for durability.
         self._retry_model = self._build_model(model)
 
-        # NOTE: Filesystem tools exist in `pydantask.tools.default_tools`, but are not
-        # enabled by default. The harness is currently in-memory focused.
-        self._critic_agent = critic_agent or Agent(
-            model=self._retry_model,
-            name="_default_Critic_Agent",
-            system_prompt=COMPRESSED_CRITIC_SYS_PROMPT,
-            output_type=TaskQAResult,
-            deps_type=RuntimeState,
-            tools=[get_current_datetime, think_tool],
-            # end_strategy="exhaustive",
-        )
+        if custom_supervisor:
+            self._supervisor_agent = custom_supervisor
 
-        self._supervisor_agent = supervisor_agent or Agent(
+        self._supervisor_agent = custom_supervisor or Agent(
             model=self._retry_model,
             name="_dynamic_Supervisor_Agent",
             system_prompt=COMPRESSED_SUPER_PROMPT,
@@ -243,6 +233,21 @@ class DeepAgent:
             tools=self._default_supervisor_tools(),
             end_strategy="exhaustive",
         )
+
+        _default_capabiliites = []
+        if default_capabilities_enabled:
+            _default_capabiliites = self._setup_default_capabilities()
+
+        self._capability_registry = self._setup_capability_registry(
+            _default_capabiliites, additonal_capabilities=capabilities
+        )
+        # Scheduler/system notes injected into the next supervisor prompt.
+        self._last_scheduler_report: str = ""
+
+    def _setup_default_capabilities(self) -> List[CapabilityDescription]:
+
+        # NOTE: Filesystem tools exist in `pydantask.tools.default_tools`, but are not
+        # enabled by default. The harness is currently in-memory focused.
 
         # TODO: rework some of these tools
         tavily_api_key = os.getenv("TAVILY_API_KEY", None)
@@ -265,7 +270,17 @@ class DeepAgent:
         else:
             _default_research_tool_set.append(tavily_search_tool(tavily_api_key))
 
-        self._researcher_agent = researcher_agent or Agent(
+        self._critic_agent = Agent(
+            model=self._retry_model,
+            name="_default_Critic_Agent",
+            system_prompt=COMPRESSED_CRITIC_SYS_PROMPT,
+            output_type=TaskQAResult,
+            deps_type=RuntimeState,
+            tools=[get_current_datetime, think_tool],
+            # end_strategy="exhaustive",
+        )
+
+        self._researcher_agent = Agent(
             model=self._retry_model,
             name="_default_Research_Agent",
             system_prompt=COMPRESSED_RESEARCH_SYS_PROMPT,
@@ -274,12 +289,67 @@ class DeepAgent:
             output_type=TaskResult,
         )
 
-        self._capability_registry = self._setup_capabilities(
-            additonal_capabilities=sub_agents
+        general_worker_agent = Agent(
+            model=self._retry_model,
+            name="_default_General_Worker_Agent",
+            system_prompt=COMPRESSED_WORKER_SYS_PROMPT,
+            deps_type=TaskRunDeps,
+            output_type=TaskResult,
+            tools=[
+                # list_documents,
+                list_completed_tasks,
+                get_task_result,
+                # Cross-agent "consult" (bounded, logged)
+                self.consult_capability,
+                think_tool,
+                append_scratch_note,
+                read_scratch_notes,
+                get_current_datetime,
+            ],
         )
 
-        # Scheduler/system notes injected into the next supervisor prompt.
-        self._last_scheduler_report: str = ""
+        producer_agent = Agent(
+            model=self._retry_model,
+            name="_default_Producer_agent",
+            system_prompt=COMPRESSED_PRODUCER_SYS_PROMPT,
+            deps_type=TaskRunDeps,
+            output_type=TaskResult,
+            tools=[
+                # Plan / history inspection
+                list_completed_tasks,
+                get_task_result,
+                # Cross-agent "consult" (bounded, logged)
+                self.consult_capability,
+                # Reflection
+                think_tool,
+            ],
+        )
+
+        producer = CapabilityDescription(
+            name="producer_agent",
+            description="Produces output based on information from various sources and sub agents.",
+            tool_func=as_runner(producer_agent),
+        )
+
+        researcher = CapabilityDescription(
+            name="research_agent",
+            description="Tool to research information. This could include searching the web or querying a data source.",
+            tool_func=as_runner(self._researcher_agent),
+        )
+
+        gen_worker = CapabilityDescription(
+            name="worker_agent",
+            description=(
+                "General-purpose worker for analysis, summarization, document editing, "
+                "code or log interpretation, and other non-research tasks that operate on "
+                "existing context."
+            ),
+            tool_func=as_runner(general_worker_agent),
+        )
+
+        capabilities_list = [producer, researcher, gen_worker]
+
+        return capabilities_list
 
     async def aclose(self) -> None:
         """Close underlying resources used by this ``DeepAgent`` instance.
@@ -411,8 +481,10 @@ class DeepAgent:
 
         return AsyncClient(transport=transport)
 
-    def _setup_capabilities(
-        self, additonal_capabilities: Union[None, list[CapabilityDescription]] = None
+    def _setup_capability_registry(
+        self,
+        default_capabilities,
+        additonal_capabilities: Union[None, list[CapabilityDescription]] = None,
     ) -> Dict:
         """Create the default sub-agent capability registry.
 
@@ -429,73 +501,15 @@ class DeepAgent:
             its description and callable agent/tool.
         """
 
-        producer_agent = Agent(
-            model=self._retry_model,
-            name="_default_Producer_agent",
-            system_prompt=COMPRESSED_PRODUCER_SYS_PROMPT,
-            deps_type=TaskRunDeps,
-            output_type=TaskResult,
-            tools=[
-                # Plan / history inspection
-                list_completed_tasks,
-                get_task_result,
-                # Cross-agent "consult" (bounded, logged)
-                self.consult_capability,
-                # Reflection
-                think_tool,
-            ],
-        )
-
-        producer = CapabilityDescription(
-            name="producer_agent",
-            description="Produces output based on information from various sources and sub agents.",
-            tool_func=as_runner(producer_agent),
-        )
-
-        researcher = CapabilityDescription(
-            name="research_agent",
-            description="Tool to research information. This could include searching the web or querying a data source.",
-            tool_func=as_runner(self._researcher_agent),
-        )
-
-        general_worker_agent = Agent(
-            model=self._retry_model,
-            name="_default_General_Worker_Agent",
-            system_prompt=COMPRESSED_WORKER_SYS_PROMPT,
-            deps_type=TaskRunDeps,
-            output_type=TaskResult,
-            tools=[
-                # list_documents,
-                list_completed_tasks,
-                get_task_result,
-                # Cross-agent "consult" (bounded, logged)
-                self.consult_capability,
-                think_tool,
-                append_scratch_note,
-                read_scratch_notes,
-                get_current_datetime,
-            ],
-        )
-
-        gen_worker = CapabilityDescription(
-            name="worker_agent",
-            description=(
-                "General-purpose worker for analysis, summarization, document editing, "
-                "code or log interpretation, and other non-research tasks that operate on "
-                "existing context."
-            ),
-            tool_func=as_runner(general_worker_agent),
-        )
-
-        _capabilities_list = [producer, researcher, gen_worker]
-
+        _capabilities_list = default_capabilities
         # if additional sub agents been supplied then add those to the registry
         if additonal_capabilities:
             _capabilities_list.extend(additonal_capabilities)
 
         _capability_registry = {
-            sub_agent.name: sub_agent for sub_agent in _capabilities_list
+            capability.name: capability for capability in _capabilities_list
         }
+
         # each agent gets its own unique id
         return _capability_registry
 
@@ -751,7 +765,9 @@ class DeepAgent:
         detailed_output = result_payload.get("detailed_output") or ""
         if detailed_output and len(detailed_output) > EVENT_RESULT_DETAIL_TRUNCATION:
             # Persist the full payload to a sidecar file so replay can restore it.
-            full_result_path = await asyncio.to_thread(self._persist_full_task_result_payload,task.task_id, result_payload)
+            full_result_path = await asyncio.to_thread(
+                self._persist_full_task_result_payload, task.task_id, result_payload
+            )
 
             truncation_notice = f"\n\n...[TRUNCATED {len(detailed_output) - EVENT_RESULT_DETAIL_TRUNCATION} chars]..."
             result_payload["detailed_output"] = (
