@@ -23,6 +23,7 @@ da = DeepAgent(
     # "Write me a detailed report on harness engineering, loop engineering, and next trend in agentic engineering.",
     model="gpt-5.4",
     trace=True,
+    max_steps=10,
     default_capabilities_enabled=True,
     # checkpoint=True,
     # checkpoint_dir=checkpoint_dir,

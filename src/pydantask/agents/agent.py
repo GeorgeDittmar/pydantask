@@ -273,7 +273,7 @@ class DeepAgent:
         self._critic_agent = Agent(
             model=self._retry_model,
             name="_default_Critic_Agent",
-            system_prompt=COMPRESSED_CRITIC_SYS_PROMPT,
+            system_prompt=CRITIC_SYS_PROMPT,
             output_type=TaskQAResult,
             deps_type=RuntimeState,
             tools=[get_current_datetime, think_tool],
@@ -878,17 +878,11 @@ class DeepAgent:
             
             Evaluate if the following worker output completed the specified task it was given.
 
-            Overall Objective:
-            {ctx.objective}
-
-            Sub Task Definition (TaskItem):
+            TaskItem for Review:
             {task.model_dump_json(indent=2)}
 
             Worker Output (TaskResult):
             {worker_output}
-
-            In-memory documents / scratchpads:
-            {ctx.document_store}
             
             """
         return _prompt
