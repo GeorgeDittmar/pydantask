@@ -59,6 +59,7 @@ from pydantask.models import (
     SupervisorDecision,
     CapabilityDescription,
     TaskResult,
+    ArtifactRef,
     DeepAgentRunResult,
     TaskRunDeps,
     TracingBackend,
@@ -73,6 +74,12 @@ from pydantask.tools.default_tools import (
     list_completed_tasks,
     read_scratch_notes,
     think_tool,
+)
+from pydantask.tools.artifact_tools import (
+    put_artifact,
+    get_artifact,
+    list_artifacts,
+    attach_artifact_to_result,
 )
 from pydantask.manager.checkpointer import CheckpointEvent, CheckpointRecorder
 from pydantask.observe.tracing import (
@@ -257,6 +264,11 @@ class DeepAgent:
             append_scratch_note,
             read_scratch_notes,
             get_current_datetime,
+            # Artifact store (segregated, resumable)
+            put_artifact,
+            get_artifact,
+            list_artifacts,
+            attach_artifact_to_result,
             # fetch_url_content,
             # Cross-agent "consult" (bounded, logged)
             self.consult_capability,
@@ -299,6 +311,11 @@ class DeepAgent:
                 # list_documents,
                 list_completed_tasks,
                 get_task_result,
+                # Artifact store (segregated, resumable)
+                put_artifact,
+                get_artifact,
+                list_artifacts,
+                attach_artifact_to_result,
                 # Cross-agent "consult" (bounded, logged)
                 self.consult_capability,
                 think_tool,
@@ -318,6 +335,11 @@ class DeepAgent:
                 # Plan / history inspection
                 list_completed_tasks,
                 get_task_result,
+                # Artifact store (segregated, resumable)
+                put_artifact,
+                get_artifact,
+                list_artifacts,
+                attach_artifact_to_result,
                 # Cross-agent "consult" (bounded, logged)
                 self.consult_capability,
                 # Reflection
@@ -880,7 +902,7 @@ class DeepAgent:
 
             TaskItem for Review:
             {task.model_dump_json(indent=2)}
-
+            
             Worker Output (TaskResult):
             {worker_output}
             
@@ -2076,6 +2098,26 @@ Context-budget note:
                     runtime_state, result, label=f"task:{step.task_id}"
                 )
                 step.result = result.output
+
+                # Merge any artifacts the agent attached via `attach_artifact_to_result`.
+                # Tools can't mutate the final TaskResult object directly, so they
+                # stage refs in task.metadata["result_artifacts"].
+                if isinstance(step.result, TaskResult):
+                    pending = step.metadata.get("result_artifacts")
+                    if isinstance(pending, list) and pending:
+                        existing_ids = {
+                            a.artifact_id for a in (step.result.artifacts or [])
+                        }
+                        for item in pending:
+                            try:
+                                ar = ArtifactRef.model_validate(item)
+                            except Exception:
+                                continue
+                            if ar.artifact_id in existing_ids:
+                                continue
+                            step.result.artifacts.append(ar)
+                            existing_ids.add(ar.artifact_id)
+
                 step.status = TaskStatus.NEEDS_REVIEW
                 step.error_msg = None
                 await self._record_task_result(step)

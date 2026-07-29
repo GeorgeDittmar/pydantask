@@ -155,6 +155,39 @@ class SourceRef(BaseModel):
     )
 
 
+class ArtifactRef(BaseModel):
+    """Reference to a stored artifact (pointer, not payload).
+
+    Artifacts are intended to live in a segregated filestore owned by the
+    runtime (usually under the checkpoint directory). Tasks should prefer
+    storing large or non-text outputs as artifacts and returning only these
+    references in `TaskResult`.
+
+    Notes:
+      - `artifact_id` is typically content-addressed (e.g. `sha256:<hex>`).
+      - `uri` is typically checkpoint-relative (e.g. `artifacts/<hash>.json`).
+    """
+
+    artifact_id: str = Field(description="Stable identifier for this artifact.")
+    uri: str = Field(description="Location/URI for retrieving this artifact.")
+    name: Optional[str] = Field(
+        default=None, description="Optional human-friendly label for the artifact."
+    )
+    mime_type: str = Field(default="text/plain", description="MIME type.")
+    size_bytes: Optional[int] = Field(default=None, description="Size in bytes.")
+    sha256: Optional[str] = Field(
+        default=None,
+        description="Optional sha256 hex digest (redundant if artifact_id encodes it).",
+    )
+    created_at: datetime = Field(
+        default_factory=datetime.now, description="When the artifact was created."
+    )
+    preview: Optional[str] = Field(
+        default=None,
+        description="Optional small preview snippet (truncated) to avoid large tool reads.",
+    )
+
+
 class TaskResult(BaseModel):
     """Canonical result type for any sub-task executed by DeepAgent.
 
@@ -167,6 +200,8 @@ class TaskResult(BaseModel):
         notes: Any notes or scratch references used while completing this task.
         sources: Structured list of :class:`SourceRef` citations used in this
             result. Inline citations should reference ``SourceRef.id`` values.
+        artifacts: References to stored artifacts produced by this task.
+        data: Optional structured payload for machine-readable outputs.
         error_msg: Explanation of what went wrong if the task errored or failed.
         metadata: Optional free-form metadata specific to this task execution.
     """
@@ -200,6 +235,23 @@ class TaskResult(BaseModel):
             "Structured list of sources used to produce this result. "
             "Inline citations in summaries should reference SourceRef.id values, "
             "e.g. [1], [2]."
+        ),
+    )
+
+    artifacts: List[ArtifactRef] = Field(
+        default_factory=list,
+        description=(
+            "References to any stored artifacts produced by this task (tables, raw dumps, "
+            "code patches, datasets, long JSON, etc.). Prefer using artifacts over placing "
+            "large blobs inline in `detailed_output`."
+        ),
+    )
+
+    data: Dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Optional structured payload for machine-readable outputs. Keep this small; "
+            "for large structured outputs, store as an artifact and place a reference in `artifacts`."
         ),
     )
 
