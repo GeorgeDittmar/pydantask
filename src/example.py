@@ -1,5 +1,6 @@
-from pydantask.models import Plan, TaskItem
+from pydantask.models import Plan, TaskItem, CapabilityDescription
 from pydantask.agents import DeepAgent
+from pydantask.capabilities.runner_v2 import as_runner
 from dotenv import load_dotenv, find_dotenv
 from pprint import pprint
 from pathlib import Path
@@ -7,10 +8,20 @@ import asyncio
 
 load_dotenv(find_dotenv())
 
-checkpoint_dir = Path("_checkpoint") / "compression_tests"
+checkpoint_dir = Path("_checkpoint") / "report_test_2"
 
+async def write_something_to_file(content:str, filename:str) -> str:
+
+    with open(f"tmp/{filename}", "w") as f:
+        f.write(content)
+    
+    return f"{filename} was written to disk at tmp/{filename}"
+
+writing_capability = CapabilityDescription(name="write_to_file", 
+                                           description="Tool to write content to a file on disk. Use when there is output needing to be saved for a subtask, or a final output.",
+                                           tool_func=as_runner(write_something_to_file))
 da = DeepAgent(
-    # "I need a report of the news for today. Give me a high level summary and then a detailed version of major pieces of news as it pertains to the US and world. Output the report as markdown withj citations in the report. You must cite all sources at the end of the article.",
+    "I need a report of the news for today. Give me a high level summary and then a detailed version of major pieces of news as it pertains to the US and world. Output the report as markdown withj citations in the report. You must cite all sources at the end of the article.",
     # """I am testing your Deep Agent ability to plan and execute on an objective. I want to test your ability to create plans.
     # Create 2 Research tasks. Besure to have mentioned in the instructions to not actually search but make something up.
     #   - 1: Pretend to Research about the man on the moon.
@@ -20,13 +31,14 @@ da = DeepAgent(
     # Finally take the song and whichever research topic passed the conditional check and combine them into a single output in song form. Jsut have the song do not let the producer agent output anything else with its task.
     # Again this is a test to see how well you follow creating a plan.""",
     # "Research for me `pydantask` harness. It is a python project. Give me a report on what it is, what problem does it try to solve, its features, and an example usage. As well include a bio summary on the main author of the harness. Write this up in markdown format and be sure to cite your sources.",
-    "Write a report on Pydantask agent harness. Not Pydantic-ai. Besure to have sources at the end of any report you write.",
+    # "Write to disk a file thats a haiku about space travel. Give it an appropriate name, and content.",
     model="gpt-5.4",
     trace=True,
     max_steps=10,
     default_capabilities_enabled=True,
-    # checkpoint=True,
-    # checkpoint_dir=checkpoint_dir,
+    # capabilities=[writing_capability],
+    checkpoint=True,
+    checkpoint_dir=checkpoint_dir,
 )
 
 result = asyncio.run(da.run())
@@ -36,11 +48,13 @@ print(f"Checkpoint events saved to: {da.checkpoint_path}")
 # pprint(result.model_dump())
 # Write JSON data to a file
 
-with open("Compression_test.json", "w", encoding="utf-8") as json_file:
+with open("Compression_test_2.json", "w", encoding="utf-8") as json_file:
     json_file.write(result.model_dump_json(indent=2))
 
 final_output = result.final_result.detailed_output if result.final_result else ""
-with open("Compression_test.md", "w", encoding="utf-8") as f:
+with open("Compression_test_2.md", "w", encoding="utf-8") as f:
     f.write(final_output)
+
+final_output = result.final_result.detailed_output if result.final_result else ""
 
 pprint(final_output or "<no final result>")

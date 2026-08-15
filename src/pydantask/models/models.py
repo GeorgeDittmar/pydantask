@@ -63,6 +63,8 @@ class TaskQAResult(BaseModel):
         description="Whether the task passed qa/critic. True if you found that the worker output sufficiently meets the task objective.",
     )
 
+    task_feedback: str = Field(default="No Feedback", description="Feedback that should go to the Supervisor and or Agent for next attempt if failed.")
+
 
 class KnowledgeRecord(BaseModel):
     """Logical record of a knowledge artifact (file, summary, notes, etc.).
@@ -379,7 +381,7 @@ class CapabilityDescription(BaseModel):
     # We keep this very loose to avoid Pydantic trying to introspect complex
     # types like `pydantic_ai.Agent` (which can reference optional imports
     # and cause schema generation issues). At runtime this will typically be
-    # either a pydantic_ai Agent instance or a callable tool.
+    # either a pydantic_ai Agent instance or a callable.
     tool_func: Any = Field(
         description=(
             "Concrete implementation of the capability. Usually a pydantic_ai Agent "
