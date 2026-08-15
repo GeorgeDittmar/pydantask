@@ -72,7 +72,7 @@ async def think_tool(reflection: str) -> str:
     Returns:
         Confirmation that reflection was recorded for decision-making
     """
-    return f"{reflection}"
+    return f""
 
 
 async def write_to_file_system(

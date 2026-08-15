@@ -285,7 +285,7 @@ class DeepAgent:
         self._critic_agent = Agent(
             model=self._retry_model,
             name="_default_Critic_Agent",
-            system_prompt=CRITIC_SYS_PROMPT,
+            system_prompt=COMPRESSED_CRITIC_SYS_PROMPT,
             output_type=TaskQAResult,
             deps_type=RuntimeState,
             tools=[get_current_datetime, think_tool],
