@@ -153,13 +153,15 @@ def callable_input_schema(
         "optional": optional,
         "properties": props,
         "notes": (
-            "Supervisor should provide these values in TaskItem.metadata['args'] "
-            "(or TaskItem.parameters if enabled)."
+            "Supervisor should provide these values in TaskItem.parameters={...}. "
+            "(The runtime injects prompt/deps/task/runtime_state automatically when requested.)"
         ),
     }
 
 
-def format_callable_inputs_for_prompt(schema: dict[str, Any], *, max_items: int = 8) -> str:
+def format_callable_inputs_for_prompt(
+    schema: dict[str, Any], *, max_items: int = 8
+) -> str:
     """Format a callable_input_schema(...) result into a compact prompt string."""
     required = list(schema.get("required") or [])
     optional = list(schema.get("optional") or [])

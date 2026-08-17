@@ -10,6 +10,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+import mimetypes
 
 from loguru import logger
 from pydantic_ai import RunContext
@@ -18,6 +19,131 @@ from pydantask.models import ArtifactRef, RuntimeState, TaskRunDeps
 
 ARTIFACT_DIRNAME = "artifacts"
 DEFAULT_MAX_PREVIEW_CHARS = 500
+
+
+def _guess_mime_type_for_path(path: Path) -> str:
+    mt, _ = mimetypes.guess_type(str(path))
+    return mt or "application/octet-stream"
+
+
+async def store_file_as_artifact(
+    runtime: RuntimeState,
+    *,
+    file_path: str | Path,
+    task_id: int | None,
+    name: str | None = None,
+    mime_type: str | None = None,
+    max_preview_chars: int = DEFAULT_MAX_PREVIEW_CHARS,
+) -> ArtifactRef:
+    """Persist a local file into the run's artifact store and return an ArtifactRef.
+
+    This is intended for *host-side* orchestration code (e.g. DeepAgent) that
+    needs to convert arbitrary callable outputs (like "wrote tmp/foo.txt") into
+    durable, resumable artifacts.
+
+    Notes:
+      - This is NOT a tool; agents should use `put_artifact` instead.
+      - The file is read and stored content-addressed (sha256) under the
+        checkpoint artifact root when available.
+      - A record is attached to the owning TaskItem metadata under `artifacts`
+        (for audit/replay parity with the `put_artifact` tool).
+    """
+    p = Path(file_path)
+    if not p.exists() or not p.is_file():
+        raise FileNotFoundError(f"File not found: {str(p)}")
+
+    mt = (mime_type or "").strip() or _guess_mime_type_for_path(p)
+
+    raw = await asyncio.to_thread(p.read_bytes)
+    sha256 = hashlib.sha256(raw).hexdigest()
+    artifact_id = f"sha256:{sha256}"
+
+    root = _artifact_root(runtime)
+    ext = _ext_for_mime(mt)
+
+    filename = sha256 + ext
+    rel_uri = f"{ARTIFACT_DIRNAME}/{filename}"
+    path = root / filename
+    meta_path = root / (sha256 + ".meta.json")
+
+    safe_label = _safe_name(name) or _safe_name(p.name)
+
+    def _write() -> None:
+        if not path.exists():
+            tmp = path.with_suffix(path.suffix + ".tmp." + uuid.uuid4().hex)
+            tmp.write_bytes(raw)
+            os.replace(tmp, path)
+
+        meta = {
+            "artifact_id": artifact_id,
+            "uri": rel_uri,
+            "name": safe_label,
+            "mime_type": mt,
+            "size_bytes": len(raw),
+            "sha256": sha256,
+            "created_at": datetime.now().isoformat(),
+            "task_id": task_id,
+            "source_path": str(p),
+        }
+        tmpm = meta_path.with_suffix(meta_path.suffix + ".tmp." + uuid.uuid4().hex)
+        tmpm.write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        os.replace(tmpm, meta_path)
+
+    await asyncio.to_thread(_write)
+
+    preview: str | None = None
+    try:
+        if mt.lower().startswith("text/") or mt.lower() in {
+            "application/json",
+            "application/yaml",
+            "text/yaml",
+            "text/csv",
+            "application/csv",
+        }:
+            preview = raw.decode("utf-8", errors="replace")
+            preview = _truncate_text(preview, max_chars=max_preview_chars)
+    except Exception:
+        preview = None
+
+    ref_payload: dict[str, Any] = {
+        "artifact_id": artifact_id,
+        "uri": rel_uri,
+        "name": safe_label,
+        "mime_type": mt,
+        "size_bytes": len(raw),
+        "sha256": sha256,
+        "preview": preview,
+    }
+
+    # Attach to task metadata for discoverability.
+    if task_id is not None:
+        task = runtime.plan.get(int(task_id)) if runtime.plan else None
+        if task is not None:
+            task.metadata.setdefault("artifacts", [])
+            if isinstance(task.metadata.get("artifacts"), list):
+                task.metadata["artifacts"].append(
+                    {**ref_payload, "task_id": int(task_id)}
+                )
+            else:
+                task.metadata["artifacts"] = [{**ref_payload, "task_id": int(task_id)}]
+
+            recorder = getattr(runtime, "checkpoint_recorder", None)
+            if recorder is not None:
+                try:
+                    await recorder.record(
+                        "task_metadata_appended",
+                        {
+                            "task_id": int(task_id),
+                            "key": "artifacts",
+                            "value": {**ref_payload, "task_id": int(task_id)},
+                        },
+                    )
+                except Exception:
+                    pass
+
+    return ArtifactRef.model_validate(ref_payload)
 
 
 def _truncate_text(text: str, max_chars: int | None) -> str:

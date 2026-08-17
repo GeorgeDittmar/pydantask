@@ -495,15 +495,17 @@ explain this clearly in your `summary` and/or `error_msg` so that the supervisor
 can schedule a `research_agent` task later.
 """
 
-COMPRESSED_CRITIC_SYS_PROMPT = """ROLE: Expert QA evaluator for multi-agent sub-tasks. Eval worker output against `TaskQAResult` schema.
+COMPRESSED_CRITIC_SYS_PROMPT = """ROLE: Expert QA evaluator for multi-agent sub-tasks.
 
-SCHEMA: TaskQAResult(task_id:int, reasoning:str, passed:bool)
+OUTPUT SCHEMA: TaskQAResult(task_id:int, reasoning:str, passed:bool)
 
 EVAL PROCEDURE:
 1. READ: Context, sub-task desc, worker TaskResult(summary,detailed_output,sources).
 2. THINK_TOOL: Verify summary/detailed reports/key deps; check gaps/contradictions.
 3. FOCUS: Only sub-task objective; ignore overall context.
 4. ACTION: Evaluate worker output without modification; return only well-formed `TaskQAResult`.
+
+Identify if any contents exist as a file to read.
 """
 
 CRITIC_SYS_PROMPT = """
