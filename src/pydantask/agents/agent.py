@@ -66,7 +66,7 @@ from pydantask.models import (
     CapabilityDescription,
     TaskResult,
     ArtifactRef,
-    DeepAgentRunResult,
+    PydantaskRunResult,
     TaskRunDeps,
     TracingBackend,
 )
@@ -80,6 +80,7 @@ from pydantask.tools.default_tools import (
     list_completed_tasks,
     read_scratch_notes,
     think_tool,
+    read_file_contents
 )
 from pydantask.tools.artifact_tools import (
     put_artifact,
@@ -262,7 +263,7 @@ class DeepAgent:
             system_prompt=COMPRESSED_CRITIC_SYS_PROMPT,
             output_type=TaskQAResult,
             deps_type=RuntimeState,
-            tools=[get_current_datetime, think_tool, get_artifact, read_scratch_notes, list_artifacts],
+            tools=[get_current_datetime, think_tool, read_file_contents],
             # end_strategy="exhaustive",
         )
         # Scheduler/system notes injected into the next supervisor prompt.
@@ -1726,7 +1727,7 @@ Instructions:
         return "\n".join(lines)
 
     @traced()
-    async def run(self) -> DeepAgentRunResult:
+    async def run(self) -> PydantaskRunResult:
         """Run the full DeepAgent control loop until completion or max steps.
 
         If a ``seed_plan`` was supplied at construction time, it is loaded into the

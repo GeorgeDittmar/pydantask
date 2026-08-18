@@ -140,6 +140,15 @@ async def delete_from_file_system(path: str) -> str:
         return f"An error occurred: {e}"
 
 
+async def read_file_contents(file_path:str):
+    """Reads a file from the file system to inspect its contents. 
+    
+    When to use:
+        - Need to read a file that is mentioned in a TaskResult"""
+    
+    with open(file_path, "r") as f:
+        return f.read()
+
 async def read_from_file_system(
     ctx: RunContext[RuntimeState | TaskRunDeps],
     file_name: str,

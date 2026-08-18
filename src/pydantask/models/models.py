@@ -543,8 +543,8 @@ class TaskSpec(BaseModel):
     overall_objective: str
 
 
-class DeepAgentRunResult(BaseModel):
-    """High-level summary of a DeepAgent run.
+class PydantaskRunResult(BaseModel):
+    """High-level summary of a Pydantask run.
 
     Wraps the final :class:`TaskResult` (if any) together with the final plan,
     runtime statistics, and high-level status. Suitable as a public return type

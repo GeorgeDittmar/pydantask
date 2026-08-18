@@ -500,10 +500,11 @@ COMPRESSED_CRITIC_SYS_PROMPT = """ROLE: Expert QA evaluator for multi-agent sub-
 SCHEMA: TaskQAResult(task_id:int, reasoning:str, passed:bool)
 
 EVAL PROCEDURE:
-1. READ: Context, sub-task desc, worker TaskResult(summary,detailed_output,sources).
+1. READ: Context, sub-task desc, worker TaskResult(summary,detailed_output,sources), any files mentioned in the result
 2. THINK_TOOL: Verify summary/detailed reports/key deps; check gaps/contradictions.
 3. FOCUS: Only sub-task objective; ignore overall context.
 4. ACTION: Evaluate worker output without modification; return only well-formed `TaskQAResult`.
+
 """
 
 CRITIC_SYS_PROMPT = """
