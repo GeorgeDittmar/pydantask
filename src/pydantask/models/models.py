@@ -63,7 +63,10 @@ class TaskQAResult(BaseModel):
         description="Whether the task passed qa/critic. True if you found that the worker output sufficiently meets the task objective.",
     )
 
-    task_feedback: str = Field(default="No Feedback", description="Feedback that should go to the Supervisor and or Agent for next attempt if failed.")
+    task_feedback: str = Field(
+        default="No Feedback",
+        description="Feedback that should go to the Supervisor and or Agent for next attempt if failed.",
+    )
 
 
 class KnowledgeRecord(BaseModel):
@@ -223,7 +226,11 @@ class TaskResult(BaseModel):
     )
 
     detailed_output: str = Field(
-        default="", description="Detailed output for the task if required."
+        default="",
+        description=(
+            "Optional detailed output for the task. Keep reasonably small; "
+            "for large payloads, store content as artifacts and include refs in `artifacts`."
+        ),
     )
 
     notes: List[str] = Field(
@@ -543,8 +550,8 @@ class TaskSpec(BaseModel):
     overall_objective: str
 
 
-class PydantaskRunResult(BaseModel):
-    """High-level summary of a Pydantask run.
+class PydanTaskRunResult(BaseModel):
+    """High-level summary of a DeepAgent run.
 
     Wraps the final :class:`TaskResult` (if any) together with the final plan,
     runtime statistics, and high-level status. Suitable as a public return type

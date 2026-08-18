@@ -14,8 +14,9 @@ async def write_to_file(content:str, filename:str) -> str:
 
     with open(f"tmp/{filename}", "w") as f:
         f.write(content)
-    
-    return f"{filename} was written to disk at tmp/{filename}"
+
+    return f"{filename} was written to disk at location tmp/{filename}"
+
 
 writing_capability = CapabilityDescription(name="write_to_file", 
                                            description="Tool to write content to a file on disk. Use when there is output needing to be saved for a subtask, or a final output.",
@@ -35,6 +36,8 @@ da = DeepAgent(
     model="gpt-5.4",
     trace=True,
     max_steps=10,
+    # default_capabilities_enabled=True,
+    capabilities=[writing_capability],
     # default_capabilities_enabled=True,
     capabilities=[writing_capability],
     checkpoint=True,
