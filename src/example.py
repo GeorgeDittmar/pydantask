@@ -8,7 +8,7 @@ import asyncio
 
 load_dotenv(find_dotenv())
 
-checkpoint_dir = Path("_checkpoint") / "report_test_2"
+checkpoint_dir = Path("_checkpoint") / "primative"
 
 async def write_to_file(content:str, filename:str) -> str:
 
@@ -17,10 +17,17 @@ async def write_to_file(content:str, filename:str) -> str:
 
     return f"{filename} was written to disk at location tmp/{filename}"
 
+async def read_from_file(filename:str) -> str:
+    with open(f"tmp/{filename}", "r") as f:
+        return f.read()
 
 writing_capability = CapabilityDescription(name="write_to_file", 
                                            description="Tool to write content to a file on disk. Use when there is output needing to be saved for a subtask, or a final output.",
                                            tool_func=as_runner(write_to_file))
+
+reading_capability = CapabilityDescription(name="read_from_file",
+                                           description="Tool to read the contents of a text file on disk. Use this when something needs to be loaded or read for a task.",
+                                           tool_func=as_runner(read_from_file))
 da = DeepAgent(
     # "I need a report of the news for today. Give me a high level summary and then a detailed version of major pieces of news as it pertains to the US and world. Output the report as markdown withj citations in the report. You must cite all sources at the end of the article.",
     # """I am testing your Deep Agent ability to plan and execute on an objective. I want to test your ability to create plans.
@@ -32,12 +39,12 @@ da = DeepAgent(
     # Finally take the song and whichever research topic passed the conditional check and combine them into a single output in song form. Jsut have the song do not let the producer agent output anything else with its task.
     # Again this is a test to see how well you follow creating a plan.""",
     # "Research for me `pydantask` harness. It is a python project. Give me a report on what it is, what problem does it try to solve, its features, and an example usage. As well include a bio summary on the main author of the harness. Write this up in markdown format and be sure to cite your sources.",
-    "Write to disk two different haikus about space travel. Give it an appropriate name, and content.",
+    "Write a short story about scifi space travel. This should be saved to a file. Next take the contents of that file and pass it as inputs to another file I want you to write but translated to German.",
     model="gpt-5.4",
     trace=True,
-    max_steps=4,
-    # default_capabilities_enabled=True,
-    capabilities=[writing_capability],
+    max_steps=10,
+    default_capabilities_enabled=True,
+    # capabilities=[writing_capability, reading_capability],
     checkpoint=True,
     checkpoint_dir=checkpoint_dir,
 )

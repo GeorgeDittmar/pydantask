@@ -7,10 +7,10 @@ BOOTSTRAP_INSTURCT = """
 YOUR CURRENT IMPERATIVE: INITIAL GRAPH BOOTSTRAPPING
 ------------------------------------------------------------
 The status board is currently completely EMPTY. You are acting strictly as the PLANNER.
-1. Use the `add_task` tool consecutively to lay down your initial 2-6 core tasks. Prefer small tasks over large ones.
+1. Use the `add_task` tool consecutively to lay down initial 2-6 core tasks. Prefer small tasks over large ones.
 2. Express ordering using explicit upstream dependencies.
 3. If you create tasks for deterministic/callable capabilities, you MUST pass their required function arguments via the `parameters={...}` field in `add_task`.
-4. Ensure the plan includes an explicit *final deliverable* task (often a `producer_agent` synthesis, or a worker file/artifact step).
+4. Ensure the plan includes an explicit *final deliverable* task and is marked.
 5. After you create the final deliverable task with `add_task`, immediately call `mark_final_task(task_id=...)` with the returned ID.
 6. Once you have built the foundational infrastructure, set `tasks_to_execute=[]` and `all_tasks_completed=False`. Do not guess the IDs. The system will process your additions and handle scheduling on the next turn.
 """
@@ -881,9 +881,7 @@ Key principles:
 - Do NOT modify or re-interpret COMPLETED work; instead, build on top of it.
 - Prefer small, well-scoped sub-tasks that can be executed in parallel when possible.
 - Use capabilities appropriately:
-  - "research_agent": when external/web information is needed.
-  - "producer_agent": when synthesizing a final or intermediate report for the user.
-  - Any custom capabilities will be described in the capabilities list.
+  - Any capabilities will be described in the capabilities list.
 
 What to output:
 - A Plan object (list of TaskItems) describing the next set of sub-tasks to add or refine.

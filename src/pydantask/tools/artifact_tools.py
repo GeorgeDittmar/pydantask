@@ -293,7 +293,7 @@ async def put_artifact(
 
     meta_path = root / (sha256 + ".meta.json")
 
-    async def _write() -> None:
+    def _write() -> None:
         # Avoid rewriting if already present (dedupe).
         if not path.exists():
             tmp = path.with_suffix(path.suffix + ".tmp." + uuid.uuid4().hex)
