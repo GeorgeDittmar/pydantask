@@ -703,7 +703,7 @@ async def test_coerce_output_ingests_existing_file_as_artifact(
     runtime_state.checkpoint_recorder = _Recorder(cp_dir)
 
     # Create an output file the callable might have produced.
-    out_file = tmp_path / "haiku.md"
+    out_file = cp_dir / "haiku.md"
     out_file.write_text(
         "stars drift\nengines hum softly\nhome is far away\n", encoding="utf-8"
     )

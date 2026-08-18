@@ -294,30 +294,99 @@ class DeepAgent:
         `get_artifact` (rather than relying on host paths).
         """
 
+        rejected_files: list[dict[str, Any]] = []
+
+        def _allowed_source_roots() -> list[Path]:
+            """Roots from which host-side files may be ingested as artifacts.
+
+            IMPORTANT SECURITY NOTE:
+            We do NOT want to ingest arbitrary host files just because a model
+            mentions a path (e.g. "/etc/passwd"). We therefore restrict source
+            file ingestion to a small allowlist of safe roots.
+
+            Current policy:
+              - allow files under ./tmp
+              - allow files under the active checkpoint directory (if available)
+            """
+            roots: list[Path] = []
+
+            # Common deterministic tools write here.
+            roots.append((Path.cwd() / "tmp").resolve())
+
+            # If checkpointing is enabled, allow ingesting files created under it.
+            if runtime_state is not None:
+                recorder = getattr(runtime_state, "checkpoint_recorder", None)
+                directory = getattr(recorder, "directory", None)
+                if isinstance(directory, Path):
+                    roots.append(directory.resolve())
+
+            # Dedupe
+            out: list[Path] = []
+            seen: set[str] = set()
+            for r in roots:
+                key = str(r)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(r)
+            return out
+
+        def _is_allowed_source_file(p: Path) -> bool:
+            try:
+                rp = p.resolve()
+            except Exception:
+                return False
+
+            for root in _allowed_source_roots():
+                try:
+                    if rp == root or root in rp.parents:
+                        return True
+                except Exception:
+                    continue
+            return False
+
         def _existing_files_from_text(text: str) -> list[Path]:
+            """Extract safe, existing files from text.
+
+            Only returns files under the allowlisted roots.
+            """
+            candidates: list[Path] = []
+
             # 1) If the entire output is a path, prefer that.
             p = Path(text)
             if p.exists() and p.is_file():
-                return [p]
+                if _is_allowed_source_file(p):
+                    candidates.append(p)
+                else:
+                    rejected_files.append(
+                        {"path": str(p), "reason": "outside_allowed_roots"}
+                    )
 
             # 2) Otherwise, attempt to extract path-like tokens.
-            # This is best-effort and intentionally conservative: only keep tokens
-            # that resolve to an existing file.
-            candidates: list[Path] = []
-            # tokens like tmp/foo.txt or C:\tmp\foo.txt
+            # Best-effort: only keep tokens that resolve to an existing file AND
+            # live under allowlisted roots.
             for token in re.findall(r"[^\s'\"]+", text):
                 cleaned = token.strip().strip(".,;:()[]{}<>")
                 if not cleaned:
                     continue
                 cp = Path(cleaned)
-                if cp.exists() and cp.is_file():
+                if not (cp.exists() and cp.is_file()):
+                    continue
+                if _is_allowed_source_file(cp):
                     candidates.append(cp)
+                else:
+                    rejected_files.append(
+                        {"path": str(cp), "reason": "outside_allowed_roots"}
+                    )
 
             # Dedupe while preserving order.
             out: list[Path] = []
             seen: set[str] = set()
             for c in candidates:
-                key = str(c.resolve())
+                try:
+                    key = str(c.resolve())
+                except Exception:
+                    key = str(c)
                 if key in seen:
                     continue
                 seen.add(key)
@@ -430,6 +499,8 @@ class DeepAgent:
 
         if file_records:
             meta["file_outputs"] = file_records
+        if rejected_files:
+            meta["file_outputs_rejected"] = rejected_files
 
         # Summary/preview.
         summary = (text.strip().splitlines()[0] if text else "").strip()
@@ -1740,7 +1811,35 @@ Instructions:
                         params = getattr(task, "parameters", None)
                         if not isinstance(params, dict):
                             params = {}
+
                         missing = [k for k in required if k not in params]
+
+                        # Self-heal: if the task was previously errored for missing parameters
+                        # and the supervisor has since patched them in, promote back to runnable.
+                        if (
+                            not missing
+                            and task.status == TaskStatus.ERRORED
+                            and task.metadata.get("errored_reason")
+                            == "missing_required_parameters"
+                        ):
+                            deps_ok_now = self._dependencies_satisfied(task, ctx)
+                            new_status = (
+                                TaskStatus.READY if deps_ok_now else TaskStatus.PENDING
+                            )
+                            changes.append(
+                                f"- Task {task_id}: errored -> {new_status.value} (required parameters supplied)"
+                            )
+                            task.status = new_status
+                            task.error_msg = None
+                            # Clear prior missing-parameter markers.
+                            task.metadata.pop("missing_parameters", None)
+                            task.metadata.pop("errored_reason", None)
+                            await self._record_task_status_event(
+                                task_id,
+                                new_status,
+                                reason="required_parameters_supplied",
+                            )
+
                         if missing and task.status in {
                             TaskStatus.PENDING,
                             TaskStatus.READY,
@@ -1756,8 +1855,8 @@ Instructions:
                             )
                             task.status = TaskStatus.ERRORED
                             task.error_msg = msg
-                            task.metadata.setdefault("missing_parameters", [])
                             task.metadata["missing_parameters"] = missing
+                            task.metadata["errored_reason"] = "missing_required_parameters"
                             await self._record_task_status_event(
                                 task_id,
                                 TaskStatus.ERRORED,
