@@ -131,9 +131,10 @@ class DeepAgent:
         # seed_plan: Plan | None = None,
         # planning_mode: Literal["llm", "fixed", "hybrid"] = "llm",
         default_capabilities_enabled: bool = False,
-        custom_supervisor: Agent = None,
+        custom_supervisor: Agent | None = None,
         max_steps: int = 20,
         max_steps_no_progress: int = 5,
+        max_concurrent_tasks: int = 4,
         set_token_budget: Union[int, None] = None,
         capabilities: Union[None, list[CapabilityDescription]] = None,
         # default output type for the producer agent, can be set to a default type or custom pydantic model for better structure and validation of final output
@@ -157,6 +158,9 @@ class DeepAgent:
                 before forcing termination.
             max_steps_no_progress: Number of consecutive cycles with no executed tasks
                 before aborting with a deadlock report.
+            max_concurrent_tasks: Maximum number of tasks to run concurrently in each
+                control-loop iteration. Tasks exceeding this limit are batched and
+                executed sequentially in chunks. Defaults to ``4``.
             set_token_budget: Optional global token budget for the run.
             capabilities: Additional ``CapabilityDescription`` objects to register as
                 callable sub-agents alongside the built-ins.
@@ -191,6 +195,7 @@ class DeepAgent:
 
         self.objective: str = objective
         self._max_steps: int = max_steps  # Max steps to prevent infinite loops
+        self.max_concurrent_tasks: int = max_concurrent_tasks
         self.token_budget: Union[int, None] = set_token_budget
         self.verbose = verbose_logging
         # self.output_type = output_type
@@ -1763,7 +1768,6 @@ Instructions:
         Returns a human-readable report injected into the next supervisor prompt.
         """
         changes: list[str] = []
-        warnings: list[str] = []
 
         async with self._plan_lock:
             for task_id, task in sorted(ctx.plan.items(), key=lambda kv: kv[0]):
@@ -1886,16 +1890,13 @@ Instructions:
                         reason="dependencies_not_met",
                     )
 
-        if not changes and not warnings:
+        if not changes:
             return "No scheduler changes this cycle."
 
         out: list[str] = []
         if changes:
             out.append("Status normalization:")
             out.extend(changes)
-        if warnings:
-            out.append("Warnings:")
-            out.extend(warnings)
         return "\n".join(out)
 
     def _select_final_result(self, runtime_state: RuntimeState) -> TaskResult | None:
@@ -2396,14 +2397,19 @@ Instructions:
                     error_msg=step.error_msg,
                 )
 
-        # 4. Execute tasks and return exceptions to notify the supervisor
+        # 4. Execute tasks in chunks to respect the concurrency limit
         logger.info("--- Executing Ready Tasks ---")
-        task_results = []
-        async with TaskGroup() as tg:
-            for task in ready_tasks:
-                task_results.append(tg.create_task(task))
+        task_results: list[TaskItem] = []
+        chunk_size = self.max_concurrent_tasks
+        for i in range(0, len(ready_tasks), chunk_size):
+            chunk = ready_tasks[i : i + chunk_size]
+            chunk_results: list[asyncio.Task[TaskItem]] = []
+            async with TaskGroup() as tg:
+                for task in chunk:
+                    chunk_results.append(tg.create_task(task))
+            results = [t.result() for t in chunk_results]
+            task_results.extend(results)
 
-        results = [t.result() for t in task_results]
         logger.info("--- All Ready Tasks Completed ---")
         return results
 
@@ -2616,7 +2622,26 @@ Context-budget note:
             return f"Error: No task with {task_id} found in plan. Be sure task_id actually exists."
 
     async def handle_critic_result(self, task: TaskItem, review: TaskQAResult):
-        """Apply the critic's QA result to a task and emit checkpoint events."""
+        """Apply the critic's QA result to a task and emit checkpoint events.
+
+        Handles three outcomes:
+
+        - ``review.passed``: Marks the task ``COMPLETED``, clears error.
+        - Max attempts exceeded: Marks the task ``FAILED`` with an error message.
+        - Failed but retries remaining: Marks ``RERUN``, appends the critic's
+          reasoning as feedback to the task's ``sub_task_objective`` so the
+          next attempt can self-correct.
+
+        Side effects:
+            - Increments ``task.attempt_count``.
+            - Sets ``task.task_feedback`` to the full ``TaskQAResult``.
+            - Writes ``critic_feedback`` and (on rerun) ``task_patched`` events.
+            - Updates ``task.status`` and emits a ``task_status_updated`` event.
+
+        Args:
+            task: The task item whose QA result is being applied.
+            review: The critic's evaluation output.
+        """
         task.attempt_count += 1
         task.task_feedback = review
 
