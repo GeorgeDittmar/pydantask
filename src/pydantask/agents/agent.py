@@ -1756,16 +1756,31 @@ Instructions:
         return status in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED}
 
     async def _scheduler_pass(self, ctx: RuntimeState) -> str:
-        """Deterministic scheduler pass.
+        """Deterministic scheduler pass — non-LLM state normalization.
 
-        This pass performs small, non-LLM state normalization to improve autonomy:
+        Runs each control-loop cycle to keep the task DAG in a consistent state.
+        Performs four categories of work:
 
-        - Promote PENDING -> READY when all dependencies are COMPLETED.
-        - Demote READY -> PENDING if dependencies are not satisfied (keeps the
-          status board honest).
-        - Mark tasks with unknown capability as ERRORED (unless terminal).
+        1. **Unknown capability detection** — marks tasks with unrecognized
+           ``capability`` names as ERRORED (unless already in a terminal state).
+        2. **Callable parameter self-heal** — for callable capabilities, verifies
+           that all required function parameters are present in
+           ``TaskItem.parameters``. If a task was previously errored for missing
+           params and the supervisor has since patched them, promotes it back to
+           READY (if deps are satisfied).
+        3. **Missing parameter erroring** — if required parameters are still
+           missing, transitions PENDING/READY/RERUN tasks to ERRORED with a
+           message telling the supervisor what to patch.
+        4. **Dependency-based readiness** — promotes PENDING → READY when all
+           dependencies are COMPLETED; demotes READY → PENDING if deps are no
+           longer satisfied.
 
-        Returns a human-readable report injected into the next supervisor prompt.
+        Args:
+            ctx: The current ``RuntimeState`` containing the task plan.
+
+        Returns:
+            A human-readable report string describing all status changes.
+            Returns ``"No scheduler changes this cycle."`` if nothing changed.
         """
         changes: list[str] = []
 
@@ -1902,14 +1917,24 @@ Instructions:
     def _select_final_result(self, runtime_state: RuntimeState) -> TaskResult | None:
         """Select the run's final output deterministically.
 
-        Priority:
-        1) A COMPLETED task with `is_final=True`.
-        2) A COMPLETED task with non-empty `result.detailed_output`.
-        3) A COMPLETED `producer_agent` task.
-        4) Otherwise the newest COMPLETED task with any result.
+        Used by ``run()`` to choose the ``TaskResult`` that becomes the
+        ``PydanTaskRunResult.final_result``. Applies a fixed priority chain so
+        that checkpoint resume always returns a stable deliverable even if the
+        supervisor declares completion before a producer finishes.
 
-        This ensures checkpoint resume returns a stable final deliverable even
-        if the supervisor immediately declares completion.
+        Priority (highest first):
+
+        1. A COMPLETED task with ``is_final=True`` set by the supervisor.
+        2. A COMPLETED task with non-empty ``result.detailed_output``.
+        3. A COMPLETED ``producer_agent`` task.
+        4. The newest COMPLETED task (highest ``task_id``) with any result.
+
+        Args:
+            runtime_state: The current ``RuntimeState`` containing the plan.
+
+        Returns:
+            The selected ``TaskResult``, or ``None`` if no COMPLETED tasks
+            with results exist.
         """
         completed: list[TaskItem] = [
             t
@@ -2274,8 +2299,20 @@ Instructions:
         return True
 
     async def _cascade_cancellations(self, ctx: RuntimeState):
-        """Transitively marks downstream tasks as CANCELLED if they rely
-        on an upstream task that has been cancelled.
+        """Transitively cancel downstream tasks whose upstream dependencies are CANCELLED.
+
+        Iterates over all PENDING and READY tasks, checks whether any of their
+        ``sub_task_dependencies`` reference a task with ``status == CANCELLED``,
+        and transitions them to CANCELLED with an explanatory error message.
+        Repeats until no further changes occur (handles chains of depth > 1).
+
+        Side effects:
+            - Mutates ``task.status`` to ``CANCELLED`` for affected tasks.
+            - Sets ``task.error_msg`` with the upstream failure reason.
+            - Emits a ``task_status_updated`` checkpoint event for each change.
+
+        Args:
+            ctx: The current ``RuntimeState`` containing the task plan.
         """
         async with self._plan_lock:
             changed = True
