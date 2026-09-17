@@ -1,3 +1,3 @@
-from .agent import DeepAgent
+from .agent import PydanTask
 
-__all__ = ["DeepAgent"]
+__all__ = ["PydanTask"]

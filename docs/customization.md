@@ -1,21 +1,21 @@
 # Customization
 
-You can add custom sub‑agents (capabilities) to your `DeepAgent` setup.
+You can add custom sub‑agents (capabilities) to your `PydanTask` setup.
 
 ## Adding a Custom Capability
 
-`DeepAgent` accepts additional capabilities via the `sub_agents` parameter. Each capability is described by a `CapabilityDescription` (see API reference) and can wrap either:
+`PydanTask` accepts additional capabilities via the `sub_agents` parameter. Each capability is described by a `CapabilityDescription` (see API reference) and can wrap either:
 
 - a full `pydantic_ai.Agent` instance, or
 - a simple async/sync callable (a plain tool function).
 
 These are merged with the built‑in capabilities (`producer_agent`, `research_agent`,
-`worker_agent`) inside `DeepAgent._setup_capabilities(...)`.
+`worker_agent`) inside `PydanTask._setup_capabilities(...)`.
 
 ### Example: custom sub‑agent (Agent)
 
 ```python
-from pydantask.agents.agent import DeepAgent
+from pydantask.agents.agent import PydanTask
 from pydantask.models import CapabilityDescription, TaskResult, TaskRunDeps
 from pydantic_ai import Agent
 
@@ -34,18 +34,18 @@ custom_description = CapabilityDescription(
     tool_func=my_sub_agent,
 )
 
-agent = DeepAgent(objective="...", sub_agents=[custom_description])
+agent = PydanTask(objective="...", sub_agents=[custom_description])
 ```
 
 ### Example: simple callable as a capability (wrap with `as_runner`)
 
-`DeepAgent` executes capabilities by calling a `.run(prompt, deps, usage_limits=...)` method.
+`PydanTask` executes capabilities by calling a `.run(prompt, deps, usage_limits=...)` method.
 
 - If you provide a `pydantic_ai.Agent`, it already has `.run(...)`.
 - If you provide a plain function, wrap it with `as_runner(...)`.
 
 ```python
-from pydantask.agents.agent import DeepAgent
+from pydantask.agents.agent import PydanTask
 from pydantask.capabilities.runner_v2 import as_runner
 from pydantask.models import CapabilityDescription, TaskResult, TaskRunDeps
 
@@ -65,14 +65,14 @@ my_utility_capability_desc = CapabilityDescription(
     tool_func=as_runner(my_utility_capability),
 )
 
-agent = DeepAgent(objective="...", sub_agents=[my_utility_capability_desc])
+agent = PydanTask(objective="...", sub_agents=[my_utility_capability_desc])
 ```
 
 The planner sees the `name` and `description` in `CapabilityDescription` and may choose that capability when constructing `TaskItem.capability` values.
 
 ## Accessing shared state in Custom Agents
 
-If your sub‑agent (a `pydantic_ai.Agent`) needs access to the shared plan/state, it should use `deps_type=TaskRunDeps` (this is what `DeepAgent` passes during task execution):
+If your sub‑agent (a `pydantic_ai.Agent`) needs access to the shared plan/state, it should use `deps_type=TaskRunDeps` (this is what `PydanTask` passes during task execution):
 
 ```python
 from pydantask.models import TaskResult, TaskRunDeps
@@ -88,16 +88,16 @@ my_context_agent = Agent(
 )
 ```
 
-In this case, when `DeepAgent` calls `my_context_agent.run(...)`, it passes `deps=TaskRunDeps(runtime_state=..., task=...)`, and your tools can access `ctx.deps.runtime_state.plan`, `ctx.deps.runtime_state.document_store`, etc.
+In this case, when `PydanTask` calls `my_context_agent.run(...)`, it passes `deps=TaskRunDeps(runtime_state=..., task=...)`, and your tools can access `ctx.deps.runtime_state.plan`, `ctx.deps.runtime_state.document_store`, etc.
 
 **Important:**
 
-- Capabilities that need to interact with DeepAgent's orchestration (plan, task statuses, shared documents) typically should:
+- Capabilities that need to interact with PydanTask's orchestration (plan, task statuses, shared documents) typically should:
   - use `deps_type=TaskRunDeps` on their `Agent` (so tools can access both the shared `runtime_state` and the current `task`), and
   - write tools that accept `RunContext[TaskRunDeps]`.
 
   If you truly need supervisor-style access (operate on the whole run outside task execution), use `deps_type=RuntimeState` and tools that accept `RunContext[RuntimeState]`.
-- Agents with different context/state types are possible but integration with `DeepAgent`'s orchestration is not guaranteed; you must handle such cases yourself.
+- Agents with different context/state types are possible but integration with `PydanTask`'s orchestration is not guaranteed; you must handle such cases yourself.
 - Stateless agents or tools (that do not use shared runtime state) do not need to accept `deps` or `RunContext`.
 
 For more API detail, see [API Reference](api.md).

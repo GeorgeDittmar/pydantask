@@ -46,7 +46,7 @@ class DummyRecorder:
 
 @pytest.fixture(autouse=True)
 def env_vars(monkeypatch: pytest.MonkeyPatch):
-    # Keep init() happy if a test *does* instantiate DeepAgent.
+    # Keep init() happy if a test *does* instantiate PydanTask.
     monkeypatch.setenv("TAVILY_API_KEY", "fake-tavily-key")
     monkeypatch.setenv("OPENAI_API_KEY", "fake-openai-key")
 
@@ -56,13 +56,13 @@ def runtime_state() -> RuntimeState:
     return RuntimeState(objective="obj", capability_registry={}, next_task_id=1)
 
 
-def make_minimal_deep_agent(prompt: str = "obj") -> agent_mod.DeepAgent:
-    """Create a DeepAgent without running its heavy __init__.
+def make_minimal_pydantask(prompt: str = "obj") -> agent_mod.PydanTask:
+    """Create a PydanTask without running its heavy __init__.
 
     Since `__init__` is skipped, this function must define any attributes that
     methods under test expect to exist.
     """
-    da = agent_mod.DeepAgent.__new__(agent_mod.DeepAgent)
+    da = agent_mod.PydanTask.__new__(agent_mod.PydanTask)
 
     # Core run() expectations
     da.objective = prompt
@@ -122,7 +122,7 @@ def test_deep_agent_init_sets_registry_keys(monkeypatch: pytest.MonkeyPatch):
 
     with (
         patch.object(
-            agent_mod.DeepAgent, "_create_retrying_client", return_value=AsyncClient()
+            agent_mod.PydanTask, "_create_retrying_client", return_value=AsyncClient()
         ),
         patch.object(agent_mod, "OpenAIProvider", autospec=True),
         patch.object(agent_mod, "OpenAIChatModel", autospec=True),
@@ -130,7 +130,7 @@ def test_deep_agent_init_sets_registry_keys(monkeypatch: pytest.MonkeyPatch):
         # Avoid pulling in pydantic-ai's tool schema machinery for this unit test.
         patch.object(agent_mod, "Agent", autospec=True) as agent_cls,
     ):
-        deep_agent = agent_mod.DeepAgent(
+        deep_agent = agent_mod.PydanTask(
             "Test Goal", trace=False, default_capabilities_enabled=True
         )
 
@@ -153,7 +153,7 @@ def test_deep_agent_init_sets_registry_keys(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.mark.asyncio
 async def test_add_cancel_patch_task(runtime_state: RuntimeState):
-    da = make_minimal_deep_agent()
+    da = make_minimal_pydantask()
     ctx = SimpleNamespace(deps=runtime_state)
 
     task_id = await da.add_task(
@@ -185,7 +185,7 @@ async def test_add_cancel_patch_task(runtime_state: RuntimeState):
 
 
 def test_dependencies_satisfied_only_completed(runtime_state: RuntimeState):
-    da = make_minimal_deep_agent()
+    da = make_minimal_pydantask()
 
     t1 = TaskItem(
         task_id=1,
@@ -223,7 +223,7 @@ def test_dependencies_satisfied_only_completed(runtime_state: RuntimeState):
 
 @pytest.mark.asyncio
 async def test_handle_critic_result_transitions():
-    da = make_minimal_deep_agent()
+    da = make_minimal_pydantask()
 
     task = TaskItem(
         task_id=1,
@@ -328,7 +328,7 @@ async def test_execute_ready_tasks_filters_deps_and_injects_feedback(
     }
 
     async def _execute_side_effect(sub_agent, step: TaskItem, ctx: RuntimeState):
-        # mimic DeepAgent.execute returning the (mutated) step
+        # mimic PydanTask.execute returning the (mutated) step
         step.result = TaskResult(task_id=step.task_id, summary=f"ran {step.task_id}")
         step.status = TaskStatus.NEEDS_REVIEW
         return step
@@ -377,7 +377,7 @@ async def test_update_task_status_and_view_qa_report(runtime_state: RuntimeState
 async def test_add_task_emits_checkpoint_event_when_enabled(
     runtime_state: RuntimeState,
 ):
-    da = make_minimal_deep_agent()
+    da = make_minimal_pydantask()
     recorder = DummyRecorder()
     da._checkpoint_recorder = recorder
     runtime_state.checkpoint_recorder = recorder
@@ -398,7 +398,7 @@ async def test_add_task_emits_checkpoint_event_when_enabled(
 
 @pytest.mark.asyncio
 async def test_replay_checkpoint_rebuilds_state(runtime_state: RuntimeState):
-    da = make_minimal_deep_agent()
+    da = make_minimal_pydantask()
     recorder = DummyRecorder()
 
     task_payload = TaskItem(
@@ -453,7 +453,7 @@ async def test_replay_checkpoint_rebuilds_state(runtime_state: RuntimeState):
 
 @pytest.mark.asyncio
 async def test_checkpoint_state_records_summary(runtime_state: RuntimeState):
-    da = make_minimal_deep_agent()
+    da = make_minimal_pydantask()
     recorder = DummyRecorder()
     da._checkpoint_recorder = recorder
 
@@ -741,7 +741,7 @@ async def test_execute_retries_on_context_overflow():
     retry with a resume prompt (up to max_resume_attempts + 1 = 3 total tries).
     """
     runtime_state = RuntimeState(objective="obj", capability_registry={}, next_task_id=1)
-    da = make_minimal_deep_agent()
+    da = make_minimal_pydantask()
 
     sub_agent = MagicMock(name="sub_agent")
     sub_agent.run = AsyncMock(name="run")
@@ -782,7 +782,7 @@ async def test_cascade_cancellations_propagates_to_downstream():
     runtime_state = RuntimeState(
         objective="obj", capability_registry={}, next_task_id=4
     )
-    da = make_minimal_deep_agent()
+    da = make_minimal_pydantask()
     da._checkpoint_recorder = DummyRecorder()
 
     # Task 1 is cancelled, task 2 depends on 1, task 3 depends on 2
@@ -831,7 +831,7 @@ def test_select_final_result_priority_ordering(runtime_state: RuntimeState):
     3) producer_agent task
     4) newest completed task
     """
-    da = make_minimal_deep_agent()
+    da = make_minimal_pydantask()
 
     # Producer with no detail
     producer = TaskItem(

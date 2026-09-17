@@ -121,8 +121,8 @@ CheckpointEventType = Literal[
 ]
 
 
-class DeepAgent:
-    """Pydantic AI based DeepAgent that manages sub-agents to achieve complex goals."""
+class PydanTask:
+    """Dynamic DAG orchestrator for Pydantic AI."""
 
     def __init__(
         self,
@@ -146,15 +146,15 @@ class DeepAgent:
         resume_from_checkpoint: bool = False,
         verbose_logging: bool = False,
     ):
-        """Initialize a DeepAgent instance.
+        """Initialize a PydanTask instance.
 
         Args:
-            objective: The overall objective / task the deep agent is working on.
+            objective: The overall objective the orchestrator should accomplish.
             model: Model identifier or ``pydantic_ai.models.Model`` instance to use
                 for all sub-agents. Defaults to ``"gpt-5.2"``.
             default_capabilities_enabled: If ``True``, register built-in capabilities
                 (research, worker, producer) by default.
-            max_steps: Maximum number of DeepAgent control-loop iterations to run
+            max_steps: Maximum number of PydanTask control-loop iterations to run
                 before forcing termination.
             max_steps_no_progress: Number of consecutive cycles with no executed tasks
                 before aborting with a deadlock report.
@@ -163,13 +163,14 @@ class DeepAgent:
                 executed sequentially in chunks. Defaults to ``4``.
             set_token_budget: Optional global token budget for the run.
             capabilities: Additional ``CapabilityDescription`` objects to register as
-                callable sub-agents alongside the built-ins.
+                callable task nodes alongside the built-ins.
             trace: If ``True``, auto-configure tracing via the configured backend.
-            checkpoint: If ``True``, enable event-sourced checkpoint logging for recovery.
+            checkpoint: If ``True``, enable event-sourced checkpoint logging for
+                recovery.
             checkpoint_dir: Optional directory to reuse for checkpoints when resuming a run.
                 If omitted, a unique directory under ``_checkpoint/`` is created.
             resume_from_checkpoint: If ``True``, attempt to replay from an existing
-                checkpoint when starting the agent.
+                checkpoint when starting the orchestrator.
             verbose_logging: If ``True``, log richer debugging information during
                 execution.
         """
@@ -186,7 +187,7 @@ class DeepAgent:
         )
 
         if objective is None:
-            raise TypeError("DeepAgent requires 'objective' to be provided")
+            raise TypeError("PydanTask requires 'objective' to be provided")
 
         # if planning_mode in {"fixed", "hybrid"} and seed_plan is None:
         #     raise ValueError(
@@ -287,7 +288,7 @@ class DeepAgent:
         """Coerce arbitrary capability outputs into the canonical TaskResult.
 
         Design goal: capability authors can return "anything" (str/dict/Pydantic model),
-        and DeepAgent will normalize it for downstream evaluation/synthesis.
+        and PydanTask will normalize it for downstream evaluation/synthesis.
 
         Enterprise/ops goal: if the output references on-disk files, ingest them into
         the run's artifact store so the critic/producer can retrieve contents via
@@ -647,7 +648,7 @@ class DeepAgent:
         return capabilities_list
 
     async def aclose(self) -> None:
-        """Close underlying resources used by this ``DeepAgent`` instance.
+        """Close underlying resources used by this ``PydanTask`` instance.
 
         This is primarily responsible for flushing any tracing backends and
         closing the shared async HTTP client used by the model providers.
@@ -660,10 +661,10 @@ class DeepAgent:
             if getattr(self, "_retry_client", None) is not None:
                 await self._retry_client.aclose()
 
-    async def __aenter__(self) -> "DeepAgent":
-        """Enter the async context manager and return this ``DeepAgent``.
+    async def __aenter__(self) -> "PydanTask":
+        """Enter the async context manager and return this ``PydanTask``.
 
-        Allows ``async with DeepAgent(...) as agent: ...`` usage.
+        Allows ``async with PydanTask(...) as orchestrator: ...`` usage.
         """
         return self
 
@@ -809,13 +810,13 @@ class DeepAgent:
         return _capability_registry
 
     def _initialize_runtime_state(self, objective: str, registry: dict) -> RuntimeState:
-        """Create the initial :class:`RuntimeState` for a new DeepAgent run.
+        """Create the initial :class:`RuntimeState` for a new PydanTask run.
 
         This initializes an empty plan. If ``seed_plan`` was provided when the
-        DeepAgent was constructed, it is applied at the start of :meth:`run`.
+        PydanTask was constructed, it is applied at the start of :meth:`run`.
 
         Args:
-            objective: Top-level objective for this DeepAgent execution.
+            objective: Top-level objective for this PydanTask execution.
             registry: Mapping of capability names to ``CapabilityDescription``
                 instances.
 
@@ -1332,7 +1333,7 @@ Error that triggered recovery (for debugging only):
     def _remaining_token_budget(self, runtime_state: RuntimeState) -> int | None:
         """Return remaining global token budget (best-effort), or None if unlimited.
 
-        Note: Some unit tests construct `DeepAgent` without calling `__init__`.
+        Note: Some unit tests construct `PydanTask` without calling `__init__`.
         Use `getattr` to avoid AttributeError in those scenarios.
         """
         budget = getattr(self, "token_budget", None)
@@ -2026,7 +2027,7 @@ Instructions:
 
     @traced()
     async def run(self) -> PydanTaskRunResult:
-        """Run the full DeepAgent control loop until completion or max steps.
+        """Run the full PydanTask control loop until completion or max steps.
 
         If a ``seed_plan`` was supplied at construction time, it is loaded into the
         runtime state before the supervisor loop begins.
@@ -2034,12 +2035,12 @@ Instructions:
         This method repeatedly:
 
         * Invokes the supervisor to decide which tasks to execute next.
-        * Executes ready tasks in parallel via their associated sub-agents.
+        * Executes ready tasks in parallel via their associated task nodes.
         * Sends results to the critic for QA and status updates.
         * Optionally checkpoints state between iterations.
 
         Returns:
-            A ``DeepAgentRunResult`` containing the final output, the full plan,
+            A ``PydanTaskRunResult`` containing the final output, the full plan,
             and the final ``RuntimeState``.
         """
         runtime_state = self._initialize_runtime_state(
@@ -2064,7 +2065,7 @@ Instructions:
                 logger.info("======= Planning Phase =======\n")
 
             # Best-effort global token budget enforcement.
-            # Use getattr() so unit tests can construct DeepAgent without __init__.
+            # Use getattr() so unit tests can construct PydanTask without __init__.
             token_budget = getattr(self, "token_budget", None)
             if token_budget is not None and runtime_state.tokens_used >= token_budget:
                 msg = (

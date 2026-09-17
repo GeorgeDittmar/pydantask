@@ -15,7 +15,7 @@ class TracingBackend(Enum):
 
 
 class TaskStatus(Enum):
-    """Lifecycle state for a :class:`TaskItem` within a DeepAgent plan.
+    """Lifecycle state for a :class:`TaskItem` within a PydanTask plan.
 
     Values:
         PENDING: Waiting for dependencies to complete. \n
@@ -194,7 +194,7 @@ class ArtifactRef(BaseModel):
 
 
 class TaskResult(BaseModel):
-    """Canonical result type for any sub-task executed by DeepAgent.
+    """Canonical result type for any sub-task executed by PydanTask.
 
     TaskResult stores the output from any given task.
 
@@ -282,7 +282,7 @@ class TaskResult(BaseModel):
 
 
 class TaskItem(BaseModel):
-    """One sub-task in a DeepAgent plan.
+    """One sub-task in a PydanTask plan.
 
     Created by the planner and then updated over the life of the run as it moves
     through :class:`TaskStatus` states and accumulates results and feedback.
@@ -362,7 +362,7 @@ class TaskItem(BaseModel):
 
 # Agent/Tool Description Object
 class CapabilityDescription(BaseModel):
-    """Metadata describing a capability (sub-agent or tool) available to DeepAgent.
+    """Metadata describing a capability (sub-agent or tool) available to PydanTask.
 
     The planner and supervisor see ``name`` and ``description`` when deciding
     which capability to assign to ``TaskItem.capability``. ``tool_func`` holds
@@ -407,7 +407,7 @@ class CapabilityDescription(BaseModel):
 
 
 class RuntimeState(BaseModel):
-    """Shared mutable state passed between agents during a DeepAgent run.
+    """Shared mutable state passed between agents during a PydanTask run.
 
     Holds the current plan, objective, registry of capabilities, and simple
     in-memory stores for documents and knowledge.
@@ -502,7 +502,7 @@ class SupervisorDecision(BaseModel):
 class Plan(BaseModel):
     """Planner output: internal reasoning plus the list of tasks.
 
-    ``DeepAgent`` converts ``tasks`` into a ``Dict[int, TaskItem]`` for
+    ``PydanTask`` converts ``tasks`` into a ``Dict[int, TaskItem]`` for
     :class:`RuntimeState.plan`.
 
     Attributes:
@@ -551,11 +551,11 @@ class TaskSpec(BaseModel):
 
 
 class PydanTaskRunResult(BaseModel):
-    """High-level summary of a DeepAgent run.
+    """High-level summary of a PydanTask run.
 
     Wraps the final :class:`TaskResult` (if any) together with the final plan,
     runtime statistics, and high-level status. Suitable as a public return type
-    from :meth:`DeepAgent.run`.
+    from :meth:`PydanTask.run`.
 
     Attributes:
         objective: The original user objective.
@@ -563,7 +563,7 @@ class PydanTaskRunResult(BaseModel):
             ``producer_agent``, if any.
         status: High-level outcome of the run (success/partial/failed).
         plan: Final mapping from task_id to :class:`TaskItem` after execution.
-        runtime_steps: Number of DeepAgent control-loop cycles executed.
+        runtime_steps: Number of PydanTask control-loop cycles executed.
         errors: Any top-level errors or important warnings.
     """
 
@@ -679,7 +679,7 @@ class WorkflowYamlConfig(BaseModel):
     """Top-level YAML configuration for a user-defined workflow (seed plan).
 
     This is the recommended format to accept from end-users. It can be converted
-    into a canonical :class:`Plan` used by :class:`DeepAgent`.
+    into a canonical :class:`Plan` used by :class:`PydanTask`.
     """
 
     model_config = ConfigDict(extra="forbid")

@@ -1,7 +1,7 @@
 # Observability and Tracing
 
 Pydantask includes optional tracing support so you can inspect and debug
-`DeepAgent` runs in external observability tools.
+`PydanTask` runs in external observability tools.
 
 Supported backends (as implemented today):
 
@@ -14,16 +14,16 @@ Tracing is completely optional and is off by default.
 
 ---
 
-## Enabling Tracing via `DeepAgent`
+## Enabling Tracing via `PydanTask`
 
-The simplest way to turn on tracing is to pass `trace=True` to `DeepAgent` and
+The simplest way to turn on tracing is to pass `trace=True` to `PydanTask` and
 set the appropriate environment variables for your chosen backend.
 
 ```python
 
-from pydantask.agents import DeepAgent
+from pydantask.agents import PydanTask
 
-agent = DeepAgent(
+agent = PydanTask(
     objective="Research the best open source LLMs of 2024.",
     model="gpt-4.1-mini",
     trace=True,  # enable tracing with auto-detected backend
@@ -35,10 +35,10 @@ agent = DeepAgent(
 
 When `trace=True`:
 
-- `DeepAgent` calls `init_tracing_backend(autodetect_tracing_backend())`.
+- `PydanTask` calls `init_tracing_backend(autodetect_tracing_backend())`.
 - `autodetect_tracing_backend()` inspects environment variables and selects a
   backend (Langfuse, Logfire, LangSmith, or NONE).
-- Key orchestration methods (such as `DeepAgent.run`) are traced and reported
+- Key orchestration methods (such as `PydanTask.run`) are traced and reported
   to the active backend.
 
 Most users only need this setting plus the right environment variables.
@@ -70,7 +70,7 @@ export LANGSMITH_API_KEY="ls_..."  # or LANGCHAIN_API_KEY
 export LANGCHAIN_TRACING_V2="true"
 ```
 
-With these variables set, constructing `DeepAgent(..., trace=True)` is enough
+With these variables set, constructing `PydanTask(..., trace=True)` is enough
 to have traces sent to your chosen backend.
 
 ---
@@ -79,11 +79,11 @@ to have traces sent to your chosen backend.
 
 If you prefer to select a backend manually (instead of relying on
 environment-based auto-detection), you can call `init_tracing_backend(...)`
-yourself and leave `trace=False` (the default) when constructing `DeepAgent`.
+yourself and leave `trace=False` (the default) when constructing `PydanTask`.
 
 ```python 
 
-from pydantask.agents import DeepAgent
+from pydantask.agents import PydanTask
 from pydantask.observe.tracing import init_tracing_backend
 from pydantask.models import TracingBackend
 
@@ -92,7 +92,7 @@ init_tracing_backend(TracingBackend.LANGFUSE)
 # or: init_tracing_backend(TracingBackend.LOGFIRE)
 # or: init_tracing_backend(TracingBackend.LANGSMITH)
 
-agent = DeepAgent(
+agent = PydanTask(
     objective="...",
     model="gpt-5.2",
     trace=False,  # keep False so your manual choice is not overridden
@@ -105,7 +105,7 @@ In this pattern:
 
 - Your call to `init_tracing_backend(...)` sets the active backend and performs
   any necessary SDK initialization for that backend.
-- Because `trace=False`, `DeepAgent` does not change the active backend.
+- Because `trace=False`, `PydanTask` does not change the active backend.
 
 Use this if you want full control over when and how tracing is configured.
 
@@ -141,5 +141,5 @@ Use this if you want full control over when and how tracing is configured.
 ---
 
 For an end-to-end example of using tracing in a deep research workflow, see
-[Use Cases](use_cases.md), which shows a `DeepAgent` constructed with
+[Use Cases](use_cases.md), which shows a `PydanTask` constructed with
 `trace=True` and tracing-related environment variables set.

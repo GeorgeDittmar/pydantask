@@ -1,11 +1,11 @@
 import asyncio
 
-from pydantask.agents import DeepAgent
+from pydantask.agents import PydanTask
 from dotenv import load_dotenv
 
 load_dotenv()
 
-deep_agent = DeepAgent(
+deep_agent = PydanTask(
     objective="Write a market analysis for LLM tooling in 2026.",
     model="gpt-5.4",
     verbose_logging=True,

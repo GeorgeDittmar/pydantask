@@ -2,7 +2,7 @@
 
 ## Mental model: what the supervisor controls
 
-At runtime, `DeepAgent.run()` repeatedly:
+At runtime, `PydanTask.run()` repeatedly:
 
 1. Runs a deterministic scheduler pass to normalize readiness (`PENDING ↔ READY`) based on dependencies.
 2. Builds a composite “status board” prompt for the supervisor (`_format_supervisor_input_prompt(runtime_state)`).
@@ -22,7 +22,7 @@ The plan is represented as a DAG stored in memory:
   - `status` (`TaskStatus` state machine)
   - `result` (structured `TaskResult` from the worker)
   - `task_feedback` (latest `TaskQAResult` from the critic)
-  - `is_final: bool` (exactly one task should be marked final; DeepAgent uses this as a completion guardrail and to select `final_result`)
+  - `is_final: bool` (exactly one task should be marked final; PydanTask uses this as a completion guardrail and to select `final_result`)
 
 ---
 
@@ -131,7 +131,7 @@ Practical uses:
 
 ## Related code
 
-- Supervisor tool gating: `DeepAgent._default_supervisor_tools()`
-- Dependency checks: `DeepAgent._dependencies_satisfied()`
-- Concurrent execution: `DeepAgent._execute_ready_tasks()`
-- QA transitions: `DeepAgent.handle_critic_result()`
+- Supervisor tool gating: `PydanTask._default_supervisor_tools()`
+- Dependency checks: `PydanTask._dependencies_satisfied()`
+- Concurrent execution: `PydanTask._execute_ready_tasks()`
+- QA transitions: `PydanTask.handle_critic_result()`

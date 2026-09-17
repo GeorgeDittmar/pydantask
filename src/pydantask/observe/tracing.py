@@ -216,7 +216,7 @@ def traced(
     """
 
     def _decorator(fn: AsyncFn) -> AsyncFn:
-        span_name = name or fn.__qualname__  # e.g. "DeepAgent.run"
+        span_name = name or fn.__qualname__  # e.g. "PydanTask.run"
 
         @functools.wraps(fn)
         async def _wrapped(*args: P.args, **kwargs: P.kwargs) -> R:

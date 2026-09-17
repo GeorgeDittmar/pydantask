@@ -1,6 +1,6 @@
 # Pydantask — Codebase Wiki
 
-> Alpha harness for building deep, multi-step agents on top of [Pydantic AI](https://ai.pydantic.dev/).
+> Alpha orchestrator for building multi-step, self-correcting workflows on top of [Pydantic AI](https://ai.pydantic.dev/).
 > Version: 0.1.0a6 | Python >=3.12 | License: Apache-2.0
 
 ## Table of Contents
@@ -9,9 +9,9 @@
 - [High-Level Architecture](#high-level-architecture)
 - [Entry Point & Quickstart](#entry-point--quickstart)
 - [Core Data Models](#core-data-models)
-- [The DeepAgent Orchestrator](#the-deepagent-orchestrator)
+- [The PydanTask Orchestrator](#the-pydantask-orchestrator)
 - [Control Loop](#control-loop)
-- [Sub-Agents](#sub-agents)
+- [Built-in Nodes](#built-in-nodes)
 - [Capability System](#capability-system)
 - [Scheduler](#scheduler)
 - [Tools](#tools)
@@ -30,7 +30,7 @@
 src/
 ├── pydantask/
 │   ├── agents/
-│   │   ├── agent.py          # DeepAgent (~2700 lines, core orchestrator)
+│   │   ├── agent.py          # PydanTask (~2700 lines, core orchestrator)
 │   │   ├── spec.py           # AgentSpec classes (SupervisorSpec, ResearcherSpec, etc.)
 │   │   ├── utils.py          # Spec utilities
 │   │   └── factory.py        # Agent factory (minimal)
@@ -79,11 +79,11 @@ examples/                     # Example projects
 
 ## High-Level Architecture
 
-Pydantask is a **supervisor-driven multi-agent orchestrator** that manages a dynamic task DAG (directed acyclic graph). A `DeepAgent` instance coordinates four built-in sub-agents over shared mutable state:
+Pydantask is a **supervisor-driven multi-agent orchestrator** that manages a dynamic task DAG (directed acyclic graph). A `PydanTask` instance coordinates four built-in capability nodes over shared mutable state:
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                    DeepAgent                         │
+│                    PydanTask                         │
 │                                                      │
 │  ┌──────────┐    ┌──────────┐    ┌──────────┐       │
 │  │ Supervisor│───▶│ Researcher│    │ Producer │       │
@@ -95,7 +95,7 @@ Pydantask is a **supervisor-driven multi-agent orchestrator** that manages a dyn
 │               ▼                               │        │
 │         ┌──────────┐                           │        │
 │         │  Critic  │◀────── (evaluates every  │        │
-│         │  (QA)    │        worker output)    │        │
+│         │  (QA)    │        node output)    │        │
 │         └──────────┘                           │        │
 └─────────────────────────────────────────────────────┘
          │
@@ -115,11 +115,11 @@ The supervisor incrementally builds/patches the DAG. Ready tasks execute in para
 ## Entry Point & Quickstart
 
 ```python
-from pydantask.agents import DeepAgent
+from pydantask.agents import PydanTask
 import asyncio
 
 async def main():
-    agent = DeepAgent(
+    orchestrator = PydanTask(
         objective="Your goal here",
         model="openai:gpt-4.1-mini",  # or "anthropic:..." or Model instance
         max_steps=10,
@@ -149,12 +149,12 @@ All in `src/pydantask/models/models.py`.
 | `TaskStatus` | Enum: `PENDING` → `READY` → `RUNNING` → `NEEDS_REVIEW` → `COMPLETED` / `RERUN` / `FAILED` / `ERRORED` / `CANCELLED`. |
 | `RuntimeState` | Shared mutable state passed between agents. Holds `plan`, `objective`, `capability_registry`, `document_store`, `knowledge_store`, `runtime_steps`, `tokens_used`. |
 | `SupervisorDecision` | Output of the supervisor: `reasoning`, `tasks_to_execute`, `feedback_to_subagents`, `all_tasks_completed`. |
-| `CapabilityDescription` | Metadata + implementation for a sub-agent/tool. Fields: `name`, `description`, `tool_func`, `input_schema`. |
-| `PydanTaskRunResult` | Return type of `DeepAgent.run()`: wraps `final_result`, `plan`, `runtime_state`, `errors`. |
+| `CapabilityDescription` | Metadata + implementation for a capability node. Fields: `name`, `description`, `tool_func`, `input_schema`. |
+| `PydanTaskRunResult` | Return type of `PydanTask.run()`: wraps `final_result`, `plan`, `runtime_state`, `errors`. |
 | `SourceRef` / `ArtifactRef` / `KnowledgeRecord` | Structured references for citations, stored files, and knowledge artifacts. |
 | `WorkflowYamlConfig` / `WorkflowTaskConfig` | Strict user-facing YAML schema for pre-defined DAGs. |
 
-## The DeepAgent Orchestrator
+## The PydanTask Orchestrator
 
 `src/pydantask/agents/agent.py` (~2700 lines). This is the single most important file.
 
@@ -197,7 +197,7 @@ The main loop in `run()` runs for at most `max_steps` iterations:
 7. **Checkpoint** — if enabled, persists state summary.
 8. **No-progress guardrail** — 3 consecutive cycles with no executed tasks → abort with deadlock report.
 
-## Sub-Agents
+## Built-in Nodes
 
 All are `pydantic_ai.Agent` instances sharing the same model.
 
@@ -231,7 +231,7 @@ All are `pydantic_ai.Agent` instances sharing the same model.
 
 ## Capability System
 
-The capability system lets users register arbitrary sub-agents or functions as DAG nodes.
+The capability system lets users register arbitrary DAG nodes as callable capabilities.
 
 ### CapabilityDescription
 
@@ -289,7 +289,7 @@ For callable capabilities, `_build_injected_call()` maps function parameters to 
 | `think_tool` | Private scratchpad for agent reasoning (returns empty string, no side effects). |
 | `append_scratch_note` / `read_scratch_notes` | In-memory scratchpad per task, checkpointed. |
 | `get_current_datetime` | Returns ISO-8601 current time. |
-| `write_to_file_system` / `read_from_file_system` / `delete_from_file_system` | Filesystem tools (NOT enabled by default — harness is in-memory focused). |
+| `write_to_file_system` / `read_from_file_system` / `delete_from_file_system` | Filesystem tools (NOT enabled by default — orchestrator is in-memory focused). |
 | `list_documents` | Lists documents in `RuntimeState.document_store`. |
 | `list_completed_tasks` / `get_task_result` | Cross-agent task result inspection. |
 | `save_task_context` / `read_task_context` | Task-scoped file storage with convention `task-{id}-{kind}.md`. |
@@ -338,7 +338,7 @@ Multi-backend tracing (`observe/tracing.py`):
 
 ## Memory Layer
 
-`memory/` module provides a pluggable long-term memory system for agents:
+`memory/` module provides a pluggable long-term memory system for orchestrator runs:
 
 ### MemoryLayer (`memory/core.py`)
 
@@ -364,7 +364,7 @@ Falls back from `sentence-transformers` (MiniLM-L6-v2, 384-dim) to a determinist
 - Validates against `WorkflowYamlConfig` (strict schema, no unknown keys).
 - Runs DAG validation: unique IDs, no self-dependencies, cycle detection via DFS.
 - Auto-marks the highest task_id as `is_final=True` if not set.
-- Converts to canonical `Plan` for use as `seed_plan` in `DeepAgent`.
+- Converts to canonical `Plan` for use as `seed_plan` in `PydanTask`.
 
 ---
 
@@ -543,12 +543,12 @@ Before any PR (human or agent-generated):
 
 ## Development Conventions
 
-### Adding a new sub-agent capability
+### Adding a new capability node
 
 1. Create a `pydantic_ai.Agent` with appropriate `system_prompt`, `tools`, `deps_type=TaskRunDeps`, `output_type=TaskResult`.
 2. Wrap with `CapabilityDescription(name="...", description="...", tool_func=...)`.
 3. If it's a plain callable (not an Agent), wrap with `as_runner(func)`.
-4. Pass to `DeepAgent(capabilities=[...])`.
+4. Pass to `PydanTask(capabilities=[...])`.
 
 ### Adding a new tool
 
