@@ -569,13 +569,19 @@ class PydanTask:
             _default_research_tool_set.append(tavily_search_tool(tavily_api_key))
 
         self._researcher_agent = Agent(
-            model=self._retry_model,
-            name="_default_Research_Agent",
-            system_prompt=COMPRESSED_RESEARCH_SYS_PROMPT,
-            tools=_default_research_tool_set,
-            deps_type=TaskRunDeps,
-            output_type=TaskResult,
-        )
+                model=self._retry_model,
+                name="_default_Research_Agent",
+                system_prompt=COMPRESSED_RESEARCH_SYS_PROMPT,
+                tools=_default_research_tool_set,
+                deps_type=TaskRunDeps,
+                output_type=TaskResult,
+                model_settings={
+                        "extra_params": {
+                            "cache_prompt": True,
+                            "slot_id": -1  # Strongly recommended to auto-match any available server slot
+                        }
+                }
+            )
 
         general_worker_agent = Agent(
             model=self._retry_model,
@@ -731,7 +737,7 @@ class PydanTask:
             # NOTE: "openrouter" here assumes OpenAI-compatible API. If you want true
             # OpenRouter defaults (headers/routing), we may want OpenRouterProvider. Dunno
             return OpenAIChatModel(
-                model_name, provider=OpenAIProvider(http_client=self._retry_client)
+                model_name, provider=OpenAIProvider(http_client=self._retry_client), 
             )
 
         if provider_name == "anthropic":
@@ -2652,8 +2658,8 @@ Context-budget note:
         """
 
         # TODO: This is a bit of a hack. Should probably just have tools scoped to READY and COMPLETED
-        if status.value not in [TaskStatus.READY, TaskStatus.COMPLETED]:
-            raise ValueError("Not allouwed action: Only allowed to set a task to READY state or COMPLETED sate.")
+        if status not in [TaskStatus.READY, TaskStatus.COMPLETED]:
+            raise ValueError(f"Not allouwed action: Only allowed to set a task to READY state or COMPLETED sate. Was give {status}")
 
         async with self._plan_lock:
             if task_id in ctx.deps.plan:
