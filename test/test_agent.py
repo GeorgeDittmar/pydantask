@@ -264,7 +264,7 @@ async def test_handle_critic_result_transitions():
 
 @pytest.mark.asyncio
 async def test_execute_sets_result_and_needs_review(runtime_state: RuntimeState):
-    da = make_minimal_deep_agent(prompt="overall")
+    da = make_minimal_pydantask(prompt="overall")
 
     sub_agent = MagicMock(name="sub_agent")
     sub_agent.run = AsyncMock(name="run")
@@ -291,7 +291,7 @@ async def test_execute_sets_result_and_needs_review(runtime_state: RuntimeState)
 async def test_execute_ready_tasks_filters_deps_and_injects_feedback(
     runtime_state: RuntimeState,
 ):
-    da = make_minimal_deep_agent(prompt="overall")
+    da = make_minimal_pydantask(prompt="overall")
 
     # plan: task 1 completed, task 2 ready (depends on 1), task 3 blocked (depends on missing)
     runtime_state.plan[1] = TaskItem(
@@ -351,7 +351,7 @@ async def test_execute_ready_tasks_filters_deps_and_injects_feedback(
 
 @pytest.mark.asyncio
 async def test_update_task_status_and_view_qa_report(runtime_state: RuntimeState):
-    da = make_minimal_deep_agent(prompt="overall")
+    da = make_minimal_pydantask(prompt="overall")
     ctx = SimpleNamespace(deps=runtime_state)
 
     runtime_state.plan[1] = TaskItem(
@@ -544,7 +544,7 @@ async def test_list_completed_tasks_tool_supports_runtime_state_deps(
 
 @pytest.mark.asyncio
 async def test_run_stops_when_supervisor_says_done(runtime_state: RuntimeState):
-    da = make_minimal_deep_agent(prompt="overall")
+    da = make_minimal_pydantask(prompt="overall")
 
     # Pre-populate the runtime with a completed final task so the deterministic
     # completion guardrail accepts the supervisor's completion signal.
@@ -586,7 +586,7 @@ async def test_run_stops_when_supervisor_says_done(runtime_state: RuntimeState):
 
 @pytest.mark.asyncio
 async def test_mark_final_task_sets_flag_and_emits_event(runtime_state: RuntimeState):
-    da = make_minimal_deep_agent(prompt="overall")
+    da = make_minimal_pydantask(prompt="overall")
     recorder = DummyRecorder()
     da._checkpoint_recorder = recorder
 
@@ -623,7 +623,7 @@ async def test_mark_final_task_sets_flag_and_emits_event(runtime_state: RuntimeS
 
 @pytest.mark.asyncio
 async def test_run_overrides_completion_when_no_final_task(runtime_state: RuntimeState):
-    da = make_minimal_deep_agent(prompt="overall")
+    da = make_minimal_pydantask(prompt="overall")
     da._initialize_runtime_state = MagicMock(return_value=runtime_state)
     da._format_supervisor_input_prompt = MagicMock(return_value="prompt")
 
@@ -651,7 +651,7 @@ async def test_run_overrides_completion_when_no_final_task(runtime_state: Runtim
 async def test_scheduler_marks_callable_task_errored_when_missing_parameters(
     runtime_state: RuntimeState,
 ):
-    da = make_minimal_deep_agent(prompt="overall")
+    da = make_minimal_pydantask(prompt="overall")
 
     async def write_something_to_file(content: str, filename: str) -> str:
         return f"wrote {filename}"
@@ -688,7 +688,7 @@ async def test_scheduler_marks_callable_task_errored_when_missing_parameters(
 async def test_coerce_output_ingests_existing_file_as_artifact(
     tmp_path, runtime_state: RuntimeState
 ):
-    da = make_minimal_deep_agent(prompt="overall")
+    da = make_minimal_pydantask(prompt="overall")
 
     # Create a fake checkpoint recorder so artifacts go under tmp_path.
     cp_dir = tmp_path / "cp"
