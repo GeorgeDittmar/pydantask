@@ -126,7 +126,10 @@ def test_deep_agent_init_sets_registry_keys(monkeypatch: pytest.MonkeyPatch):
         ),
         patch.object(agent_mod, "OpenAIProvider", autospec=True),
         patch.object(agent_mod, "OpenAIChatModel", autospec=True),
-        patch.object(agent_mod, "tavily_search_tool", return_value=_fake_tavily_tool),
+        patch(
+            "pydantic_ai.common_tools.tavily.tavily_search_tool",
+            return_value=_fake_tavily_tool,
+        ),
         # Avoid pulling in pydantic-ai's tool schema machinery for this unit test.
         patch.object(agent_mod, "Agent", autospec=True) as agent_cls,
     ):

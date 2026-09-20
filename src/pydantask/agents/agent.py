@@ -31,7 +31,6 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.providers.anthropic import AnthropicProvider
-from pydantic_ai.common_tools.tavily import tavily_search_tool
 from pydantic_ai.common_tools.duckduckgo import duckduckgo_search_tool
 from pydantic_ai.usage import UsageLimits
 
@@ -566,6 +565,7 @@ class PydanTask:
             )
             _default_research_tool_set.append(duckduckgo_search_tool())
         else:
+            from pydantic_ai.common_tools.tavily import tavily_search_tool
             _default_research_tool_set.append(tavily_search_tool(tavily_api_key))
 
         self._researcher_agent = Agent(
