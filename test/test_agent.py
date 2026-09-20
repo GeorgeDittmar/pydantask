@@ -116,20 +116,14 @@ def test_autodetect_tracing_backend_precedence(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_deep_agent_init_sets_registry_keys(monkeypatch: pytest.MonkeyPatch):
-    # pydantic-ai inspects tools as callables and expects `__name__`.
-    def _fake_tavily_tool(*args, **kwargs):
-        return {"ok": True}
-
     with (
         patch.object(
             agent_mod.PydanTask, "_create_retrying_client", return_value=AsyncClient()
         ),
         patch.object(agent_mod, "OpenAIProvider", autospec=True),
         patch.object(agent_mod, "OpenAIChatModel", autospec=True),
-        patch(
-            "pydantic_ai.common_tools.tavily.tavily_search_tool",
-            return_value=_fake_tavily_tool,
-        ),
+        # Ensure TAVILY_API_KEY is not set so duckduckgo path is taken (no tavily dependency).
+        patch.object(agent_mod.os, "getenv", return_value=None),
         # Avoid pulling in pydantic-ai's tool schema machinery for this unit test.
         patch.object(agent_mod, "Agent", autospec=True) as agent_cls,
     ):
