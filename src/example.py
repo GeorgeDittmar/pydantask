@@ -8,7 +8,7 @@ import asyncio
 
 load_dotenv(find_dotenv())
 
-checkpoint_dir = Path("_checkpoint") / "extraction_test"
+checkpoint_dir = Path("_checkpoint") / "jev_test"
 
 async def write_to_file(content:str, filename:str) -> str:
 
@@ -31,7 +31,8 @@ reading_capability = CapabilityDescription(name="read_from_file",
 da = PydanTask(
     # Simple task to verify the extraction pipeline:
     # Create a haiku about autumn leaves, save it, then translate to French.
-    "Calculate the sum of all prime numbers less than 100. Write the list of those primes to primes.txt. Then add up the squares of each of those primes and write that total sum to prime_squares_total.txt.",
+    # "Calculate the sum of all prime numbers less than 100. Write the list of those primes to primes.txt. Then add up the squares of each of those primes and write that total sum to prime_squares_total.txt.",
+    "I need a report on the new JEV System One model fronm TypeSafe AI that just dropped. I want to know how it works at a high level, how its trained using RLCD (reinforcement learning for calibrated decisions), and any way to emulate using current LLMs. Write teh document and sources to a markdown format.",
     model="gpt-5.4",
     trace=True,
     max_steps=10,
@@ -39,6 +40,7 @@ da = PydanTask(
     # capabilities=[writing_capability, reading_capability],
     checkpoint=True,
     checkpoint_dir=checkpoint_dir,
+    resume_from_checkpoint=True
 )
 
 result = asyncio.run(da.run())
@@ -48,11 +50,11 @@ print(f"Checkpoint events saved to: {da.checkpoint_path}")
 # pprint(result.model_dump())
 # Write JSON data to a file
 
-with open("extraction_test.json", "w", encoding="utf-8") as json_file:
+with open("jev_3.json", "w", encoding="utf-8") as json_file:
     json_file.write(result.model_dump_json(indent=2))
 
 final_output = result.final_result.detailed_output if result.final_result else ""
-with open("extraction_test.md", "w", encoding="utf-8") as f:
+with open("jev_report_3.md", "w", encoding="utf-8") as f:
     f.write(final_output)
 
 final_output = result.final_result.detailed_output if result.final_result else ""

@@ -2650,6 +2650,11 @@ Context-budget note:
             task_id: Identifier of the task to update.
             status: New :class:`TaskStatus` value for the task.
         """
+
+        # TODO: This is a bit of a hack. Should probably just have tools scoped to READY and COMPLETED
+        if status.value not in [TaskStatus.READY, TaskStatus.COMPLETED]:
+            raise ValueError("Not allouwed action: Only allowed to set a task to READY state or COMPLETED sate.")
+
         async with self._plan_lock:
             if task_id in ctx.deps.plan:
                 task = ctx.deps.plan.get(task_id)

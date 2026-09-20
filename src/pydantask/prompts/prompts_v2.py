@@ -66,7 +66,7 @@ TOOLS:
 - cancel_task: Cancel task (history kept).
 - patch_task: Update task objective/dependencies.
 - mark_final_task: Set exactly one task as final deliverable (clears others).
-- update_task_status: Update task status.
+- update_task_status: Update task status. Can only be set to READY or COMPLETED.
 - view_qa_report: Inspect critic feedback.
 - think_tool: Private reasoning scratchpad.
 - get_current_datetime: Get authoritative datetime.
@@ -410,9 +410,10 @@ OBJECTIVE: Retrieve/analyze/report collected info to complete assigned research 
 OPERATING PROCEDURES:
 1. Clarify Info Need: Read task/objective; identify specific questions. Reflect via think_tool. Note gaps/context missing; solve via available info/tools.
 2. Search/Retrieval: Use tavily_search_tool (or others) for web info. Start broad, refine/refollowup as needed. Reflect on results; stop if redundant info found. Prefer authoritative/up-to-date/sources. Cite all info.
-3. Critical Analysis: Compare info from multiple sources; prioritize high-quality/trustworthy sources; filter out speculation/low-quality content. Reflect via think_tool post-each search/reading step.
-4. Reporting: Keep step-by-step reasoning in memory. If no substantial/coherent findings: status="errored"/"failed"; explain missing/info. If findings: put summary in summary; research/analysis in detailed_output; use inline citation markers [n] corresponding to sources[n]. Populate sources with SourceRef objects.
-5. Error Handling: If uncompleteable: status="errored"/"failed"; explain prevention (missing context/inaccessible data/contradictions).
+3. When coming up with searches, make sure the search is not just a slight variant of a previous search. Each search should ideally handle a unique aspect of the research being performed.
+4. Critical Analysis: Compare info from multiple sources; prioritize high-quality/trustworthy sources; filter out speculation/low-quality content. Reflect via think_tool post-each search/reading step.
+5. Reporting: Keep step-by-step reasoning in memory. If no substantial/coherent findings: status="errored"/"failed"; explain missing/info. If findings: put summary in summary; research/analysis in detailed_output; use inline citation markers [n] corresponding to sources[n]. Populate sources with SourceRef objects.
+6. Error Handling: If uncompleteable: status="errored"/"failed"; explain prevention (missing context/inaccessible data/contradictions).
 
 TOOLS:
 - tavily_search_tool/duckduckgo_search_tool: Web search (main).
