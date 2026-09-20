@@ -1,12 +1,12 @@
 from abc import ABC, abstractmethod
-from typing import Callable, Any, Union
-from pydantic_ai.agent import Agent
+
 from pydantic_ai import RunContext
+
 from pydantask.models import RuntimeState
 from pydantask.prompts import (
+    DYNAMIC_SUPERVISOR_SYS_PROMPT,
     RESEARCH_AGENT_SYS_PROMPT,
     SUPERVISOR_INPUT_PROMPT,
-    DYNAMIC_SUPERVISOR_SYS_PROMPT,
 )
 from pydantask.prompts.prompts import PRODUCER_SYS_PROMPT
 
@@ -19,7 +19,6 @@ class BaseAgentSpec(ABC):
 
 class SupervisorSpec(BaseAgentSpec):
     def system_prompt(self, ctx: RunContext[RuntimeState]) -> str:
-
         return DYNAMIC_SUPERVISOR_SYS_PROMPT
 
     def format_input_prompt(self, ctx: RunContext[RuntimeState]) -> str:
@@ -50,10 +49,7 @@ class SupervisorSpec(BaseAgentSpec):
         plan_display = "\n".join(plan_display_lines)
         # Simplify the registry so the Supervisor sees "Tools" not "Agent Objects"
         agent_display = "\n".join(
-            [
-                f"- {uuid}: {info.description}"
-                for uuid, info in ctx.deps.agent_registry.items()
-            ]
+            [f"- {uuid}: {info.description}" for uuid, info in ctx.deps.agent_registry.items()]
         )
         return SUPERVISOR_INPUT_PROMPT.format(
             objective=ctx.deps.objective,

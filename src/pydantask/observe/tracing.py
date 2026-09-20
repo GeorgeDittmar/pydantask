@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-import os
-import functools
 import atexit
+import functools
+import os
+from collections.abc import Callable, Coroutine
 from contextvars import ContextVar
-from typing import Any, Callable, TypeVar, Literal, ParamSpec, Coroutine, cast
+from typing import Any, Literal, ParamSpec, TypeVar, cast
 
-from loguru import logger
 from langfuse import get_client
+from loguru import logger
 
 from pydantask.models import TracingBackend
 
@@ -107,13 +108,14 @@ def init_langfuse_tracing() -> None:
 
 def init_logfire_tracing() -> None:
     """Initialize Logfire tracing once."""
-    global _logfire_instrumented 
+    global _logfire_instrumented
     if _logfire_instrumented:
         return
 
     try:
         logger.info("Attempting to enable Logfire tracing...")
         import logfire
+
         logfire.configure()
         logfire.instrument_pydantic_ai()
         logfire.instrument_httpx()
@@ -164,7 +166,6 @@ def init_tracing_backend(backend: TracingBackend) -> None:
         # LangSmith runs are generally sent synchronously, but register anyway for symmetry.
         atexit.register(flush_tracing)
         return
-    
 
 
 P = ParamSpec("P")

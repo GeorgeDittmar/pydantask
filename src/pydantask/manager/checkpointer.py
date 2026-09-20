@@ -1,12 +1,12 @@
 # from asyncio import tasks
+import asyncio
 import json
 import uuid
-import asyncio
-
-from pydantic import BaseModel, Field
-from typing import Literal, Any, Dict
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field
 
 CheckpointEventType = Literal[
     "task_added",
@@ -25,7 +25,7 @@ class CheckpointEvent(BaseModel):
     ts: datetime = Field(default_factory=lambda: datetime.now())
     event_id: str = Field(default_factory=lambda: uuid.uuid4().hex)
     type: CheckpointEventType
-    payload: Dict[str, Any] = Field(default_factory=dict)
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 class CheckpointRecorder:
@@ -36,12 +36,12 @@ class CheckpointRecorder:
         self.summary_path = directory / "summaries.jsonl"
         self._lock = asyncio.Lock()
 
-    async def record(self, event_type: CheckpointEventType, payload: Dict[str, Any]) -> None:
+    async def record(self, event_type: CheckpointEventType, payload: dict[str, Any]) -> None:
         event = CheckpointEvent(type=event_type, payload=payload)
         await self._append_json_line(self.log_path, event.model_dump_json())
 
-    async def record_summary(self, summary: Dict[str, Any]) -> None:
-       await self._append_json_line(self.summary_path, json.dumps(summary))
+    async def record_summary(self, summary: dict[str, Any]) -> None:
+        await self._append_json_line(self.summary_path, json.dumps(summary))
 
     async def load_events(self) -> list[CheckpointEvent]:
         if not self.log_path.exists():
@@ -56,6 +56,7 @@ class CheckpointRecorder:
 
     async def _append_json_line(self, path: Path, json_line: str) -> None:
         async with self._lock:
+
             def _write_line() -> None:
                 with path.open("a", encoding="utf-8") as fh:
                     fh.write(json_line + "\n")

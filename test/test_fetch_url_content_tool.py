@@ -1,16 +1,12 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
 from pydantask.tools import default_tools
 
 
 class _FakeStreamResponse:
-    def __init__(
-        self, *, url: str, status_code: int, headers: dict[str, str], body: bytes
-    ):
+    def __init__(self, *, url: str, status_code: int, headers: dict[str, str], body: bytes):
         self.status_code = status_code
         self.url = url
         self.headers = headers
@@ -60,16 +56,12 @@ class _FakeAsyncClient:
 @pytest.mark.asyncio
 async def test_fetch_url_content_happy_path(monkeypatch: pytest.MonkeyPatch):
     # Avoid DNS lookups and treat example.com as safe.
-    monkeypatch.setattr(
-        default_tools, "_host_looks_local_or_private", lambda host: (False, "")
-    )
+    monkeypatch.setattr(default_tools, "_host_looks_local_or_private", lambda host: (False, ""))
 
     # Patch httpx.AsyncClient used inside the tool.
     monkeypatch.setattr(default_tools.httpx, "AsyncClient", _FakeAsyncClient)
 
-    text = await default_tools.fetch_url_content(
-        "https://example.com/", max_chars=5_000
-    )
+    text = await default_tools.fetch_url_content("https://example.com/", max_chars=5_000)
     assert "Fetched:" in text
     assert "Status: 200" in text
     assert "hello world" in text

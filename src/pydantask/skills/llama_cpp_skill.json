@@ -1,0 +1,54 @@
+{
+  "engine": "llama-server",
+  "engine_url": "http://localhost:{port}/v1/completions",
+  "health_endpoint": "http://localhost:{port}/health",
+  "description": "Structured skill definition for llama.cpp-based model execution. This is the source of truth — the prose reference (skills/llama_cpp.md) supplements this but is not authoritative.",
+  "required_flags": ["--model", "--port"],
+  "optional_flags": {
+    "--ctx-size": {
+      "type": "integer",
+      "default": 4096,
+      "min": 128,
+      "max": 131072,
+      "description": "Context window length (tokens). Set based on task complexity and available memory.",
+      "spawn_args_field": "ctx_size"
+    },
+    "--mmap": {
+      "type": "boolean",
+      "default": true,
+      "description": "Memory-map the model file (recommended for M-series chips — enables instant mapping and faster loading).",
+      "spawn_args_field": "mmap"
+    },
+    "--n-gpu-layers": {
+      "type": "integer",
+      "default": 99,
+      "min": 0,
+      "max": 999,
+      "description": "Number of layers to offload to Metal on Apple Silicon. Set to 0 to force CPU-only execution.",
+      "spawn_args_field": "n_gpu_layers"
+    },
+    "--temp": {
+      "type": "number",
+      "default": 0.7,
+      "min": 0.0,
+      "max": 2.0,
+      "description": "Sampling temperature. Lower = more deterministic, higher = more creative.",
+      "spawn_args_field": "temp"
+    },
+    "--top-p": {
+      "type": "number",
+      "default": 0.9,
+      "min": 0.0,
+      "max": 1.0,
+      "description": "Nucleus sampling top-p threshold. Controls diversity vs. coherence of output.",
+      "spawn_args_field": "top_p"
+    }
+  },
+  "constraints": {
+    "port_range": [60000, 65535],
+    "max_concurrent_per_port": 1,
+    "max_concurrent_models": null,
+    "health_check_timeout_seconds": 120,
+    "health_check_interval_seconds": 0.5
+  }
+}

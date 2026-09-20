@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -86,16 +86,16 @@ class KnowledgeRecord(BaseModel):
     """
 
     id: str = Field(description="Logical identifier (what tools use as key).")
-    path: Optional[str] = Field(
+    path: str | None = Field(
         default=None, description="Filesystem path if this is backed by a file."
     )
     task_ids: list[int] = Field(
         description="which TaskItems this relates to (if any)", default_factory=list
     )
-    summary: Optional[str] = Field(
+    summary: str | None = Field(
         default=None, description="Short human-readable description of the content."
     )
-    source_task_ids: List[int] = Field(
+    source_task_ids: list[int] = Field(
         default_factory=list,
         description="Tasks that produced or updated this document.",
     )
@@ -134,27 +134,27 @@ class SourceRef(BaseModel):
     kind: Literal["web", "document", "code", "data", "other"] = Field(
         description="Type of source (web page, file, code snippet, etc.)."
     )
-    title: Optional[str] = Field(
+    title: str | None = Field(
         default=None,
         description="Human-readable title of the source, if available.",
     )
-    url: Optional[str] = Field(
+    url: str | None = Field(
         default=None,
         description="URL if this is an online source.",
     )
-    path: Optional[str] = Field(
+    path: str | None = Field(
         default=None,
         description="Filesystem path / doc ID if this is a local artifact.",
     )
-    snippet: Optional[str] = Field(
+    snippet: str | None = Field(
         default=None,
         description="Short excerpt of the key evidence used from this source. No more than 2-3 sentences",
     )
-    accessed_at: Optional[datetime] = Field(
+    accessed_at: datetime | None = Field(
         default=None,
         description="When this source was accessed (for web/date-sensitive content).",
     )
-    metadata: Dict[str, Any] = Field(
+    metadata: dict[str, Any] = Field(
         default_factory=dict,
         description="Any extra structured info (author, publisher, etc.).",
     )
@@ -175,19 +175,19 @@ class ArtifactRef(BaseModel):
 
     artifact_id: str = Field(description="Stable identifier for this artifact.")
     uri: str = Field(description="Location/URI for retrieving this artifact.")
-    name: Optional[str] = Field(
+    name: str | None = Field(
         default=None, description="Optional human-friendly label for the artifact."
     )
     mime_type: str = Field(default="text/plain", description="MIME type.")
-    size_bytes: Optional[int] = Field(default=None, description="Size in bytes.")
-    sha256: Optional[str] = Field(
+    size_bytes: int | None = Field(default=None, description="Size in bytes.")
+    sha256: str | None = Field(
         default=None,
         description="Optional sha256 hex digest (redundant if artifact_id encodes it).",
     )
     created_at: datetime = Field(
         default_factory=datetime.now, description="When the artifact was created."
     )
-    preview: Optional[str] = Field(
+    preview: str | None = Field(
         default=None,
         description="Optional small preview snippet (truncated) to avoid large tool reads.",
     )
@@ -220,9 +220,7 @@ class TaskResult(BaseModel):
 
     summary: str = Field(
         default="",
-        description=(
-            "Concise, human-readable summary of what this task produced or concluded. "
-        ),
+        description=("Concise, human-readable summary of what this task produced or concluded. "),
     )
 
     detailed_output: str = Field(
@@ -233,12 +231,12 @@ class TaskResult(BaseModel):
         ),
     )
 
-    notes: List[str] = Field(
+    notes: list[str] = Field(
         default_factory=list,
         description="All notes or scratch file paths that were used to help complete this task.",
     )
 
-    sources: List[SourceRef] = Field(
+    sources: list[SourceRef] = Field(
         default_factory=list,
         description=(
             "Structured list of sources used to produce this result. "
@@ -247,7 +245,7 @@ class TaskResult(BaseModel):
         ),
     )
 
-    artifacts: List[ArtifactRef] = Field(
+    artifacts: list[ArtifactRef] = Field(
         default_factory=list,
         description=(
             "References to any stored artifacts produced by this task (tables, raw dumps, "
@@ -256,7 +254,7 @@ class TaskResult(BaseModel):
         ),
     )
 
-    data: Dict[str, Any] = Field(
+    data: dict[str, Any] = Field(
         default_factory=dict,
         description=(
             "Optional structured payload for machine-readable outputs. Keep this small; "
@@ -264,7 +262,7 @@ class TaskResult(BaseModel):
         ),
     )
 
-    error_msg: Optional[str] = Field(
+    error_msg: str | None = Field(
         default=None,
         description=(
             "If status is ERRORED or FAILED, a clear explanation of what went "
@@ -312,39 +310,31 @@ class TaskItem(BaseModel):
     overall_objective: str = Field(
         description="The overall objective this task is contributing to solving."
     )
-    sub_task_objective: str = Field(
-        description="The sub task objective that must be solved for."
-    )
+    sub_task_objective: str = Field(description="The sub task objective that must be solved for.")
     status: TaskStatus
-    result: Optional[TaskResult] = Field(
+    result: TaskResult | None = Field(
         description="Where to put the task result if completed.", default=None
     )
-    capability: str = Field(
-        description="Which sub agent capability should attempt this task."
-    )
-    sub_task_dependencies: Optional[List[int]] = Field(
+    capability: str = Field(description="Which sub agent capability should attempt this task.")
+    sub_task_dependencies: list[int] | None = Field(
         description="Put task_id dependency IDs here", default_factory=list
     )
-    task_feedback: Optional[TaskQAResult] = None  # Store the Eval "critique" here
-    error_msg: Optional[str] = Field(
+    task_feedback: TaskQAResult | None = None  # Store the Eval "critique" here
+    error_msg: str | None = Field(
         default=None,
         description="Any errors that happened during the running of this task. Only store the more recent error message.",
     )  # Store any error messages here
-    iteration_history: List = Field(
+    iteration_history: list = Field(
         default_factory=list,
         description="Store any answer history if multiple attempts are made.",
     )  # Store any answer history if multiple attempts are made
-    time_scope: Optional[str] = Field(
+    time_scope: str | None = Field(
         default=None, description="2026, 2021-2025, two days ago"
     )  # "2026", "2025-2026", "last 7 days", etc.
-    parameters: dict = Field(
-        default_factory=dict
-    )  # you can stash structured temporal params here
+    parameters: dict = Field(default_factory=dict)  # you can stash structured temporal params here
     attempt_count: int = 0
     max_attempts: int = 3
-    metadata: dict = Field(
-        default_factory=dict, description="Optional metadata for this task."
-    )
+    metadata: dict = Field(default_factory=dict, description="Optional metadata for this task.")
 
     is_final: bool = Field(
         default=False,
@@ -382,9 +372,7 @@ class CapabilityDescription(BaseModel):
     name: str = Field(
         description="Name of the agent/capability, e.g. 'web_search', 'file_writer', etc."
     )
-    description: str = Field(
-        description="Human-readable description of what this capability does."
-    )
+    description: str = Field(description="Human-readable description of what this capability does.")
     # We keep this very loose to avoid Pydantic trying to introspect complex
     # types like `pydantic_ai.Agent` (which can reference optional imports
     # and cause schema generation issues). At runtime this will typically be
@@ -397,7 +385,7 @@ class CapabilityDescription(BaseModel):
     )
     # Optional Pydantic model *class* describing structured input, if you
     # want to be explicit about what this capability expects.
-    input_schema: Optional[type[BaseModel]] = Field(
+    input_schema: type[BaseModel] | None = Field(
         default=None,
         description=(
             "Optional Pydantic model class that defines the expected input schema "
@@ -427,12 +415,12 @@ class RuntimeState(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    plan: Dict[int, TaskItem] = Field(
+    plan: dict[int, TaskItem] = Field(
         description="The plan that is generated to solve the users objective.",
         default_factory=dict,
     )
     objective: str = Field(description="The overall objective to solve for.")
-    capability_registry: Dict[str, Any] = Field(
+    capability_registry: dict[str, Any] = Field(
         description="Capabilities available to perform tasks.",
         default_factory=dict,
         exclude=True,
@@ -445,8 +433,8 @@ class RuntimeState(BaseModel):
     )
     runtime_steps: int = 0
     tokens_used: int = 0
-    task_queue: List[TaskItem] = Field(default_factory=list)
-    knowledge_store: Dict[str, KnowledgeRecord] = Field(
+    task_queue: list[TaskItem] = Field(default_factory=list)
+    knowledge_store: dict[str, KnowledgeRecord] = Field(
         default_factory=dict,
         description=(
             "Knowledge Store: maps logical IDs to  "
@@ -454,7 +442,7 @@ class RuntimeState(BaseModel):
             "Accumulated information is stored here for other agents to use if needed."
         ),
     )  # simple in-memory document store
-    document_store: Dict[str, str] = Field(
+    document_store: dict[str, str] = Field(
         description=(
             "In-memory document store for this run. Keys may be used by tools to store "
             "notes or intermediate artifacts."
@@ -485,8 +473,8 @@ class SupervisorDecision(BaseModel):
     reasoning: str = Field(
         description="Reasoning for why these tasks need to be completed next or the reasoning for when we are done executing."
     )
-    tasks_to_execute: List[int] = Field(description="List of task id's to execute.")
-    feedback_to_subagents: Optional[Dict[int, str]] = Field(
+    tasks_to_execute: list[int] = Field(description="List of task id's to execute.")
+    feedback_to_subagents: dict[int, str] | None = Field(
         default=None,
         description="Any feedback to the sub-agents if additional context or instructions needs to be given to the sub agent for a particular task. Dict is key: task_id, value: feedback for subagent for the given task.",
     )
@@ -510,9 +498,7 @@ class Plan(BaseModel):
         tasks: Ordered list of :class:`TaskItem` definitions.
     """
 
-    reasoning_steps: str = Field(
-        description="Internal reasoning before finalizing the plan"
-    )
+    reasoning_steps: str = Field(description="Internal reasoning before finalizing the plan")
     tasks: list[TaskItem]
 
 
@@ -524,7 +510,7 @@ class SubAgentInstruction(BaseModel):
         instructions: Concrete instructions the sub-agent should follow.
     """
 
-    reasoning: Optional[str] = None
+    reasoning: str | None = None
     instructions: str
 
 
@@ -568,20 +554,18 @@ class PydanTaskRunResult(BaseModel):
     """
 
     objective: str = Field(..., description="The original user objective.")
-    final_result: Optional[TaskResult] = Field(
+    final_result: TaskResult | None = Field(
         default=None,
         description="The final TaskResult synthesized by the producer_agent, if any.",
     )
     # status: Literal["success", "partial", "failed"] = Field(
     #     ..., description="High-level outcome of the run."
     # )
-    plan: Dict[int, TaskItem] = Field(
+    plan: dict[int, TaskItem] = Field(
         ...,
         description="The final plan state (all TaskItems after execution).",
     )
-    runtime_state: RuntimeState = Field(
-        description="Complete runtime state for auditing."
-    )
+    runtime_state: RuntimeState = Field(description="Complete runtime state for auditing.")
     errors: list[str] = Field(
         default_factory=list,
         description="Any top-level errors or important warnings.",
@@ -609,11 +593,9 @@ class WorkflowTaskConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    task_id: int = Field(
-        description="Unique integer task id. (YAML key must be exactly: task_id)"
-    )
+    task_id: int = Field(description="Unique integer task id. (YAML key must be exactly: task_id)")
 
-    overall_objective: Optional[str] = Field(
+    overall_objective: str | None = Field(
         default=None,
         description=(
             "Overall objective for this task. If omitted, the workflow's top-level "
@@ -631,7 +613,7 @@ class WorkflowTaskConfig(BaseModel):
         description="Capability/sub-agent name to execute this task (e.g. research_agent)."
     )
 
-    sub_task_dependencies: List[int] = Field(
+    sub_task_dependencies: list[int] = Field(
         default_factory=list,
         description=(
             "Upstream task IDs that must be completed before this task can run. "
@@ -644,17 +626,17 @@ class WorkflowTaskConfig(BaseModel):
         description="Initial task status when seeding a workflow.",
     )
 
-    time_scope: Optional[str] = Field(
+    time_scope: str | None = Field(
         default=None,
         description="Optional temporal scope string ('2026', 'last 7 days', etc.).",
     )
 
-    parameters: Dict[str, Any] = Field(
+    parameters: dict[str, Any] = Field(
         default_factory=dict,
         description="Optional structured parameters for the sub-agent (tool inputs, etc.).",
     )
 
-    metadata: Dict[str, Any] = Field(
+    metadata: dict[str, Any] = Field(
         default_factory=dict,
         description="Optional free-form metadata for the task.",
     )
@@ -684,29 +666,27 @@ class WorkflowYamlConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    objective: str = Field(
-        description="Top-level objective for the workflow. (Required)"
-    )
+    objective: str = Field(description="Top-level objective for the workflow. (Required)")
 
-    reasoning_steps: Optional[str] = Field(
+    reasoning_steps: str | None = Field(
         default=None,
         description="Optional notes about why this workflow/DAG is structured this way.",
     )
 
-    tasks: List[WorkflowTaskConfig] = Field(
+    tasks: list[WorkflowTaskConfig] = Field(
         description="Ordered list of tasks in the workflow (DAG)."
     )
 
     @model_validator(mode="after")
-    def _validate_workflow(self) -> "WorkflowYamlConfig":
+    def _validate_workflow(self) -> WorkflowYamlConfig:
         if not self.tasks:
             raise ValueError("Workflow YAML must contain a non-empty 'tasks' list")
         return self
 
-    def to_plan(self) -> "Plan":
+    def to_plan(self) -> Plan:
         """Convert this YAML config into the canonical :class:`Plan` object."""
 
-        plan_tasks: List[TaskItem] = []
+        plan_tasks: list[TaskItem] = []
         for t in self.tasks:
             overall = t.overall_objective or self.objective
 

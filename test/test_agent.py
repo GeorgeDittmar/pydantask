@@ -7,17 +7,17 @@ import pytest
 from httpx import AsyncClient
 
 import pydantask.agents.agent as agent_mod
-from pydantask.tools import default_tools
 from pydantask.capabilities.runner_v2 import as_runner
 from pydantask.models import (
     RuntimeState,
+    SupervisorDecision,
     TaskItem,
     TaskQAResult,
     TaskResult,
-    TaskStatus,
-    SupervisorDecision,
     TaskRunDeps,
+    TaskStatus,
 )
+from pydantask.tools import default_tools
 
 
 class DummyAsyncLock:
@@ -120,9 +120,7 @@ def test_deep_agent_init_sets_registry_keys(monkeypatch: pytest.MonkeyPatch):
         return {"ok": True}
 
     with (
-        patch.object(
-            agent_mod.DeepAgent, "_create_retrying_client", return_value=AsyncClient()
-        ),
+        patch.object(agent_mod.DeepAgent, "_create_retrying_client", return_value=AsyncClient()),
         patch.object(agent_mod, "OpenAIProvider", autospec=True),
         patch.object(agent_mod, "OpenAIChatModel", autospec=True),
         patch.object(agent_mod, "tavily_search_tool", return_value=_fake_tavily_tool),
@@ -171,9 +169,7 @@ async def test_add_cancel_patch_task(runtime_state: RuntimeState):
     assert task.sub_task_dependencies == [123]
     assert task.metadata == {"k": "v"}
 
-    msg = await da.patch_task(
-        ctx, task_id=task_id, sub_task_objective="new", dependencies=[1, 2]
-    )
+    msg = await da.patch_task(ctx, task_id=task_id, sub_task_objective="new", dependencies=[1, 2])
     assert "updated successfully" in msg
     assert runtime_state.plan[task_id].sub_task_objective == "new"
     assert runtime_state.plan[task_id].sub_task_dependencies == [1, 2]
@@ -232,9 +228,7 @@ async def test_handle_critic_result_transitions():
         status=TaskStatus.NEEDS_REVIEW,
     )
 
-    await da.handle_critic_result(
-        task, TaskQAResult(task_id=1, passed=True, reasoning="ok")
-    )
+    await da.handle_critic_result(task, TaskQAResult(task_id=1, passed=True, reasoning="ok"))
     assert task.status == TaskStatus.COMPLETED
 
     task2 = TaskItem(
@@ -365,9 +359,7 @@ async def test_update_task_status_and_view_qa_report(runtime_state: RuntimeState
     assert "now" in msg
     assert runtime_state.plan[1].status == TaskStatus.COMPLETED
 
-    runtime_state.plan[1].task_feedback = TaskQAResult(
-        task_id=1, passed=True, reasoning="ok"
-    )
+    runtime_state.plan[1].task_feedback = TaskQAResult(task_id=1, passed=True, reasoning="ok")
     report = await da.view_qa_report(ctx, task_id=1)
     assert '"passed": true' in report
 
@@ -429,9 +421,7 @@ async def test_replay_checkpoint_rebuilds_state(runtime_state: RuntimeState):
             type="critic_feedback",
             payload={
                 "task_id": 3,
-                "feedback": TaskQAResult(
-                    task_id=3, passed=False, reasoning="fail"
-                ).model_dump(),
+                "feedback": TaskQAResult(task_id=3, passed=False, reasoning="fail").model_dump(),
                 "attempt_count": 2,
             },
         ),
@@ -678,9 +668,7 @@ async def test_scheduler_marks_callable_task_errored_when_missing_parameters(
     assert "missing required parameters" in report.lower()
     assert runtime_state.plan[1].status == TaskStatus.ERRORED
     assert runtime_state.plan[1].metadata.get("missing_parameters") == ["filename"]
-    assert (
-        "missing required parameters" in (runtime_state.plan[1].error_msg or "").lower()
-    )
+    assert "missing required parameters" in (runtime_state.plan[1].error_msg or "").lower()
 
 
 @pytest.mark.asyncio
@@ -704,9 +692,7 @@ async def test_coerce_output_ingests_existing_file_as_artifact(
 
     # Create an output file the callable might have produced.
     out_file = cp_dir / "haiku.md"
-    out_file.write_text(
-        "stars drift\nengines hum softly\nhome is far away\n", encoding="utf-8"
-    )
+    out_file.write_text("stars drift\nengines hum softly\nhome is far away\n", encoding="utf-8")
 
     step = TaskItem(
         task_id=1,
@@ -717,9 +703,7 @@ async def test_coerce_output_ingests_existing_file_as_artifact(
     )
     runtime_state.plan[1] = step
 
-    tr = await da._coerce_output_to_task_result(
-        step, str(out_file), runtime_state=runtime_state
-    )
+    tr = await da._coerce_output_to_task_result(step, str(out_file), runtime_state=runtime_state)
 
     assert isinstance(tr, TaskResult)
     assert tr.artifacts and len(tr.artifacts) == 1

@@ -1,74 +1,78 @@
 # from asyncio import tasks
-import json
-import os
 import asyncio
 import inspect
+import json
+import os
 import re
+import uuid
+from asyncio import TaskGroup
+from collections import Counter
+from collections.abc import Callable
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Literal
+
 from httpx import AsyncClient, HTTPStatusError
+from loguru import logger
+from pydantic import BaseModel
+from pydantic_ai import Agent, RunContext
+from pydantic_ai.common_tools.duckduckgo import duckduckgo_search_tool
+from pydantic_ai.common_tools.tavily import tavily_search_tool
+from pydantic_ai.models import Model
+from pydantic_ai.models.anthropic import AnthropicModel
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.anthropic import AnthropicProvider
+from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.retries import AsyncTenacityTransport, RetryConfig, wait_retry_after
+from pydantic_ai.usage import UsageLimits
 from tenacity import (
-    wait_exponential,
-    retry,
     retry_if_exception_type,
     stop_after_attempt,
+    wait_exponential,
 )
 
-import uuid
-from collections import Counter
-
-from loguru import logger
-
-from pydantic import BaseModel, Field
-from pydantic_ai import Agent, RunContext
-from typing import List, Optional, Literal, Any, Dict, Callable, Union, Type
-from datetime import datetime
-from asyncio import TaskGroup
 from pydantask.capabilities.introspection import (
     callable_input_schema,
     format_callable_inputs_for_prompt,
     unwrap_callable,
 )
-from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.providers.openai import OpenAIProvider
-from pydantic_ai.models.anthropic import AnthropicModel
-from pydantic_ai.providers.anthropic import AnthropicProvider
-from pydantic_ai.common_tools.tavily import tavily_search_tool
-from pydantic_ai.common_tools.duckduckgo import duckduckgo_search_tool
-from pydantic_ai.usage import UsageLimits
-
-from pydantask.capabilities.runner_v2 import as_runner, CapabilityRunner
-from pathlib import Path
-from pydantic_ai.models import Model
-from pydantic_ai.settings import ModelSettings
-
+from pydantask.capabilities.runner_v2 import CapabilityRunner, as_runner
+from pydantask.manager.checkpointer import CheckpointEvent, CheckpointRecorder
+from pydantask.models import (
+    ArtifactRef,
+    CapabilityDescription,
+    Plan,
+    PydanTaskRunResult,
+    RuntimeState,
+    SupervisorDecision,
+    TaskItem,
+    TaskQAResult,
+    TaskResult,
+    TaskRunDeps,
+    TaskStatus,
+)
+from pydantask.observe.tracing import (
+    autodetect_tracing_backend,
+    flush_tracing,
+    init_tracing_backend,
+    traced,
+)
 from pydantask.prompts.prompts_v2 import (
-    CRITIC_SYS_PROMPT,
-    PRODUCER_SYS_PROMPT,
-    RESEARCH_AGENT_SYS_PROMPT,
-    SUPERVISOR_INPUT_PROMPT,
-    WORKER_AGENT_SYS_PROMPT,
-    DYNAMIC_SUPERVISOR_SYS_PROMPT,
     BOOTSTRAP_INSTURCT,
-    ORCHESTRATION_INSTRUCT,
+    COMPRESSED_CRITIC_SYS_PROMPT,
+    COMPRESSED_PRODUCER_SYS_PROMPT,
     COMPRESSED_RESEARCH_SYS_PROMPT,
     COMPRESSED_SUPER_PROMPT,
-    COMPRESSED_CRITIC_SYS_PROMPT,
     COMPRESSED_WORKER_SYS_PROMPT,
-    COMPRESSED_PRODUCER_SYS_PROMPT,
+    ORCHESTRATION_INSTRUCT,
+    SUPERVISOR_INPUT_PROMPT,
 )
-
-from pydantask.models import (
-    RuntimeState,
-    TaskItem,
-    Plan,
-    TaskQAResult,
-    TaskStatus,
-    SupervisorDecision,
-    CapabilityDescription,
-    TaskResult,
-    ArtifactRef,
-    PydanTaskRunResult,
-    TaskRunDeps,
-    TracingBackend,
+from pydantask.tools.artifact_tools import (
+    attach_artifact_to_result,
+    get_artifact,
+    list_artifacts,
+    put_artifact,
+    store_file_as_artifact,
 )
 
 # Default tool wiring is intentionally in-memory focused.
@@ -80,24 +84,7 @@ from pydantask.tools.default_tools import (
     list_completed_tasks,
     read_scratch_notes,
     think_tool,
-    read_file_contents
 )
-from pydantask.tools.artifact_tools import (
-    put_artifact,
-    get_artifact,
-    list_artifacts,
-    attach_artifact_to_result,
-    store_file_as_artifact,
-)
-
-from pydantask.manager.checkpointer import CheckpointEvent, CheckpointRecorder
-from pydantask.observe.tracing import (
-    traced,
-    init_tracing_backend,
-    autodetect_tracing_backend,
-    flush_tracing,
-)
-from pydantic_ai.retries import AsyncTenacityTransport, RetryConfig, wait_retry_after
 
 EVENT_RESULT_DETAIL_TRUNCATION = 4_000
 # When a task result is too large to keep inline in the event log, we persist
@@ -134,8 +121,8 @@ class DeepAgent:
         custom_supervisor: Agent = None,
         max_steps: int = 20,
         max_steps_no_progress: int = 5,
-        set_token_budget: Union[int, None] = None,
-        capabilities: Union[None, list[CapabilityDescription]] = None,
+        set_token_budget: int | None = None,
+        capabilities: None | list[CapabilityDescription] = None,
         # default output type for the producer agent, can be set to a default type or custom pydantic model for better structure and validation of final output
         # output_type: Type = TaskResult,
         # planning_mode: str = "dynamic",  # "static" | "dynamic"
@@ -182,9 +169,7 @@ class DeepAgent:
         #   - a pydantic_ai Model instance (fully custom)
         #   - a bare model name (defaults to OpenAI), e.g. "gpt-4.1-mini"
         #   - a provider-prefixed string, e.g. "openai:gpt-4.1-mini" or "anthropic:claude-sonnet-4-5"
-        self.model_name: str = (
-            model if isinstance(model, str) else model.__class__.__name__
-        )
+        self.model_name: str = model if isinstance(model, str) else model.__class__.__name__
 
         if objective is None:
             raise TypeError("DeepAgent requires 'objective' to be provided")
@@ -196,11 +181,11 @@ class DeepAgent:
 
         self.objective: str = objective
         self._max_steps: int = max_steps  # Max steps to prevent infinite loops
-        self.token_budget: Union[int, None] = set_token_budget
+        self.token_budget: int | None = set_token_budget
         self.verbose = verbose_logging
         # self.output_type = output_type
         self.planning_mode = ""
-        self.seed_plan: Union[Plan, None] = None
+        self.seed_plan: Plan | None = None
         self._retry_client = self._create_retrying_client()
 
         # Checkpointing / resume semantics:
@@ -358,9 +343,7 @@ class DeepAgent:
                 if _is_allowed_source_file(p):
                     candidates.append(p)
                 else:
-                    rejected_files.append(
-                        {"path": str(p), "reason": "outside_allowed_roots"}
-                    )
+                    rejected_files.append({"path": str(p), "reason": "outside_allowed_roots"})
 
             # 2) Otherwise, attempt to extract path-like tokens.
             # Best-effort: only keep tokens that resolve to an existing file AND
@@ -375,9 +358,7 @@ class DeepAgent:
                 if _is_allowed_source_file(cp):
                     candidates.append(cp)
                 else:
-                    rejected_files.append(
-                        {"path": str(cp), "reason": "outside_allowed_roots"}
-                    )
+                    rejected_files.append({"path": str(cp), "reason": "outside_allowed_roots"})
 
             # Dedupe while preserving order.
             out: list[Path] = []
@@ -517,9 +498,7 @@ class DeepAgent:
                     f"- {r.name or '<unnamed>'}: artifact_id={r.artifact_id} uri={r.uri}"
                 )
                 if r.preview:
-                    detail_parts.append(
-                        "  preview:\n" + self._truncate_text(r.preview, 1500)
-                    )
+                    detail_parts.append("  preview:\n" + self._truncate_text(r.preview, 1500))
 
         tr = TaskResult(
             task_id=step.task_id,
@@ -536,8 +515,7 @@ class DeepAgent:
             tr.artifacts.extend(artifact_refs)
         return tr
 
-    def _setup_default_capabilities(self) -> List[CapabilityDescription]:
-
+    def _setup_default_capabilities(self) -> list[CapabilityDescription]:
         # NOTE: Filesystem tools exist in `pydantask.tools.default_tools`, but are not
         # enabled by default. The harness is currently in-memory focused.
 
@@ -779,8 +757,8 @@ class DeepAgent:
     def _setup_capability_registry(
         self,
         default_capabilities,
-        additonal_capabilities: Union[None, list[CapabilityDescription]] = None,
-    ) -> Dict:
+        additonal_capabilities: None | list[CapabilityDescription] = None,
+    ) -> dict:
         """Create the default sub-agent capability registry.
 
         This wires up the built-in producer, researcher, and general worker
@@ -801,9 +779,7 @@ class DeepAgent:
         if additonal_capabilities:
             _capabilities_list.extend(additonal_capabilities)
 
-        _capability_registry = {
-            capability.name: capability for capability in _capabilities_list
-        }
+        _capability_registry = {capability.name: capability for capability in _capabilities_list}
 
         # each agent gets its own unique id
         return _capability_registry
@@ -838,9 +814,7 @@ class DeepAgent:
             "ts": datetime.now().isoformat(),
             "runtime_steps": runtime.runtime_steps,
             "total_tasks": len(runtime.plan),
-            "status_counts": dict(
-                Counter(t.status.value for t in runtime.plan.values())
-            ),
+            "status_counts": dict(Counter(t.status.value for t in runtime.plan.values())),
             "next_task_id": runtime.next_task_id,
         }
         await self._checkpoint_recorder.record_summary(summary)
@@ -936,11 +910,7 @@ class DeepAgent:
         if event_type == "task_result":
             task_id = payload.get("task_id")
             result_payload = payload.get("result")
-            if (
-                task_id is None
-                or result_payload is None
-                or task_id not in runtime_state.plan
-            ):
+            if task_id is None or result_payload is None or task_id not in runtime_state.plan:
                 return
 
             # If the event references a sidecar file, prefer that full payload.
@@ -987,18 +957,14 @@ class DeepAgent:
                 return
             feedback_payload = payload.get("feedback")
             if feedback_payload is not None:
-                runtime_state.plan[task_id].task_feedback = TaskQAResult(
-                    **feedback_payload
-                )
+                runtime_state.plan[task_id].task_feedback = TaskQAResult(**feedback_payload)
             if "attempt_count" in payload:
                 runtime_state.plan[task_id].attempt_count = payload["attempt_count"]
             return
 
         # supervisor_decision and other audit events do not mutate state on replay.
 
-    async def _record_event(
-        self, event_type: CheckpointEventType, payload: Dict[str, Any]
-    ) -> None:
+    async def _record_event(self, event_type: CheckpointEventType, payload: dict[str, Any]) -> None:
         if self._checkpoint_recorder:
             await self._checkpoint_recorder.record(event_type, payload)
 
@@ -1010,7 +976,7 @@ class DeepAgent:
         reason: str | None = None,
         error_msg: str | None = None,
     ) -> None:
-        payload: Dict[str, Any] = {"task_id": task_id, "status": status.value}
+        payload: dict[str, Any] = {"task_id": task_id, "status": status.value}
         if reason:
             payload["reason"] = reason
         if error_msg:
@@ -1018,7 +984,7 @@ class DeepAgent:
         await self._record_event("task_status_updated", payload)
 
     def _persist_full_task_result_payload(
-        self, task_id: int, result_payload: Dict[str, Any]
+        self, task_id: int, result_payload: dict[str, Any]
     ) -> str | None:
         """Persist the full TaskResult payload under the checkpoint directory.
 
@@ -1038,7 +1004,7 @@ class DeepAgent:
 
         return relpath
 
-    def _load_full_task_result_payload(self, relpath: str) -> Dict[str, Any] | None:
+    def _load_full_task_result_payload(self, relpath: str) -> dict[str, Any] | None:
         """Load a full TaskResult payload previously persisted by this agent."""
         if self.checkpoint_path is None:
             return None
@@ -1062,7 +1028,7 @@ class DeepAgent:
             return
 
         # Use JSON mode so datetimes (e.g. SourceRef.accessed_at) are serializable.
-        result_payload: Dict[str, Any] = task.result.model_dump(mode="json")
+        result_payload: dict[str, Any] = task.result.model_dump(mode="json")
 
         full_result_path: str | None = None
         detailed_output = result_payload.get("detailed_output") or ""
@@ -1077,7 +1043,7 @@ class DeepAgent:
                 detailed_output[:EVENT_RESULT_DETAIL_TRUNCATION] + truncation_notice
             )
 
-        payload: Dict[str, Any] = {"task_id": task.task_id, "result": result_payload}
+        payload: dict[str, Any] = {"task_id": task.task_id, "result": result_payload}
         if full_result_path:
             payload["full_result_path"] = full_result_path
 
@@ -1281,9 +1247,7 @@ Return a TaskQAResult.
         checkpoint = step.metadata.get("scratch_notes", "")
         checkpoint_preview = checkpoint
         if len(checkpoint_preview) > 6_000:
-            checkpoint_preview = (
-                checkpoint_preview[:6_000] + "\n...[checkpoint truncated]..."
-            )
+            checkpoint_preview = checkpoint_preview[:6_000] + "\n...[checkpoint truncated]..."
 
         return f"""
 A previous attempt to execute this task failed due to context/window limits.
@@ -1297,7 +1261,7 @@ Overall objective:
 {self.objective}
 
 Checkpoint / scratch notes saved so far (authoritative):
-{checkpoint_preview if checkpoint_preview else '<none>'}
+{checkpoint_preview if checkpoint_preview else "<none>"}
 
 Recovery instructions (IMPORTANT):
 - Continue the task from the checkpoint above.
@@ -1309,7 +1273,7 @@ Recovery instructions (IMPORTANT):
 - If you feel you're approaching the context limit again, STOP calling tools and output the best possible `TaskResult`.
 
 Error that triggered recovery (for debugging only):
-{str(error)}
+{error!s}
 """
 
     def _truncate_text(self, text: str, max_chars: int | None) -> str:
@@ -1354,9 +1318,7 @@ Error that triggered recovery (for debugging only):
         """
         try:
             sig = inspect.signature(UsageLimits)
-            allowed = {
-                k: v for k, v in kwargs.items() if v is not None and k in sig.parameters
-            }
+            allowed = {k: v for k, v in kwargs.items() if v is not None and k in sig.parameters}
             return UsageLimits(**allowed) if allowed else None
         except Exception:
             # If anything about introspection fails, fall back conservatively.
@@ -1406,9 +1368,7 @@ Error that triggered recovery (for debugging only):
         if total is None:
             return
 
-        runtime_state.tokens_used = int(
-            getattr(runtime_state, "tokens_used", 0) or 0
-        ) + int(total)
+        runtime_state.tokens_used = int(getattr(runtime_state, "tokens_used", 0) or 0) + int(total)
         if self.verbose:
             logger.info(
                 f"Usage recorded ({label}): +{total} tokens; total_used={runtime_state.tokens_used}"
@@ -1497,7 +1457,7 @@ Question:
 {question}
 
 Relevant upstream context from completed tasks (may be empty):
-{upstream_context if upstream_context.strip() else '<none>'}
+{upstream_context if upstream_context.strip() else "<none>"}
 
 Instructions:
 - Answer from the provided context only.
@@ -1531,8 +1491,7 @@ Instructions:
             tool_calls_limit=0,
             total_tokens_limit=min(
                 CONSULT_TOTAL_TOKENS_LIMIT,
-                self._remaining_token_budget(runtime_state)
-                or CONSULT_TOTAL_TOKENS_LIMIT,
+                self._remaining_token_budget(runtime_state) or CONSULT_TOTAL_TOKENS_LIMIT,
             ),
         )
         resp = await run_method(
@@ -1546,9 +1505,7 @@ Instructions:
         # Normalize to text.
         answer_text: str
         if isinstance(output, TaskResult):
-            answer_text = (output.detailed_output or "").strip() or (
-                output.summary or ""
-            ).strip()
+            answer_text = (output.detailed_output or "").strip() or (output.summary or "").strip()
         elif isinstance(output, BaseModel):
             answer_text = output.model_dump_json(indent=2)
         else:
@@ -1632,9 +1589,7 @@ Instructions:
             )
             return new_id
 
-    async def cancel_task(
-        self, ctx: RunContext[RuntimeState], task_id: int, reason: str
-    ):
+    async def cancel_task(self, ctx: RunContext[RuntimeState], task_id: int, reason: str):
         """Tool: Cancel Task.
 
         Mark a task as ``CANCELLED`` when it is no longer relevant or when
@@ -1664,9 +1619,9 @@ Instructions:
         self,
         ctx: RunContext[RuntimeState],
         task_id: int,
-        sub_task_objective: Optional[str] = None,
-        capability: Optional[str] = None,
-        dependencies: Optional[List[int]] = None,
+        sub_task_objective: str | None = None,
+        capability: str | None = None,
+        dependencies: list[int] | None = None,
         parameters: dict | None = None,
     ):
         """Tool: Patch Task.
@@ -1688,7 +1643,7 @@ Instructions:
             if not task:
                 return "Task not found."
 
-            payload: Dict[str, Any] = {"task_id": task_id}
+            payload: dict[str, Any] = {"task_id": task_id}
 
             if sub_task_objective:
                 task.sub_task_objective = sub_task_objective
@@ -1740,7 +1695,7 @@ Instructions:
 
             ctx.deps.plan[task_id].is_final = True
 
-            payload: Dict[str, Any] = {"task_id": task_id}
+            payload: dict[str, Any] = {"task_id": task_id}
             if reason:
                 payload["reason"] = reason
             await self._record_event("final_task_set", payload)
@@ -1795,15 +1750,9 @@ Instructions:
                 # If a capability is a wrapped python callable, ensure required inputs
                 # are present in TaskItem.parameters before we ever schedule it.
                 cap_desc = (
-                    self._capability_registry.get(task.capability)
-                    if task.capability
-                    else None
+                    self._capability_registry.get(task.capability) if task.capability else None
                 )
-                func = (
-                    unwrap_callable(getattr(cap_desc, "tool_func", None))
-                    if cap_desc
-                    else None
-                )
+                func = unwrap_callable(getattr(cap_desc, "tool_func", None)) if cap_desc else None
                 if func is not None:
                     schema = callable_input_schema(func)
                     required = list(schema.get("required") or [])
@@ -1819,13 +1768,10 @@ Instructions:
                         if (
                             not missing
                             and task.status == TaskStatus.ERRORED
-                            and task.metadata.get("errored_reason")
-                            == "missing_required_parameters"
+                            and task.metadata.get("errored_reason") == "missing_required_parameters"
                         ):
                             deps_ok_now = self._dependencies_satisfied(task, ctx)
-                            new_status = (
-                                TaskStatus.READY if deps_ok_now else TaskStatus.PENDING
-                            )
+                            new_status = TaskStatus.READY if deps_ok_now else TaskStatus.PENDING
                             changes.append(
                                 f"- Task {task_id}: errored -> {new_status.value} (required parameters supplied)"
                             )
@@ -1870,9 +1816,7 @@ Instructions:
 
                 if task.status == TaskStatus.PENDING and deps_ok:
                     task.status = TaskStatus.READY
-                    changes.append(
-                        f"- Task {task_id}: pending -> ready (deps satisfied)"
-                    )
+                    changes.append(f"- Task {task_id}: pending -> ready (deps satisfied)")
                     await self._record_task_status_event(
                         task_id,
                         TaskStatus.READY,
@@ -1882,9 +1826,7 @@ Instructions:
                 # Keep READY tasks honest if deps are not actually satisfied.
                 if task.status == TaskStatus.READY and not deps_ok:
                     task.status = TaskStatus.PENDING
-                    changes.append(
-                        f"- Task {task_id}: ready -> pending (deps not satisfied)"
-                    )
+                    changes.append(f"- Task {task_id}: ready -> pending (deps not satisfied)")
                     await self._record_task_status_event(
                         task_id,
                         TaskStatus.PENDING,
@@ -1928,9 +1870,7 @@ Instructions:
             return max(finals, key=lambda t: t.task_id).result
 
         with_detail = [
-            t
-            for t in completed
-            if (t.result and (t.result.detailed_output or "").strip())
+            t for t in completed if (t.result and (t.result.detailed_output or "").strip())
         ]
         if with_detail:
             return max(with_detail, key=lambda t: t.task_id).result
@@ -1979,8 +1919,7 @@ Instructions:
                 unmet = [
                     d
                     for d in task.sub_task_dependencies
-                    if ctx.plan.get(d) is not None
-                    and ctx.plan[d].status != TaskStatus.COMPLETED
+                    if ctx.plan.get(d) is not None and ctx.plan[d].status != TaskStatus.COMPLETED
                 ]
                 if unmet:
                     blocked.append(
@@ -2036,7 +1975,6 @@ Instructions:
         step_count = 0
         stop_execution = False
         while step_count < self._max_steps and not stop_execution:
-
             logger.info(f"--- Step {step_count} ---")
 
             if step_count == 0:
@@ -2059,9 +1997,7 @@ Instructions:
             self._last_scheduler_report = await self._scheduler_pass(runtime_state)
 
             current_instruction = (
-                BOOTSTRAP_INSTURCT
-                if len(runtime_state.plan) == 0
-                else ORCHESTRATION_INSTRUCT
+                BOOTSTRAP_INSTURCT if len(runtime_state.plan) == 0 else ORCHESTRATION_INSTRUCT
             )
             supervisor_limits = self._make_usage_limits(
                 total_tokens_limit=self._remaining_token_budget(runtime_state)
@@ -2084,9 +2020,7 @@ Instructions:
                 # Deterministic guardrail: do not allow "completion" unless the
                 # task marked as final is actually COMPLETED.
                 final_tasks = [
-                    t
-                    for t in runtime_state.plan.values()
-                    if getattr(t, "is_final", False)
+                    t for t in runtime_state.plan.values() if getattr(t, "is_final", False)
                 ]
 
                 completion_ok = True
@@ -2139,9 +2073,7 @@ Instructions:
 
             logger.info("--- Executing Tasks ---")
             # execute tasks that are ready to run and await responses
-            task_results = await self._execute_ready_tasks(
-                supervisor_response, runtime_state
-            )
+            task_results = await self._execute_ready_tasks(supervisor_response, runtime_state)
 
             # NOTE: `execute(...)` mutates the canonical TaskItem stored in `runtime_state.plan`
             # in-place (it receives the same object reference). Do NOT overwrite
@@ -2153,9 +2085,7 @@ Instructions:
                 # dynamic planner: we may be blocked on deps, have errored tasks
                 # that need patching, or need the supervisor to add new nodes.
                 no_progress_cycles += 1
-                deadlock = self._build_deadlock_report(
-                    runtime_state, supervisor_response
-                )
+                deadlock = self._build_deadlock_report(runtime_state, supervisor_response)
                 self._last_scheduler_report = (
                     self._last_scheduler_report + "\n\n" + deadlock
                 ).strip()
@@ -2253,9 +2183,7 @@ Instructions:
         for t in plan_dict.values():
             for dep_id in t.sub_task_dependencies or []:
                 if dep_id not in plan_dict:
-                    raise ValueError(
-                        f"seed_plan task {t.task_id} depends on missing task {dep_id}"
-                    )
+                    raise ValueError(f"seed_plan task {t.task_id} depends on missing task {dep_id}")
 
         runtime_state.plan = plan_dict
         runtime_state.next_task_id = max(plan_dict.keys()) + 1
@@ -2292,9 +2220,7 @@ Instructions:
                             dep_task = ctx.plan.get(dep_id)
                             if dep_task and dep_task.status == TaskStatus.CANCELLED:
                                 task.status = TaskStatus.CANCELLED
-                                task.error_msg = (
-                                    f"Upstream dependency Task {dep_id} was cancelled."
-                                )
+                                task.error_msg = f"Upstream dependency Task {dep_id} was cancelled."
                                 await self._record_task_status_event(
                                     task.task_id,
                                     TaskStatus.CANCELLED,
@@ -2333,8 +2259,7 @@ Instructions:
         ready_steps = [
             step
             for step in candidate_steps
-            if step.status in allowed_statuses
-            and self._dependencies_satisfied(step, ctx)
+            if step.status in allowed_statuses and self._dependencies_satisfied(step, ctx)
         ]
         # if no ready steps return empty list
         if len(ready_steps) == 0:
@@ -2366,20 +2291,15 @@ Instructions:
         ready_tasks = []
         for step in claimed_steps:
             # get supervisor feedback if any for this task
-            if (
-                tasks.feedback_to_subagents
-                and step.task_id in tasks.feedback_to_subagents
-            ):
+            if tasks.feedback_to_subagents and step.task_id in tasks.feedback_to_subagents:
                 if step.parameters is None:
                     # create if None
                     step.parameters = {}
-                step.parameters["supervisor_feedback"] = (
-                    tasks.feedback_to_subagents.get(step.task_id)
+                step.parameters["supervisor_feedback"] = tasks.feedback_to_subagents.get(
+                    step.task_id
                 )
 
-            logger.info(
-                f"- {step.task_id}: {step.sub_task_objective} using {step.capability}"
-            )
+            logger.info(f"- {step.task_id}: {step.sub_task_objective} using {step.capability}")
             logger.info(f"  Dependencies: {step.sub_task_dependencies}")
             logger.info(f"  Status: {step.status}")
             logger.info(f"  Result: {step.result}")
@@ -2429,7 +2349,6 @@ Instructions:
             _feedback_for_agent = step.parameters.get("supervisor_feedback")
 
         if step.capability == "producer_agent":
-
             user_prompt = f"""
             Overall objective:
             {self.objective}
@@ -2442,7 +2361,6 @@ Instructions:
             """
 
             if _feedback_for_agent:
-
                 user_prompt += f"""
 
                     Supervisor feedback / additional instructions for this execution:
@@ -2497,7 +2415,7 @@ Instructions:
         # Help smaller-context models avoid blowing up in a single long tool-run.
         # This doesn't guarantee safety (tool output can still be large), but combined
         # with truncated tool outputs and scratch checkpoints it greatly improves durability.
-        user_prompt += f"""
+        user_prompt += """
 
 Context-budget note:
 - You may be running on a smaller-context model.
@@ -2522,9 +2440,7 @@ Context-budget note:
                     deps=task_deps,
                     usage_limits=task_limits,
                 )
-                self._accumulate_usage(
-                    runtime_state, result, label=f"task:{step.task_id}"
-                )
+                self._accumulate_usage(runtime_state, result, label=f"task:{step.task_id}")
 
                 # Normalize to canonical TaskResult (required for critic/checkpointing).
                 # Includes best-effort ingestion of file outputs into the artifact store.
@@ -2538,9 +2454,7 @@ Context-budget note:
                 if isinstance(step.result, TaskResult):
                     pending = step.metadata.get("result_artifacts")
                     if isinstance(pending, list) and pending:
-                        existing_ids = {
-                            a.artifact_id for a in (step.result.artifacts or [])
-                        }
+                        existing_ids = {a.artifact_id for a in (step.result.artifacts or [])}
                         for item in pending:
                             try:
                                 ar = ArtifactRef.model_validate(item)
@@ -2554,16 +2468,11 @@ Context-budget note:
                 step.status = TaskStatus.NEEDS_REVIEW
                 step.error_msg = None
                 await self._record_task_result(step)
-                await self._record_task_status_event(
-                    step.task_id, TaskStatus.NEEDS_REVIEW
-                )
+                await self._record_task_status_event(step.task_id, TaskStatus.NEEDS_REVIEW)
                 return step
             except Exception as e:
                 last_error = e
-                if (
-                    self._is_context_limit_error(e)
-                    and resume_attempt < max_resume_attempts
-                ):
+                if self._is_context_limit_error(e) and resume_attempt < max_resume_attempts:
                     # Record the incident and attempt a "fresh run" using scratch checkpoints.
                     overflow_entry = {
                         "at": datetime.now().isoformat(),
@@ -2642,9 +2551,7 @@ Context-budget note:
 
         if task.attempt_count >= task.max_attempts:
             task.status = TaskStatus.FAILED
-            task.error_msg = (
-                f"Max retries reached ({task.attempt_count}/{task.max_attempts})."
-            )
+            task.error_msg = f"Max retries reached ({task.attempt_count}/{task.max_attempts})."
             await self._record_task_status_event(
                 task.task_id, task.status, error_msg=task.error_msg
             )

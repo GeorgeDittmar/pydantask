@@ -4,13 +4,13 @@ import asyncio
 import base64
 import hashlib
 import json
+import mimetypes
 import os
 import re
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-import mimetypes
 
 from loguru import logger
 from pydantic_ai import RunContext
@@ -50,7 +50,7 @@ async def store_file_as_artifact(
     """
     p = Path(file_path)
     if not p.exists() or not p.is_file():
-        raise FileNotFoundError(f"File not found: {str(p)}")
+        raise FileNotFoundError(f"File not found: {p!s}")
 
     mt = (mime_type or "").strip() or _guess_mime_type_for_path(p)
 
@@ -86,9 +86,7 @@ async def store_file_as_artifact(
             "source_path": str(p),
         }
         tmpm = meta_path.with_suffix(meta_path.suffix + ".tmp." + uuid.uuid4().hex)
-        tmpm.write_text(
-            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        tmpm.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(tmpm, meta_path)
 
     await asyncio.to_thread(_write)
@@ -123,9 +121,7 @@ async def store_file_as_artifact(
         if task is not None:
             task.metadata.setdefault("artifacts", [])
             if isinstance(task.metadata.get("artifacts"), list):
-                task.metadata["artifacts"].append(
-                    {**ref_payload, "task_id": int(task_id)}
-                )
+                task.metadata["artifacts"].append({**ref_payload, "task_id": int(task_id)})
             else:
                 task.metadata["artifacts"] = [{**ref_payload, "task_id": int(task_id)}]
 
@@ -179,9 +175,7 @@ def _guess_task_id(deps: RuntimeState | TaskRunDeps, task_id: int | None) -> int
         active = int(deps.task.task_id)
         if task_id is not None and int(task_id) != active:
             # Avoid silently attributing artifacts to the wrong task.
-            raise ValueError(
-                f"task_id mismatch: got task_id={task_id}, active_task_id={active}"
-            )
+            raise ValueError(f"task_id mismatch: got task_id={task_id}, active_task_id={active}")
         return active
     return int(task_id) if task_id is not None else None
 
@@ -267,7 +261,7 @@ async def put_artifact(
     try:
         resolved_task_id = _guess_task_id(ctx.deps, task_id)
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Error: {e!s}"
 
     safe_label = _safe_name(name)
 
@@ -312,16 +306,14 @@ async def put_artifact(
             "task_id": resolved_task_id,
         }
         tmpm = meta_path.with_suffix(meta_path.suffix + ".tmp." + uuid.uuid4().hex)
-        tmpm.write_text(
-            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        tmpm.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(tmpm, meta_path)
 
     try:
         await asyncio.to_thread(_write)
     except Exception as e:
         logger.exception("Failed to write artifact")
-        return f"Error: failed to persist artifact: {str(e)}"
+        return f"Error: failed to persist artifact: {e!s}"
 
     preview: str | None
     try:
@@ -435,7 +427,7 @@ async def get_artifact(
             data = await asyncio.to_thread(path.read_bytes)
             text = data.decode("utf-8", errors="replace")
         except Exception as e:
-            return f"Error: failed to read artifact: {str(e)}"
+            return f"Error: failed to read artifact: {e!s}"
 
     return _truncate_text(text, max_chars=max_chars)
 
@@ -461,7 +453,7 @@ async def list_artifacts(
     try:
         resolved_task_id = _guess_task_id(ctx.deps, task_id)
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Error: {e!s}"
 
     if resolved_task_id is None:
         return "Error: task_id is required when calling list_artifacts from supervisor context."
@@ -544,7 +536,7 @@ async def attach_artifact_to_result(
     try:
         validated = ArtifactRef.model_validate(parsed)
     except Exception as e:
-        return f"Error: artifact_ref is not a valid ArtifactRef: {str(e)}"
+        return f"Error: artifact_ref is not a valid ArtifactRef: {e!s}"
 
     payload = validated.model_dump(mode="json")
 

@@ -2,14 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import partial
 from typing import (
     Any,
-    Awaitable,
-    Callable,
     Generic,
-    Optional,
     Protocol,
     TypeVar,
     Union,
@@ -196,7 +194,7 @@ class CapabilityRunner(Protocol[T]):
         prompt: str,
         *,
         deps: TaskRunDeps,
-        usage_limits: Optional[UsageLimits] = None,
+        usage_limits: UsageLimits | None = None,
     ) -> RunResult[T]: ...
 
 
@@ -209,7 +207,7 @@ class AgentRunner(Generic[T]):
         prompt: str,
         *,
         deps: TaskRunDeps,
-        usage_limits: Optional[UsageLimits] = None,
+        usage_limits: UsageLimits | None = None,
     ) -> RunResult[T]:
         r = await self.agent.run(prompt, deps=deps, usage_limits=usage_limits)
         return RunResult(output=r.output)
@@ -226,7 +224,7 @@ class AsyncFuncRunner(Generic[T]):
         prompt: str,
         *,
         deps: TaskRunDeps,
-        usage_limits: Optional[UsageLimits] = None,  # kept for compatibility
+        usage_limits: UsageLimits | None = None,  # kept for compatibility
     ) -> RunResult[T]:
         args, kwargs = _build_injected_call(
             self.func, prompt=prompt, deps=deps, usage_limits=usage_limits
@@ -246,7 +244,7 @@ class SyncFuncRunner(Generic[T]):
         prompt: str,
         *,
         deps: TaskRunDeps,
-        usage_limits: Optional[UsageLimits] = None,
+        usage_limits: UsageLimits | None = None,
     ) -> RunResult[T]:
         args, kwargs = _build_injected_call(
             self.func, prompt=prompt, deps=deps, usage_limits=usage_limits

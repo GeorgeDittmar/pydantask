@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from pathlib import Path
+import asyncio
 import ipaddress
 import socket
+from pathlib import Path
 from urllib.parse import urlparse
-import asyncio
+
 import httpx
 from loguru import logger
 from pydantic_ai import RunContext
@@ -72,7 +73,7 @@ async def think_tool(reflection: str) -> str:
     Returns:
         Confirmation that reflection was recorded for decision-making
     """
-    return f""
+    return ""
 
 
 async def write_to_file_system(
@@ -140,14 +141,15 @@ async def delete_from_file_system(path: str) -> str:
         return f"An error occurred: {e}"
 
 
-async def read_file_contents(file_path:str):
-    """Reads a file from the file system to inspect its contents. 
-    
+async def read_file_contents(file_path: str):
+    """Reads a file from the file system to inspect its contents.
+
     When to use:
         - Need to read a file that is mentioned in a TaskResult"""
-    
-    with open(file_path, "r") as f:
+
+    with open(file_path) as f:
         return f.read()
+
 
 async def read_from_file_system(
     ctx: RunContext[RuntimeState | TaskRunDeps],
@@ -176,10 +178,10 @@ async def read_from_file_system(
         )
 
         full_path = Path(path)
-        with open(full_path, "r", encoding="utf-8") as f:
+        with open(full_path, encoding="utf-8") as f:
             return f.read()
 
-    except FileNotFoundError as e:
+    except FileNotFoundError:
         runtime = _get_runtime_state(ctx.deps)
         existing = ", ".join(runtime.document_store.keys()) or "<none>"
         return (
@@ -391,7 +393,7 @@ async def read_scratch_notes(
     Description: Reads any notes in the in-memory scratchpad for this task. Use to see if there are any thoughts you need to reason over.
     """
 
-    key = f"scratch_notes"
+    key = "scratch_notes"
     existing = ctx.deps.task.metadata.get(key, "")
     return _truncate_text(existing, max_chars=max_chars)
 
@@ -499,9 +501,7 @@ async def fetch_url_content(
     }
 
     try:
-        async with httpx.AsyncClient(
-            follow_redirects=True, timeout=timeout_s
-        ) as client:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=timeout_s) as client:
             async with client.stream("GET", url, headers=headers) as resp:
                 status = resp.status_code
                 final_url = str(resp.url)
@@ -559,6 +559,6 @@ async def fetch_url_content(
     except httpx.HTTPStatusError as e:
         return f"Error: HTTP {e.response.status_code} while fetching {url!r}."
     except httpx.RequestError as e:
-        return f"Error: request failed while fetching {url!r}: {str(e)}"
+        return f"Error: request failed while fetching {url!r}: {e!s}"
     except Exception as e:
-        return f"Error: unexpected failure while fetching {url!r}: {str(e)}"
+        return f"Error: unexpected failure while fetching {url!r}: {e!s}"
