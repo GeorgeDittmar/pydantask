@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import inspect
-from typing import Any, Callable, Optional, Union, get_args, get_origin, get_type_hints
+from collections.abc import Callable
+from typing import Any, Union, get_args, get_origin, get_type_hints
 
 # Names your runner/executor can inject automatically; these should *not* be
 # treated as supervisor-supplied inputs.
@@ -38,7 +39,7 @@ def _type_to_str(tp: Any) -> str:
     # Resolve Optional[T] / Union[T, None]
     origin = get_origin(tp)
     if origin is Union:
-        args = [a for a in get_args(tp) if a is not type(None)]  # noqa: E721
+        args = [a for a in get_args(tp) if a is not type(None)]
         if len(args) == 1:
             return f"Optional[{_type_to_str(args[0])}]"
         return "Union[" + ", ".join(_type_to_str(a) for a in args) + "]"
@@ -58,7 +59,7 @@ def _type_to_str(tp: Any) -> str:
     return str(tp)
 
 
-def unwrap_callable(tool_func: Any) -> Optional[Callable[..., Any]]:
+def unwrap_callable(tool_func: Any) -> Callable[..., Any] | None:
     """Try to recover the original callable from a capability implementation.
 
     Supports:
@@ -159,9 +160,7 @@ def callable_input_schema(
     }
 
 
-def format_callable_inputs_for_prompt(
-    schema: dict[str, Any], *, max_items: int = 8
-) -> str:
+def format_callable_inputs_for_prompt(schema: dict[str, Any], *, max_items: int = 8) -> str:
     """Format a callable_input_schema(...) result into a compact prompt string."""
     required = list(schema.get("required") or [])
     optional = list(schema.get("optional") or [])

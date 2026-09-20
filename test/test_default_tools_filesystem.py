@@ -9,9 +9,7 @@ from pydantask.tools import default_tools
 
 
 @pytest.mark.asyncio
-async def test_write_and_read_file_system_tools_work_with_runtime_state_deps(
-    tmp_path, monkeypatch
-):
+async def test_write_and_read_file_system_tools_work_with_runtime_state_deps(tmp_path, monkeypatch):
     base_dir = tmp_path / "tmp_files"
     base_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(default_tools, "DEFAULT_DIR", base_dir)
@@ -30,9 +28,7 @@ async def test_write_and_read_file_system_tools_work_with_runtime_state_deps(
 
 
 @pytest.mark.asyncio
-async def test_write_and_read_file_system_tools_work_with_task_run_deps(
-    tmp_path, monkeypatch
-):
+async def test_write_and_read_file_system_tools_work_with_task_run_deps(tmp_path, monkeypatch):
     base_dir = tmp_path / "tmp_files"
     base_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(default_tools, "DEFAULT_DIR", base_dir)
@@ -58,9 +54,7 @@ async def test_write_and_read_file_system_tools_work_with_task_run_deps(
 
 
 @pytest.mark.asyncio
-async def test_save_and_read_task_context_use_shared_runtime_document_store(
-    tmp_path, monkeypatch
-):
+async def test_save_and_read_task_context_use_shared_runtime_document_store(tmp_path, monkeypatch):
     base_dir = tmp_path / "tmp_files"
     base_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(default_tools, "DEFAULT_DIR", base_dir)

@@ -23,14 +23,12 @@ Usage::
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from pydantask.execution.schema import SpawnArgs
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Skill schema models
@@ -51,8 +49,8 @@ class FlagDefinition(BaseModel):
 
     type: str
     default: Any
-    min: Optional[float] = None
-    max: Optional[float] = None
+    min: float | None = None
+    max: float | None = None
     description: str
     spawn_args_field: str
 
@@ -70,7 +68,7 @@ class SkillConstraints(BaseModel):
 
     port_range: list[int]
     max_concurrent_per_port: int = 1
-    max_concurrent_models: Optional[int] = None
+    max_concurrent_models: int | None = None
     health_check_timeout_seconds: int = 120
     health_check_interval_seconds: float = 0.5
 
@@ -91,7 +89,7 @@ class SkillSchema(BaseModel):
     engine_url: str
     health_endpoint: str
     required_flags: list[str]
-    optional_flags: Dict[str, FlagDefinition]
+    optional_flags: dict[str, FlagDefinition]
     constraints: SkillConstraints
 
 
@@ -130,9 +128,9 @@ class SkillRegistry:
         skills: Mapping from skill key to ``SkillSchema``.
     """
 
-    def __init__(self, skills_dir: Optional[Path] = None) -> None:
+    def __init__(self, skills_dir: Path | None = None) -> None:
         self._skills_dir = skills_dir or _SKILLS_DIR
-        self.skills: Dict[str, SkillSchema] = {}
+        self.skills: dict[str, SkillSchema] = {}
         self._load_all()
 
     def _load_all(self) -> None:
@@ -152,9 +150,7 @@ class SkillRegistry:
             KeyError: If the skill key is not found.
         """
         if skill_key not in self.skills:
-            raise KeyError(
-                f"Unknown skill '{skill_key}'. Available: {list(self.skills.keys())}"
-            )
+            raise KeyError(f"Unknown skill '{skill_key}'. Available: {list(self.skills.keys())}")
         return self.skills[skill_key]
 
     def has(self, skill_key: str) -> bool:
@@ -165,9 +161,7 @@ class SkillRegistry:
         """Return all registered skill keys."""
         return list(self.skills.keys())
 
-    def validate_spawn_args(
-        self, skill_key: str, spawn_args: SpawnArgs
-    ) -> None:
+    def validate_spawn_args(self, skill_key: str, spawn_args: SpawnArgs) -> None:
         """Validate a SpawnArgs object against a skill's optional flags schema.
 
         Checks each provided field against the skill's flag definitions for
@@ -213,8 +207,7 @@ class SkillRegistry:
         port_range = skill.constraints.port_range
         if port_range[0] > port_range[1]:
             raise ValueError(
-                f"Skill '{skill_key}': invalid port_range "
-                f"[{port_range[0]}, {port_range[1]}]"
+                f"Skill '{skill_key}': invalid port_range [{port_range[0]}, {port_range[1]}]"
             )
 
 
@@ -237,7 +230,7 @@ def _type_from_flag_string(type_str: str) -> type:
 def assemble_llama_server_command(
     spawn_args: SpawnArgs,
     port: int,
-    model_path: Optional[str] = None,
+    model_path: str | None = None,
 ) -> list[str]:
     """Assemble a ``llama-server`` CLI command from structured spawn args.
 

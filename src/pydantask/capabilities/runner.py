@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Generic, Optional, Protocol, TypeVar
+from typing import Any, Generic, Protocol, TypeVar
 
 from pydantic_ai import Agent
 from pydantic_ai.usage import UsageLimits
@@ -11,26 +12,26 @@ from pydantask.models.models import TaskRunDeps  # adjust import path if differe
 
 T = TypeVar("T")
 
-import asyncio
 import inspect
 from functools import partial
+
 
 def is_async_callable(obj) -> bool:
     if not callable(obj):
         return False
-    
+
     # Handle partial functions
     if isinstance(obj, partial):
         return is_async_callable(obj.func)
-    
+
     # Check standard async functions, methods, and closures
     if inspect.iscoroutinefunction(obj):
         return True
-    
+
     # Check classes with an asynchronous __call__ method
-    if hasattr(obj, '__call__'):
+    if callable(obj):
         return inspect.iscoroutinefunction(obj.__call__)
-        
+
     return False
 
 
@@ -38,14 +39,16 @@ def is_async_callable(obj) -> bool:
 class RunResult(Generic[T]):
     output: T
 
+
 class CapabilityRunner(Protocol[T]):
     async def run(
         self,
         prompt: str,
         *,
         deps: TaskRunDeps,
-        usage_limits: Optional[UsageLimits] = None,
+        usage_limits: UsageLimits | None = None,
     ) -> RunResult[T]: ...
+
 
 @dataclass
 class AgentRunner(Generic[T]):
@@ -56,10 +59,11 @@ class AgentRunner(Generic[T]):
         prompt: str,
         *,
         deps: TaskRunDeps,
-        usage_limits: Optional[UsageLimits] = None,
+        usage_limits: UsageLimits | None = None,
     ) -> RunResult[T]:
         r = await self.agent.run(prompt, deps=deps, usage_limits=usage_limits)
         return RunResult(output=r.output)
+
 
 @dataclass
 class AsyncFuncRunner(Generic[T]):
@@ -70,10 +74,11 @@ class AsyncFuncRunner(Generic[T]):
         prompt: str,
         *,
         deps: TaskRunDeps,
-        usage_limits: Optional[UsageLimits] = None,  # kept for compatibility
+        usage_limits: UsageLimits | None = None,  # kept for compatibility
     ) -> RunResult[T]:
         out = await self.func(prompt, deps)
         return RunResult(output=out)
+
 
 @dataclass
 class SyncFuncRunner(Generic[T]):
@@ -84,10 +89,11 @@ class SyncFuncRunner(Generic[T]):
         prompt: str,
         *,
         deps: TaskRunDeps,
-        usage_limits: Optional[UsageLimits] = None,
+        usage_limits: UsageLimits | None = None,
     ) -> RunResult[T]:
         out = await asyncio.to_thread(self.func, prompt, deps)
         return RunResult(output=out)
+
 
 def as_runner(obj: Any) -> CapabilityRunner[Any]:
     """Centralized normalization (the only place you type-check)."""

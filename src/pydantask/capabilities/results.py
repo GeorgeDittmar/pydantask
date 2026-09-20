@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -12,9 +12,9 @@ def ok_result(
     *,
     summary: str,
     detailed_output: str | None = None,
-    data: Dict[str, Any] | None = None,
-    artifacts: List[ArtifactRef] | None = None,
-    metadata: Dict[str, Any] | None = None,
+    data: dict[str, Any] | None = None,
+    artifacts: list[ArtifactRef] | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> TaskResult:
     """Build a successful TaskResult for deterministic/callable capabilities."""
     return TaskResult(
@@ -35,8 +35,8 @@ def error_result(
     error_msg: str,
     summary: str | None = None,
     detailed_output: str | None = None,
-    data: Dict[str, Any] | None = None,
-    metadata: Dict[str, Any] | None = None,
+    data: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> TaskResult:
     """Build a failed/errored TaskResult for deterministic/callable capabilities."""
     return TaskResult(
@@ -50,7 +50,7 @@ def error_result(
     )
 
 
-def model_to_data(model: BaseModel) -> Dict[str, Any]:
+def model_to_data(model: BaseModel) -> dict[str, Any]:
     """Best-effort conversion of a Pydantic model into JSON-safe dict for TaskResult.data."""
     dumped = model.model_dump(mode="json")
     return dumped if isinstance(dumped, dict) else {"value": dumped}

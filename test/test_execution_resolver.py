@@ -6,15 +6,14 @@ import tempfile
 
 import pytest
 
-from pydantask.execution.schema import QueueStore, SpawnArgs
 from pydantask.execution.resolver import (
-    validate_dag,
-    resolve_ready_tasks,
-    resolve_parent_output,
     get_dag_status,
     is_dag_complete,
+    resolve_parent_output,
+    resolve_ready_tasks,
+    validate_dag,
 )
-
+from pydantask.execution.schema import QueueStore
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fixtures
@@ -140,10 +139,7 @@ class TestValidateDAG:
 
     def test_topological_order_valid(self) -> None:
         """Ensure returned order is a valid topological sort."""
-        tasks = [
-            {"task_id": i, "parent_ids": list(range(i - 1, 0, -1))}
-            for i in range(1, 6)
-        ]
+        tasks = [{"task_id": i, "parent_ids": list(range(i - 1, 0, -1))} for i in range(1, 6)]
         # Task 1: no parents
         # Task 2: parent [1]
         # Task 3: parents [1, 2]
@@ -163,7 +159,7 @@ class TestValidateDAG:
 
 class TestResolveReadyTasks:
     def test_all_ready(self, store: QueueStore) -> None:
-        for i in range(3):
+        for _i in range(3):
             store.insert_task(dag_id="dag")
 
         ready = resolve_ready_tasks(store)
@@ -178,7 +174,7 @@ class TestResolveReadyTasks:
         assert child_id not in ready
 
     def test_limits(self, store: QueueStore) -> None:
-        for i in range(5):
+        for _i in range(5):
             store.insert_task(dag_id="dag")
 
         ready = resolve_ready_tasks(store, limit=2)
@@ -231,7 +227,7 @@ class TestGetDAGStatus:
 
     def test_mixed_status(self, store: QueueStore) -> None:
         root_id = store.insert_task(dag_id="dag")
-        child_id = store.insert_task(dag_id="dag", parent_id=root_id, in_degree=1)
+        store.insert_task(dag_id="dag", parent_id=root_id, in_degree=1)
 
         store.mark_completed(root_id, '{"status":"ok","content":"","model_used":"t"}')
         status = get_dag_status(store, "dag")

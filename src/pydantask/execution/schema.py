@@ -21,12 +21,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SQL schema definitions
@@ -137,7 +137,7 @@ class SpawnArgs(BaseModel):
 
     model_config = ConfigDict(extra="forbid", use_enum_values=True)
 
-    model_path: Optional[str] = Field(
+    model_path: str | None = Field(
         default=None,
         description="Path to the GGUF file. Falls back to registry path if omitted.",
     )
@@ -169,12 +169,12 @@ class SpawnArgs(BaseModel):
         le=1.0,
     )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to a plain dict (safe for JSON storage)."""
         return self.model_dump(exclude_none=True)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> SpawnArgs:
+    def from_dict(cls, data: dict[str, Any]) -> SpawnArgs:
         """Deserialize from a plain dict (e.g. from a JSON column)."""
         # Filter out keys that aren't valid fields (defensive — the DB may
         # contain extra keys from future schema versions).
@@ -204,11 +204,11 @@ class TaskPayload(BaseModel):
         default="",
         description="User message or task input.",
     )
-    constraints: Optional[Dict[str, Any]] = Field(
+    constraints: dict[str, Any] | None = Field(
         default=None,
         description="Optional free-form constraints from the supervisor.",
     )
-    parent_output_ref: Optional[str] = Field(
+    parent_output_ref: str | None = Field(
         default=None,
         description=(
             "Optional reference to the parent task's output row (dag_id:task_id). "
@@ -257,7 +257,7 @@ class TaskOutput(BaseModel):
         default=0,
         description="Total tokens consumed (prompt + completion).",
     )
-    error_msg: Optional[str] = Field(
+    error_msg: str | None = Field(
         default=None,
         description="If status is 'error', a description of what failed.",
     )
@@ -293,7 +293,7 @@ class QueueStore:
     def __init__(self, path: str | Path) -> None:
         self._path = Path(path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn: Optional[sqlite3.Connection] = None
+        self._conn: sqlite3.Connection | None = None
 
     # ── Lifecycle ────────────────────────────────────────────────────────
 
@@ -390,7 +390,7 @@ class QueueStore:
         """
         self.conn.execute("DELETE FROM port_leases WHERE port = ?", (port,))
 
-    def find_stale_leases(self, max_age_seconds: int = 300) -> List[Tuple[int, int, str]]:
+    def find_stale_leases(self, max_age_seconds: int = 300) -> list[tuple[int, int, str]]:
         """Find leases older than *max_age_seconds*.
 
         Returns list of ``(port, task_id, leased_at)`` tuples.
@@ -416,12 +416,12 @@ class QueueStore:
     def insert_task(
         self,
         dag_id: str,
-        target_model_key: Optional[str] = None,
-        spawn_args: Optional[SpawnArgs] = None,
-        payload: Optional[TaskPayload] = None,
-        parent_id: Optional[int] = None,
+        target_model_key: str | None = None,
+        spawn_args: SpawnArgs | None = None,
+        payload: TaskPayload | None = None,
+        parent_id: int | None = None,
         in_degree: int = 0,
-        assigned_port: Optional[int] = None,
+        assigned_port: int | None = None,
     ) -> int:
         """Insert a new task into the queue.
 
@@ -457,7 +457,7 @@ class QueueStore:
         self.conn.commit()
         return cursor.lastrowid
 
-    def get_ready_tasks(self, limit: int = 10) -> List[sqlite3.Row]:
+    def get_ready_tasks(self, limit: int = 10) -> list[sqlite3.Row]:
         """Get pending tasks with all dependencies met (in_degree == 0).
 
         Ordered by insertion time (FIFO).
@@ -494,7 +494,7 @@ class QueueStore:
         self,
         task_id: int,
         output_json: str,
-        spawn_model_key: Optional[str] = None,
+        spawn_model_key: str | None = None,
     ) -> None:
         """Mark a task completed and store its output."""
         self.conn.execute(
@@ -550,7 +550,7 @@ class QueueStore:
         self,
         task_id: int,
         spawn_args: SpawnArgs,
-        target_model_key: Optional[str] = None,
+        target_model_key: str | None = None,
     ) -> None:
         """Update spawn_args for a task (used during escalation).
 
@@ -588,7 +588,7 @@ class QueueStore:
             )
         self.conn.commit()
 
-    def get_pending_by_dag(self, dag_id: str) -> List[sqlite3.Row]:
+    def get_pending_by_dag(self, dag_id: str) -> list[sqlite3.Row]:
         """Get all pending/processing tasks for a DAG (for lifecycle tracking)."""
         return self.conn.execute(
             "SELECT * FROM task_queue WHERE dag_id = ? AND status IN ('pending', 'processing')",
@@ -627,9 +627,7 @@ class QueueStore:
         Raises:
             RuntimeError: If no ports are available in the range.
         """
-        leased = self.conn.execute(
-            "SELECT port FROM port_leases"
-        ).fetchall()
+        leased = self.conn.execute("SELECT port FROM port_leases").fetchall()
         leased_ports = {r["port"] for r in leased}
 
         for port in range(start, end + 1):

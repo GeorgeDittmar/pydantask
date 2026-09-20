@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
 
 import pytest
 
-from pydantask.execution.schema import ModelConfig, SpawnArgs
 from pydantask.execution.registry import (
     MODEL_REGISTRY,
     find_fit_models,
@@ -16,15 +14,13 @@ from pydantask.execution.registry import (
     get_model,
     get_smallest_model,
 )
+from pydantask.execution.schema import SpawnArgs
 from pydantask.skills import (
-    SkillRegistry,
-    SkillSchema,
     FlagDefinition,
-    SkillConstraints,
+    SkillRegistry,
     assemble_llama_server_command,
     default_registry,
 )
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Model registry tests
@@ -61,7 +57,10 @@ class TestModelRegistry:
             assert MODEL_REGISTRY[key].capability_tier == "fast"
         # Should be sorted by memory (smallest first)
         for i in range(len(fast) - 1):
-            assert MODEL_REGISTRY[fast[i]].total_required_mb <= MODEL_REGISTRY[fast[i + 1]].total_required_mb
+            assert (
+                MODEL_REGISTRY[fast[i]].total_required_mb
+                <= MODEL_REGISTRY[fast[i + 1]].total_required_mb
+            )
 
     def test_find_models_by_unknown_tier(self) -> None:
         result = find_models_by_tier("nonexistent")
@@ -215,17 +214,17 @@ class TestValidation:
 
     def test_temp_above_max(self) -> None:
         """temp above 2.0 is rejected by Pydantic (SpawnArgs ge/le bounds)."""
-        with pytest.raises(Exception):  # Pydantic ValidationError
+        with pytest.raises(ValueError):  # Pydantic ValidationError
             SpawnArgs(temp=3.0)
 
     def test_top_p_above_max(self) -> None:
         """top_p above 1.0 is rejected by Pydantic (SpawnArgs ge/le bounds)."""
-        with pytest.raises(Exception):  # Pydantic ValidationError
+        with pytest.raises(ValueError):  # Pydantic ValidationError
             SpawnArgs(top_p=1.5)
 
     def test_n_gpu_layers_above_max(self) -> None:
         """n_gpu_layers above 999 is rejected by Pydantic (SpawnArgs ge/le bounds)."""
-        with pytest.raises(Exception):  # Pydantic ValidationError
+        with pytest.raises(ValueError):  # Pydantic ValidationError
             SpawnArgs(n_gpu_layers=1000)
 
     def test_skill_schema_bounds_enforce_via_pydantic(self) -> None:

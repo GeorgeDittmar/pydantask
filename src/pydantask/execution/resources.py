@@ -23,25 +23,23 @@ Usage::
 
 from __future__ import annotations
 
-import socket
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Set
 
 try:
     import psutil
+
     HAS_PSUTIL = True
 except ImportError:
     HAS_PSUTIL = False
 
-from pydantask.execution.schema import QueueStore
 from pydantask.execution.registry import MODEL_REGISTRY, ModelConfig
-
+from pydantask.execution.schema import QueueStore
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Memory pressure thresholds
 # ─────────────────────────────────────────────────────────────────────────────
 
-PRESSURE_LOW_THRESHOLD = 30   # < 30% used = low pressure
+PRESSURE_LOW_THRESHOLD = 30  # < 30% used = low pressure
 PRESSURE_HIGH_THRESHOLD = 85  # > 85% used = high pressure
 
 
@@ -57,7 +55,7 @@ class SystemResources:
         available_memory_mb: Available physical/unified memory in MB.
         total_memory_mb: Total physical/unified memory in MB.
         used_memory_mb: Memory currently in use in MB.
-        memory_pressure_percent: Percentage of memory in use (0–100).
+        memory_pressure_percent: Percentage of memory in use (0-100).
         active_ports: Set of ports currently leased by the lifecycle manager.
         resident_models: List of model keys currently resident in memory.
         parallel_capacity: Maximum number of parallel tasks that can fit.
@@ -67,8 +65,8 @@ class SystemResources:
     total_memory_mb: int
     used_memory_mb: int
     memory_pressure_percent: int
-    active_ports: Set[int] = field(default_factory=set)
-    resident_models: List[str] = field(default_factory=list)
+    active_ports: set[int] = field(default_factory=set)
+    resident_models: list[str] = field(default_factory=list)
     parallel_capacity: int = 0
 
 
@@ -77,7 +75,7 @@ class SystemResources:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _get_memory_metrics() -> Dict[str, int]:
+def _get_memory_metrics() -> dict[str, int]:
     """Get memory metrics from psutil (or return zeros if psutil unavailable)."""
     if not HAS_PSUTIL:
         return {
@@ -95,7 +93,7 @@ def _get_memory_metrics() -> Dict[str, int]:
     }
 
 
-def _get_active_ports_from_store(store: QueueStore) -> Set[int]:
+def _get_active_ports_from_store(store: QueueStore) -> set[int]:
     """Get ports currently leased by the lifecycle manager from the store."""
     rows = store.conn.execute(
         "SELECT port FROM port_leases WHERE task_id IN ("
@@ -104,7 +102,7 @@ def _get_active_ports_from_store(store: QueueStore) -> Set[int]:
     return {row["port"] for row in rows}
 
 
-def _get_active_ports_system_wide() -> Set[int]:
+def _get_active_ports_system_wide() -> set[int]:
     """Get ports currently in use by any process on the system.
 
     Falls back to checking /proc/net/tcp on Linux or using socket if psutil
@@ -121,7 +119,7 @@ def _get_active_ports_system_wide() -> Set[int]:
 
 def _compute_parallel_capacity(
     available_mb: int,
-    active_ports: Set[int],
+    active_ports: set[int],
 ) -> int:
     """Estimate how many more tasks can be run in parallel.
 
@@ -134,7 +132,7 @@ def _compute_parallel_capacity(
 
 
 def get_system_resources(
-    store: Optional[QueueStore] = None,
+    store: QueueStore | None = None,
 ) -> SystemResources:
     """Query live system metrics for resource-aware scheduling.
 
@@ -185,12 +183,11 @@ def get_system_resources(
         """Check if a given model can be spawned with current resources."""
         return model.total_required_mb <= available_mb
 
-    def best_fitting_model(max_parallel: int = 1) -> Optional[str]:
+    def best_fitting_model(max_parallel: int = 1) -> str | None:
         """Find the largest model that fits in available memory."""
         per_task_budget = available_mb // max(max_parallel, 1)
         fitting = [
-            (k, m) for k, m in MODEL_REGISTRY.items()
-            if m.total_required_mb <= per_task_budget
+            (k, m) for k, m in MODEL_REGISTRY.items() if m.total_required_mb <= per_task_budget
         ]
         if not fitting:
             return None
@@ -201,7 +198,7 @@ def get_system_resources(
     return result
 
 
-def get_memory_headroom(model: ModelConfig, store: Optional[QueueStore] = None) -> Optional[bool]:
+def get_memory_headroom(model: ModelConfig, store: QueueStore | None = None) -> bool | None:
     """Check if there's sufficient memory headroom for a model.
 
     Args:

@@ -31,10 +31,9 @@ Usage::
 from __future__ import annotations
 
 from collections import deque
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 from pydantask.execution.schema import QueueStore
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DAG validation — Kahn's algorithm for cycle detection
@@ -42,8 +41,8 @@ from pydantask.execution.schema import QueueStore
 
 
 def validate_dag(
-    tasks: List[Dict[str, Any]],
-) -> Tuple[bool, List[int] | str]:
+    tasks: list[dict[str, Any]],
+) -> tuple[bool, list[int] | str]:
     """Validate that a set of task specs forms a valid DAG (no cycles).
 
     Uses Kahn's algorithm (BFS-based topological sort). If the sort completes
@@ -65,9 +64,9 @@ def validate_dag(
         return True, []
 
     # Build adjacency list and in-degree map
-    node_ids: Set[int] = {t["task_id"] for t in tasks}
-    children: Dict[int, List[int]] = {tid: [] for tid in node_ids}
-    in_degree: Dict[int, int] = {tid: 0 for tid in node_ids}
+    node_ids: set[int] = {t["task_id"] for t in tasks}
+    children: dict[int, list[int]] = {tid: [] for tid in node_ids}
+    in_degree: dict[int, int] = {tid: 0 for tid in node_ids}
 
     for task in tasks:
         tid = task["task_id"]
@@ -81,10 +80,8 @@ def validate_dag(
             in_degree[tid] += 1
 
     # Kahn's algorithm: BFS from nodes with zero in-degree
-    queue: deque[int] = deque(
-        tid for tid, deg in in_degree.items() if deg == 0
-    )
-    order: List[int] = []
+    queue: deque[int] = deque(tid for tid, deg in in_degree.items() if deg == 0)
+    order: list[int] = []
 
     while queue:
         node = queue.popleft()
@@ -108,8 +105,8 @@ def validate_dag(
 def validate_dag_against_store(
     store: QueueStore,
     dag_id: str,
-    tasks: List[Dict[str, Any]],
-) -> Tuple[bool, List[int] | str]:
+    tasks: list[dict[str, Any]],
+) -> tuple[bool, list[int] | str]:
     """Validate a DAG against an existing QueueStore.
 
     In addition to cycle detection, checks that all parent_ids reference
@@ -130,7 +127,7 @@ def validate_dag_against_store(
         return False, f"DAG '{dag_id}': {result}"
 
     # Check parent references exist in the store
-    existing_ids: Set[int] = set()
+    existing_ids: set[int] = set()
     for row in store.get_pending_by_dag(dag_id) + _get_all_task_ids(store, dag_id):
         existing_ids.add(row["id"])
 
@@ -145,7 +142,7 @@ def validate_dag_against_store(
     return True, result
 
 
-def _get_all_task_ids(store: QueueStore, dag_id: str) -> List[Any]:
+def _get_all_task_ids(store: QueueStore, dag_id: str) -> list[Any]:
     """Get all tasks (including completed) for a DAG."""
     return store.conn.execute(
         "SELECT id FROM task_queue WHERE dag_id = ?",
@@ -158,7 +155,7 @@ def _get_all_task_ids(store: QueueStore, dag_id: str) -> List[Any]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def resolve_ready_tasks(store: QueueStore, limit: int = 10) -> List[int]:
+def resolve_ready_tasks(store: QueueStore, limit: int = 10) -> list[int]:
     """Get IDs of tasks ready for execution.
 
     Returns task IDs where ``status='pending'`` AND ``in_degree=0``.
@@ -178,7 +175,7 @@ def resolve_parent_output(
     store: QueueStore,
     dag_id: str,
     task_id: int,
-) -> Optional[str]:
+) -> str | None:
     """Resolve a task's parent output for downstream consumption.
 
     When a downstream task needs to read its parent's result, this method
@@ -208,7 +205,7 @@ def resolve_parent_output(
     return parent_row["output"]
 
 
-def get_dag_status(store: QueueStore, dag_id: str) -> Dict[str, int]:
+def get_dag_status(store: QueueStore, dag_id: str) -> dict[str, int]:
     """Get the completion status of all tasks in a DAG.
 
     Args:
@@ -221,8 +218,7 @@ def get_dag_status(store: QueueStore, dag_id: str) -> Dict[str, int]:
             {"pending": 2, "completed": 5, "failed": 0, "processing": 1}
     """
     rows = store.conn.execute(
-        "SELECT status, COUNT(*) as cnt FROM task_queue "
-        "WHERE dag_id = ? GROUP BY status",
+        "SELECT status, COUNT(*) as cnt FROM task_queue WHERE dag_id = ? GROUP BY status",
         (dag_id,),
     ).fetchall()
     return {row["status"]: row["cnt"] for row in rows}

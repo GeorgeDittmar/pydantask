@@ -41,6 +41,9 @@ dependencies = [
 dev = [
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.8.0",
+    "pyright>=1.1.390",
 ]
 docs = [
     "mkdocs>=1.6.1",
@@ -57,3 +60,54 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# ── Ruff (linting + formatting) ────────────────────────────────────
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+exclude = [
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "*.egg-info",
+    ".git",
+    "_checkpoint",
+    "src/pydantask/manager/TaskManager.py",  # syntax error in upstream
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "N", "UP", "B", "SIM", "RUF"]
+ignore = [
+    "E501",  # line length handled by formatter
+    "SIM108", # allow if-else-expr instead of ternary
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["pydantask"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+
+# ── Pytest ─────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["test"]
+asyncio_mode = "auto"
+addopts = "-v"
+
+# ── Coverage ───────────────────────────────────────────────────────
+[tool.coverage.run]
+source = ["pydantask"]
+omit = [
+    "*/tests/*",
+    "*/__pycache__/*",
+    "*/setup.py",
+    "*/conftest.py",
+]
+
+[tool.coverage.report]
+fail_under = 2  # alpha: be lenient; raise once codebase matures
+show_missing = true
+skip_empty = true

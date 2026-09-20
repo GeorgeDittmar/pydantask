@@ -23,16 +23,13 @@ Usage::
 
 from __future__ import annotations
 
-from typing import Dict
-
 from pydantask.execution.schema import ModelConfig
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Model registry — static dictionary of available models
 # ─────────────────────────────────────────────────────────────────────────────
 
-MODEL_REGISTRY: Dict[str, ModelConfig] = {
+MODEL_REGISTRY: dict[str, ModelConfig] = {
     # ── Small/fast models (good for quick tasks, sequential execution) ──
     "qwen2.5-coder-1.5b": ModelConfig(
         model_key="qwen2.5-coder-1.5b",
@@ -52,7 +49,6 @@ MODEL_REGISTRY: Dict[str, ModelConfig] = {
         capability_tier="fast",
         min_memory_headroom_mb=1200,
     ),
-
     # ── Mid-size models (good balance of speed and capability) ──
     "qwen2.5-coder-7b": ModelConfig(
         model_key="qwen2.5-coder-7b",
@@ -81,7 +77,6 @@ MODEL_REGISTRY: Dict[str, ModelConfig] = {
         capability_tier="general",
         min_memory_headroom_mb=1500,
     ),
-
     # ── Larger models (good for complex reasoning, parallel execution) ──
     "qwen2.5-14b": ModelConfig(
         model_key="qwen2.5-14b",
@@ -101,7 +96,6 @@ MODEL_REGISTRY: Dict[str, ModelConfig] = {
         capability_tier="general",
         min_memory_headroom_mb=2000,
     ),
-
     # ── Heavy models (complex reasoning, only when memory allows) ──
     "qwen2.5-32b": ModelConfig(
         model_key="qwen2.5-32b",

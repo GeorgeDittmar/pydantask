@@ -7,16 +7,15 @@ from unittest.mock import patch
 
 import pytest
 
-from pydantask.execution.schema import QueueStore
+from pydantask.execution.registry import MODEL_REGISTRY, get_model
 from pydantask.execution.resources import (
     HAS_PSUTIL,
     SystemResources,
-    get_system_resources,
     get_memory_headroom,
+    get_system_resources,
     should_throttle_pressure,
 )
-from pydantask.execution.registry import get_model, MODEL_REGISTRY
-
+from pydantask.execution.schema import QueueStore
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fixtures
@@ -75,7 +74,10 @@ class TestGetSystemResources:
         resources = get_system_resources()
         if HAS_PSUTIL:
             # psutil available + used ~= total (some reserved for kernel)
-            assert resources.available_memory_mb + resources.used_memory_mb >= resources.total_memory_mb
+            assert (
+                resources.available_memory_mb + resources.used_memory_mb
+                >= resources.total_memory_mb
+            )
         else:
             assert resources.available_memory_mb == 0
             assert resources.total_memory_mb == 0
@@ -103,7 +105,10 @@ class TestGetSystemResources:
             model_1 = resources.best_fitting_model(max_parallel=1)
             model_8 = resources.best_fitting_model(max_parallel=8)
             if model_1 and model_8:
-                assert MODEL_REGISTRY[model_1].total_required_mb >= MODEL_REGISTRY[model_8].total_required_mb
+                assert (
+                    MODEL_REGISTRY[model_1].total_required_mb
+                    >= MODEL_REGISTRY[model_8].total_required_mb
+                )
             elif model_1 and not model_8:
                 smallest = min(MODEL_REGISTRY.values(), key=lambda m: m.total_required_mb)
                 assert smallest.total_required_mb * 8 > resources.available_memory_mb
@@ -143,26 +148,32 @@ class TestGetMemoryHeadroom:
 class TestShouldThrottlePressure:
     def test_low_pressure(self) -> None:
         """At normal memory usage, should not throttle."""
-        with patch("pydantask.execution.resources.HAS_PSUTIL", True):
-            with patch("pydantask.execution.resources._get_memory_metrics") as mock_metrics:
-                mock_metrics.return_value = {"percent": 30}
-                assert should_throttle_pressure() is False
+        with (
+            patch("pydantask.execution.resources.HAS_PSUTIL", True),
+            patch("pydantask.execution.resources._get_memory_metrics") as mock_metrics,
+        ):
+            mock_metrics.return_value = {"percent": 30}
+            assert should_throttle_pressure() is False
 
     def test_high_pressure(self) -> None:
         """At high memory usage, should throttle."""
         # Need to patch HAS_PSUTIL to True so _get_memory_metrics actually
         # calls our mock instead of returning the psutil-unavailable fallback
-        with patch("pydantask.execution.resources.HAS_PSUTIL", True):
-            with patch("pydantask.execution.resources._get_memory_metrics") as mock_metrics:
-                mock_metrics.return_value = {"percent": 90}
-                assert should_throttle_pressure() is True
+        with (
+            patch("pydantask.execution.resources.HAS_PSUTIL", True),
+            patch("pydantask.execution.resources._get_memory_metrics") as mock_metrics,
+        ):
+            mock_metrics.return_value = {"percent": 90}
+            assert should_throttle_pressure() is True
 
     def test_at_threshold(self) -> None:
         """Just below threshold — no throttle."""
-        with patch("pydantask.execution.resources.HAS_PSUTIL", True):
-            with patch("pydantask.execution.resources._get_memory_metrics") as mock_metrics:
-                mock_metrics.return_value = {"percent": 84.9}
-                assert should_throttle_pressure() is False
+        with (
+            patch("pydantask.execution.resources.HAS_PSUTIL", True),
+            patch("pydantask.execution.resources._get_memory_metrics") as mock_metrics,
+        ):
+            mock_metrics.return_value = {"percent": 84.9}
+            assert should_throttle_pressure() is False
 
     def test_psutil_unavailable(self) -> None:
         """When psutil is not available at all, should not throttle."""

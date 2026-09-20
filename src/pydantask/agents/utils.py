@@ -1,7 +1,6 @@
-import yaml
 from pathlib import Path
-from typing import Any, Dict, List, Set
 
+import yaml
 from pydantic import ValidationError
 
 from pydantask.models import Plan, WorkflowYamlConfig
@@ -33,7 +32,7 @@ def _ensure_dag_is_valid(plan: Plan) -> None:
         dupes = sorted({i for i in ids if ids.count(i) > 1})
         raise ValueError(f"Duplicate task_id values in workflow: {dupes}")
 
-    task_ids: Set[int] = set(ids)
+    task_ids: set[int] = set(ids)
     for t in tasks:
         for dep in t.sub_task_dependencies or []:
             if dep not in task_ids:
@@ -45,23 +44,19 @@ def _ensure_dag_is_valid(plan: Plan) -> None:
                 raise ValueError(f"Task {t.task_id} cannot depend on itself")
 
     # Cycle detection via DFS.
-    graph: Dict[int, List[int]] = {
-        t.task_id: list(t.sub_task_dependencies or []) for t in tasks
-    }
+    graph: dict[int, list[int]] = {t.task_id: list(t.sub_task_dependencies or []) for t in tasks}
 
-    visiting: Set[int] = set()
-    visited: Set[int] = set()
+    visiting: set[int] = set()
+    visited: set[int] = set()
 
-    def dfs(node: int, stack: List[int]) -> None:
+    def dfs(node: int, stack: list[int]) -> None:
         if node in visited:
             return
         if node in visiting:
             # found a cycle; report a helpful path
             cycle_start = stack.index(node) if node in stack else 0
             cycle_path = stack[cycle_start:] + [node]
-            raise ValueError(
-                f"Dependency cycle detected: {' -> '.join(map(str, cycle_path))}"
-            )
+            raise ValueError(f"Dependency cycle detected: {' -> '.join(map(str, cycle_path))}")
 
         visiting.add(node)
         stack.append(node)
@@ -71,13 +66,11 @@ def _ensure_dag_is_valid(plan: Plan) -> None:
         visiting.remove(node)
         visited.add(node)
 
-    for tid in graph.keys():
+    for tid in graph:
         dfs(tid, [])
 
 
-async def import_yaml_workflow(
-    path: str | Path, *, auto_mark_final: bool = True
-) -> Plan:
+async def import_yaml_workflow(path: str | Path, *, auto_mark_final: bool = True) -> Plan:
     """Load a pre-defined workflow (task DAG) from a YAML file and validate it.
 
     Returns:
@@ -100,7 +93,7 @@ async def import_yaml_workflow(
         plan = cfg.to_plan()
     except ValidationError as e:
         raise ValueError(
-            f"Invalid workflow YAML at {str(path)!r}.\n\nPydantic validation error:\n{str(e)}"
+            f"Invalid workflow YAML at {str(path)!r}.\n\nPydantic validation error:\n{e!s}"
         ) from e
 
     _ensure_dag_is_valid(plan)

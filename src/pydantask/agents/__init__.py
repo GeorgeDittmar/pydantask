@@ -1,4 +1,4 @@
 from .agent import DeepAgent
-from .spec import BaseAgentSpec, SupervisorSpec, ResearcherSpec
+from .spec import BaseAgentSpec, ResearcherSpec, SupervisorSpec
 
-__all__ = ["DeepAgent", "BaseAgentSpec", "SupervisorSpec", "ResearcherSpec"]
+__all__ = ["BaseAgentSpec", "DeepAgent", "ResearcherSpec", "SupervisorSpec"]

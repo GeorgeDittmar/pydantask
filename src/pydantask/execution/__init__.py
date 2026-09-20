@@ -29,17 +29,17 @@ from pydantask.execution.registry import (
     get_model,
     get_smallest_model,
 )
-from pydantask.execution.resources import (
-    get_system_resources,
-    get_memory_headroom,
-    should_throttle_pressure,
-)
 from pydantask.execution.resolver import (
-    validate_dag,
-    resolve_ready_tasks,
-    resolve_parent_output,
     get_dag_status,
     is_dag_complete,
+    resolve_parent_output,
+    resolve_ready_tasks,
+    validate_dag,
+)
+from pydantask.execution.resources import (
+    get_memory_headroom,
+    get_system_resources,
+    should_throttle_pressure,
 )
 from pydantask.execution.schema import (
     ModelConfig,
@@ -50,26 +50,22 @@ from pydantask.execution.schema import (
 )
 
 __all__ = [
-    # Schema & models
-    "QueueStore",
-    "ModelConfig",
-    "SpawnArgs",
-    "TaskPayload",
-    "TaskOutput",
-    # Registry
     "MODEL_REGISTRY",
+    "ModelConfig",
+    "QueueStore",
+    "SpawnArgs",
+    "TaskOutput",
+    "TaskPayload",
+    "find_fit_models",
+    "find_models_by_tier",
+    "get_dag_status",
+    "get_memory_headroom",
     "get_model",
     "get_smallest_model",
-    "find_models_by_tier",
-    "find_fit_models",
-    # DAG resolution
-    "validate_dag",
-    "resolve_ready_tasks",
-    "resolve_parent_output",
-    "get_dag_status",
-    "is_dag_complete",
-    # Resources
     "get_system_resources",
-    "get_memory_headroom",
+    "is_dag_complete",
+    "resolve_parent_output",
+    "resolve_ready_tasks",
     "should_throttle_pressure",
+    "validate_dag",
 ]

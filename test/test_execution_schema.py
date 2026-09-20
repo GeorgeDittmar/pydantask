@@ -4,19 +4,16 @@ from __future__ import annotations
 
 import json
 import tempfile
-from pathlib import Path
 
 import pytest
-import sqlite3
 
 from pydantask.execution.schema import (
     ModelConfig,
+    QueueStore,
     SpawnArgs,
     TaskOutput,
     TaskPayload,
-    QueueStore,
 )
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pydantic model tests
@@ -38,7 +35,7 @@ class TestModelConfig:
         assert cfg.total_required_mb == 6200
 
     def test_extra_fields_forbidden(self):
-        with pytest.raises(Exception):  # Pydantic ValidationError
+        with pytest.raises(ValueError):  # Pydantic ValidationError
             ModelConfig(
                 model_key="x",
                 path="/x",
@@ -89,13 +86,13 @@ class TestSpawnArgs:
         assert not hasattr(args, "future_flag")
 
     def test_validation_rejects_out_of_range(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             SpawnArgs(temp=-0.1)
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             SpawnArgs(temp=2.1)
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             SpawnArgs(top_p=-0.1)
 
     def test_serialization_roundtrip(self):
@@ -247,11 +244,16 @@ class TestDAGResolution:
         assert child["in_degree"] == 1
 
         # Mark parent as completed
-        store.mark_completed(task_id=parent_id, output_json=json.dumps({
-            "status": "ok",
-            "content": "parent result",
-            "model_used": "test",
-        }))
+        store.mark_completed(
+            task_id=parent_id,
+            output_json=json.dumps(
+                {
+                    "status": "ok",
+                    "content": "parent result",
+                    "model_used": "test",
+                }
+            ),
+        )
 
         # Decrement children — this is what the lifecycle manager does
         store.decrement_children_in_degree(parent_id)
@@ -325,18 +327,14 @@ class TestPortLeases:
             assert acquired is True
 
         # Verify lease exists
-        row = store.conn.execute(
-            "SELECT * FROM port_leases WHERE port = ?", (port,)
-        ).fetchone()
+        row = store.conn.execute("SELECT * FROM port_leases WHERE port = ?", (port,)).fetchone()
         assert row is not None
         assert row["task_id"] == task_id
 
         # Release
         store.release_lease(port)
 
-        row = store.conn.execute(
-            "SELECT * FROM port_leases WHERE port = ?", (port,)
-        ).fetchone()
+        row = store.conn.execute("SELECT * FROM port_leases WHERE port = ?", (port,)).fetchone()
         assert row is None
 
     def test_double_lease_fails(self, store: QueueStore) -> None:
@@ -369,7 +367,9 @@ class TestPortLeases:
             )
 
         # Mark task as completed (so it's NOT in processing)
-        store.mark_completed(task_id, json.dumps({"status": "ok", "content": "", "model_used": "test"}))
+        store.mark_completed(
+            task_id, json.dumps({"status": "ok", "content": "", "model_used": "test"})
+        )
 
         stale = store.find_stale_leases(max_age_seconds=300)
         assert len(stale) == 1
@@ -381,7 +381,9 @@ class TestCompletionAndFailure:
         task_id = store.insert_task(dag_id="dag")
         store.mark_completed(
             task_id,
-            json.dumps({"status": "ok", "content": "done", "model_used": "qwen2.5", "tokens_used": 100}),
+            json.dumps(
+                {"status": "ok", "content": "done", "model_used": "qwen2.5", "tokens_used": 100}
+            ),
             spawn_model_key="qwen2.5",
         )
 
@@ -435,12 +437,14 @@ class TestEscalation:
 
 class TestCleanup:
     def test_cleanup_completed_dag(self, store: QueueStore) -> None:
-        for i in range(3):
+        for _i in range(3):
             store.insert_task(dag_id="cleanup-test")
 
         # Complete all of them
         for row in store.get_pending_by_dag("cleanup-test"):
-            store.mark_completed(row["id"], json.dumps({"status": "ok", "content": "", "model_used": "test"}))
+            store.mark_completed(
+                row["id"], json.dumps({"status": "ok", "content": "", "model_used": "test"})
+            )
 
         deleted = store.cleanup_completed_dag("cleanup-test")
         assert deleted == 3

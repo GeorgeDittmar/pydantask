@@ -1,33 +1,41 @@
-from pydantask.models import Plan, TaskItem, CapabilityDescription
+import asyncio
+from pathlib import Path
+from pprint import pprint
+
+from dotenv import find_dotenv, load_dotenv
+
 from pydantask.agents import DeepAgent
 from pydantask.capabilities.runner_v2 import as_runner
-from dotenv import load_dotenv, find_dotenv
-from pprint import pprint
-from pathlib import Path
-import asyncio
+from pydantask.models import CapabilityDescription
 
 load_dotenv(find_dotenv())
 
 checkpoint_dir = Path("_checkpoint") / "primative"
 
-async def write_to_file(content:str, filename:str) -> str:
 
+async def write_to_file(content: str, filename: str) -> str:
     with open(f"tmp/{filename}", "w") as f:
         f.write(content)
 
     return f"{filename} was written to disk at location tmp/{filename}"
 
-async def read_from_file(filename:str) -> str:
-    with open(f"tmp/{filename}", "r") as f:
+
+async def read_from_file(filename: str) -> str:
+    with open(f"tmp/{filename}") as f:
         return f.read()
 
-writing_capability = CapabilityDescription(name="write_to_file", 
-                                           description="Tool to write content to a file on disk. Use when there is output needing to be saved for a subtask, or a final output.",
-                                           tool_func=as_runner(write_to_file))
 
-reading_capability = CapabilityDescription(name="read_from_file",
-                                           description="Tool to read the contents of a text file on disk. Use this when something needs to be loaded or read for a task.",
-                                           tool_func=as_runner(read_from_file))
+writing_capability = CapabilityDescription(
+    name="write_to_file",
+    description="Tool to write content to a file on disk. Use when there is output needing to be saved for a subtask, or a final output.",
+    tool_func=as_runner(write_to_file),
+)
+
+reading_capability = CapabilityDescription(
+    name="read_from_file",
+    description="Tool to read the contents of a text file on disk. Use this when something needs to be loaded or read for a task.",
+    tool_func=as_runner(read_from_file),
+)
 da = DeepAgent(
     # "I need a report of the news for today. Give me a high level summary and then a detailed version of major pieces of news as it pertains to the US and world. Output the report as markdown withj citations in the report. You must cite all sources at the end of the article.",
     # """I am testing your Deep Agent ability to plan and execute on an objective. I want to test your ability to create plans.
