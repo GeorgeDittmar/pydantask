@@ -1,3 +1,3 @@
     """
-     Manages DeepAgent runs to allow for durability in its execution.
+     Manages PydanTask runs to allow for durability in its execution.
     """

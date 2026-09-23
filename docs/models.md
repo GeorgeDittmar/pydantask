@@ -8,7 +8,7 @@ These models define:
 - Knowledge and citations (`KnowledgeRecord`, `SourceRef`)
 - Capabilities and runtime state (`CapabilityDescription`, `RuntimeState`)
 - Supervisor and planner structures (`SupervisorDecision`, `Plan`, `SubAgentInstruction`, `TaskSpec`)
-- Run/tracing utilities (`DeepAgentRunResult`, `TracingBackend`)
+- Run/tracing utilities (`PydanTaskRunResult`, `TracingBackend`)
 
 All content below is rendered from the code via mkdocstrings.
 
@@ -112,9 +112,9 @@ These models define the strict YAML contract used by `import_yaml_workflow(...)`
 
 ## Run and Tracing
 
-### `DeepAgentRunResult`
+### `PydanTaskRunResult`
 
-::: pydantask.models.DeepAgentRunResult
+::: pydantask.models.PydanTaskRunResult
 
 ---
 

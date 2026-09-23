@@ -37,7 +37,7 @@ async def store_file_as_artifact(
 ) -> ArtifactRef:
     """Persist a local file into the run's artifact store and return an ArtifactRef.
 
-    This is intended for *host-side* orchestration code (e.g. DeepAgent) that
+    This is intended for *host-side* orchestration code (e.g. PydanTask) that
     needs to convert arbitrary callable outputs (like "wrote tmp/foo.txt") into
     durable, resumable artifacts.
 

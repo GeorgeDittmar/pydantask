@@ -8,11 +8,11 @@ At a high level, agents:
 - Can call tools via function calling
 - Can share mutable state via `RuntimeState` (either as `deps_type=RuntimeState` or via `deps_type=TaskRunDeps` where `TaskRunDeps.runtime_state` is the shared state)
 
-This page documents how `DeepAgent` works **as implemented today**.
+This page documents how `PydanTask` works **as implemented today**.
 
-## DeepAgent: The orchestrator
+## PydanTask: The orchestrator
 
-`DeepAgent` coordinates a multi-step run over a shared `RuntimeState`.
+`PydanTask` coordinates a multi-step run over a shared `RuntimeState`.
 
 ### Constructor
 
@@ -34,9 +34,9 @@ The public constructor accepts several optional overrides; the parameters that m
 - `verbose_logging`: log richer debugging information during execution
 
 ```python docs/agents.md
-from pydantask.agents import DeepAgent
+from pydantask.agents import PydanTask
 
-agent = DeepAgent(
+agent = PydanTask(
     objective="...",
     model="gpt-4.1-mini",
     max_steps=20,
@@ -51,7 +51,7 @@ The default `research_agent` capability uses Tavily web search when `TAVILY_API_
 
 ### Return type
 
-`DeepAgent.run()` returns a `DeepAgentRunResult`:
+`PydanTask.run()` returns a `PydanTaskRunResult`:
 
 - `final_result: TaskResult | None`
 - `plan: Dict[int, TaskItem]`
@@ -60,7 +60,7 @@ The default `research_agent` capability uses Tavily web search when `TAVILY_API_
 
 ## What happens in `run()`
 
-`DeepAgent.run()` is an outer loop that repeats until one of these happens:
+`PydanTask.run()` is an outer loop that repeats until one of these happens:
 
 - **Completion (guarded):** the supervisor returns `all_tasks_completed=True` *and* a single task is marked `is_final=True` and is `COMPLETED` with a `TaskResult`.
 - **Safety stop:** `max_steps` is reached.
@@ -69,13 +69,13 @@ The default `research_agent` capability uses Tavily web search when `TAVILY_API_
 Each cycle:
 
 1. **Deterministic scheduler pass (no LLM)**
-   - Before calling the supervisor, DeepAgent normalizes task readiness:
+   - Before calling the supervisor, PydanTask normalizes task readiness:
      - `PENDING → READY` when dependencies are satisfied.
      - `READY → PENDING` when dependencies are *not* satisfied (keeps the status board honest).
      - Non-terminal tasks with an unknown capability are marked `ERRORED`.
 
 2. **Supervisor decision (LLM)**
-   - `DeepAgent` calls the supervisor agent with a formatted “mission control board” view of:
+   - `PydanTask` calls the supervisor agent with a formatted “mission control board” view of:
      - the current plan (`RuntimeState.plan`)
      - task statuses and dependency edges
      - available capability names/descriptions
@@ -84,12 +84,12 @@ Each cycle:
      - `tasks_to_execute`: task IDs it wants to run next
      - `feedback_to_subagents`: optional per-task guidance
      - `all_tasks_completed`: whether to stop
-   - The supervisor can also update the plan at runtime using DeepAgent tools (depending on `planning_mode`):
+   - The supervisor can also update the plan at runtime using PydanTask tools (depending on `planning_mode`):
      - always: `cancel_task`, `update_task_status`, `view_qa_report`
      - in `llm`/`hybrid`: `add_task`, `patch_task`, `mark_final_task`
 
 3. **Execute ready tasks (parallel)**
-   - `DeepAgent._execute_ready_tasks(...)` filters the supervisor’s requested tasks to those whose dependencies are satisfied.
+   - `PydanTask._execute_ready_tasks(...)` filters the supervisor’s requested tasks to those whose dependencies are satisfied.
    - Dependency rule: a task can run only if every `sub_task_dependency` task has status `COMPLETED`.
    - Eligible tasks execute concurrently via `asyncio.TaskGroup`.
    - When a task runs:
@@ -106,7 +106,7 @@ Each cycle:
 
 Between cycles, the `RuntimeState` is mutated in-place.
 
-If `checkpoint=True`, DeepAgent uses an **event-sourced checkpoint log** under `_checkpoint/<run-id>/` (or `checkpoint_dir` if provided):
+If `checkpoint=True`, PydanTask uses an **event-sourced checkpoint log** under `_checkpoint/<run-id>/` (or `checkpoint_dir` if provided):
 
 - `events.jsonl`: append-only event log (task added/patched/status updates/results/etc.)
 - `summaries.jsonl`: lightweight runtime summaries per cycle
@@ -134,7 +134,7 @@ The shared state is the `RuntimeState` model (see `docs/models.md`). The key fie
 
 A task is executed by a capability named in `TaskItem.capability`.
 
-Capabilities are stored in the agent's capability registry (implementation: `DeepAgent._capability_registry`) as `CapabilityDescription` entries:
+Capabilities are stored in the agent's capability registry (implementation: `PydanTask._capability_registry`) as `CapabilityDescription` entries:
 
 - `name`: the string used in `TaskItem.capability`
 - `description`: human-readable summary (shown to the supervisor)
@@ -144,7 +144,7 @@ At runtime, the capability registry is also passed into `RuntimeState.capability
 
 ### Default capabilities
 
-By default, DeepAgent registers:
+By default, PydanTask registers:
 
 - `research_agent` — uses Tavily web search (when `TAVILY_API_KEY` is present)
   or a DuckDuckGo-based search tool to gather information and return a cited
@@ -154,4 +154,4 @@ By default, DeepAgent registers:
   document/code/log interpretation, and other tasks that operate on existing
   context.
 
-You can add additional capabilities by passing `sub_agents=[CapabilityDescription(...)]` into `DeepAgent.__init__`.
+You can add additional capabilities by passing `sub_agents=[CapabilityDescription(...)]` into `PydanTask.__init__`.

@@ -8,21 +8,21 @@ This page aggregates the auto-generated API documentation for the main classes a
 
 ## Orchestrator
 
-### DeepAgent
+### PydanTask
 
 High-level orchestrator that coordinates planning, supervision, execution, and QA across sub‑agents.
 
 ```python
-from pydantask.agents import DeepAgent
+from pydantask.agents import PydanTask
 ```
 
-::: pydantask.agents.DeepAgent
+::: pydantask.agents.PydanTask
 
 ---
 
 ## Core Models
 
-These models define the task/plan structure, runtime state, and capability descriptions used by `DeepAgent` and sub‑agents.
+These models define the task/plan structure, runtime state, and capability descriptions used by `PydanTask` and sub‑agents.
 
 ### Task and Plan Models
 

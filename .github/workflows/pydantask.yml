@@ -27,7 +27,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install build pytest
           # Optional: If your tests rely on setup.py/pyproject.toml dependencies:
-          python -m pip install . 
+          python -m pip install ".[dev]"
 
       - name: Run pytest
         run: pytest
