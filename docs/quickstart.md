@@ -31,12 +31,12 @@ Minimal usage (async):
 ```python 
 import asyncio
 
-from pydantask.agents import DeepAgent
+from pydantask.agents import PydanTask
 
 
 async def main() -> None:
-    agent = DeepAgent(objective="Research the best open source LLMs of 2024.")
-    run_result = await agent.run()  # DeepAgentRunResult
+    agent = PydanTask(objective="Research the best open source LLMs of 2024.")
+    run_result = await agent.run()  # PydanTaskRunResult
 
     print("Objective:", run_result.objective)
 

@@ -46,7 +46,7 @@ class DummyRecorder:
 
 @pytest.fixture(autouse=True)
 def env_vars(monkeypatch: pytest.MonkeyPatch):
-    # Keep init() happy if a test *does* instantiate DeepAgent.
+    # Keep init() happy if a test *does* instantiate PydanTask.
     monkeypatch.setenv("TAVILY_API_KEY", "fake-tavily-key")
     monkeypatch.setenv("OPENAI_API_KEY", "fake-openai-key")
 
@@ -56,17 +56,18 @@ def runtime_state() -> RuntimeState:
     return RuntimeState(objective="obj", capability_registry={}, next_task_id=1)
 
 
-def make_minimal_deep_agent(prompt: str = "obj") -> agent_mod.DeepAgent:
-    """Create a DeepAgent without running its heavy __init__.
+def make_minimal_pydantask(prompt: str = "obj") -> agent_mod.PydanTask:
+    """Create a PydanTask without running its heavy __init__.
 
     Since `__init__` is skipped, this function must define any attributes that
     methods under test expect to exist.
     """
-    da = agent_mod.DeepAgent.__new__(agent_mod.DeepAgent)
+    da = agent_mod.PydanTask.__new__(agent_mod.PydanTask)
 
     # Core run() expectations
     da.objective = prompt
     da._max_steps = 3
+    da.max_concurrent_tasks = 4
     da.token_budget = None
     da.verbose = False
 
@@ -115,21 +116,18 @@ def test_autodetect_tracing_backend_precedence(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_deep_agent_init_sets_registry_keys(monkeypatch: pytest.MonkeyPatch):
-    # pydantic-ai inspects tools as callables and expects `__name__`.
-    def _fake_tavily_tool(*args, **kwargs):
-        return {"ok": True}
-
     with (
         patch.object(
-            agent_mod.DeepAgent, "_create_retrying_client", return_value=AsyncClient()
+            agent_mod.PydanTask, "_create_retrying_client", return_value=AsyncClient()
         ),
         patch.object(agent_mod, "OpenAIProvider", autospec=True),
         patch.object(agent_mod, "OpenAIChatModel", autospec=True),
-        patch.object(agent_mod, "tavily_search_tool", return_value=_fake_tavily_tool),
+        # Ensure TAVILY_API_KEY is not set so duckduckgo path is taken (no tavily dependency).
+        patch.object(agent_mod.os, "getenv", return_value=None),
         # Avoid pulling in pydantic-ai's tool schema machinery for this unit test.
         patch.object(agent_mod, "Agent", autospec=True) as agent_cls,
     ):
-        deep_agent = agent_mod.DeepAgent(
+        deep_agent = agent_mod.PydanTask(
             "Test Goal", trace=False, default_capabilities_enabled=True
         )
 
@@ -152,7 +150,7 @@ def test_deep_agent_init_sets_registry_keys(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.mark.asyncio
 async def test_add_cancel_patch_task(runtime_state: RuntimeState):
-    da = make_minimal_deep_agent()
+    da = make_minimal_pydantask()
     ctx = SimpleNamespace(deps=runtime_state)
 
     task_id = await da.add_task(
@@ -184,7 +182,7 @@ async def test_add_cancel_patch_task(runtime_state: RuntimeState):
 
 
 def test_dependencies_satisfied_only_completed(runtime_state: RuntimeState):
-    da = make_minimal_deep_agent()
+    da = make_minimal_pydantask()
 
     t1 = TaskItem(
         task_id=1,
@@ -222,7 +220,7 @@ def test_dependencies_satisfied_only_completed(runtime_state: RuntimeState):
 
 @pytest.mark.asyncio
 async def test_handle_critic_result_transitions():
-    da = make_minimal_deep_agent()
+    da = make_minimal_pydantask()
 
     task = TaskItem(
         task_id=1,
@@ -263,7 +261,7 @@ async def test_handle_critic_result_transitions():
 
 @pytest.mark.asyncio
 async def test_execute_sets_result_and_needs_review(runtime_state: RuntimeState):
-    da = make_minimal_deep_agent(prompt="overall")
+    da = make_minimal_pydantask(prompt="overall")
 
     sub_agent = MagicMock(name="sub_agent")
     sub_agent.run = AsyncMock(name="run")
@@ -290,7 +288,7 @@ async def test_execute_sets_result_and_needs_review(runtime_state: RuntimeState)
 async def test_execute_ready_tasks_filters_deps_and_injects_feedback(
     runtime_state: RuntimeState,
 ):
-    da = make_minimal_deep_agent(prompt="overall")
+    da = make_minimal_pydantask(prompt="overall")
 
     # plan: task 1 completed, task 2 ready (depends on 1), task 3 blocked (depends on missing)
     runtime_state.plan[1] = TaskItem(
@@ -327,7 +325,7 @@ async def test_execute_ready_tasks_filters_deps_and_injects_feedback(
     }
 
     async def _execute_side_effect(sub_agent, step: TaskItem, ctx: RuntimeState):
-        # mimic DeepAgent.execute returning the (mutated) step
+        # mimic PydanTask.execute returning the (mutated) step
         step.result = TaskResult(task_id=step.task_id, summary=f"ran {step.task_id}")
         step.status = TaskStatus.NEEDS_REVIEW
         return step
@@ -350,7 +348,7 @@ async def test_execute_ready_tasks_filters_deps_and_injects_feedback(
 
 @pytest.mark.asyncio
 async def test_update_task_status_and_view_qa_report(runtime_state: RuntimeState):
-    da = make_minimal_deep_agent(prompt="overall")
+    da = make_minimal_pydantask(prompt="overall")
     ctx = SimpleNamespace(deps=runtime_state)
 
     runtime_state.plan[1] = TaskItem(
@@ -376,7 +374,7 @@ async def test_update_task_status_and_view_qa_report(runtime_state: RuntimeState
 async def test_add_task_emits_checkpoint_event_when_enabled(
     runtime_state: RuntimeState,
 ):
-    da = make_minimal_deep_agent()
+    da = make_minimal_pydantask()
     recorder = DummyRecorder()
     da._checkpoint_recorder = recorder
     runtime_state.checkpoint_recorder = recorder
@@ -397,7 +395,7 @@ async def test_add_task_emits_checkpoint_event_when_enabled(
 
 @pytest.mark.asyncio
 async def test_replay_checkpoint_rebuilds_state(runtime_state: RuntimeState):
-    da = make_minimal_deep_agent()
+    da = make_minimal_pydantask()
     recorder = DummyRecorder()
 
     task_payload = TaskItem(
@@ -452,7 +450,7 @@ async def test_replay_checkpoint_rebuilds_state(runtime_state: RuntimeState):
 
 @pytest.mark.asyncio
 async def test_checkpoint_state_records_summary(runtime_state: RuntimeState):
-    da = make_minimal_deep_agent()
+    da = make_minimal_pydantask()
     recorder = DummyRecorder()
     da._checkpoint_recorder = recorder
 
@@ -543,7 +541,7 @@ async def test_list_completed_tasks_tool_supports_runtime_state_deps(
 
 @pytest.mark.asyncio
 async def test_run_stops_when_supervisor_says_done(runtime_state: RuntimeState):
-    da = make_minimal_deep_agent(prompt="overall")
+    da = make_minimal_pydantask(prompt="overall")
 
     # Pre-populate the runtime with a completed final task so the deterministic
     # completion guardrail accepts the supervisor's completion signal.
@@ -585,7 +583,7 @@ async def test_run_stops_when_supervisor_says_done(runtime_state: RuntimeState):
 
 @pytest.mark.asyncio
 async def test_mark_final_task_sets_flag_and_emits_event(runtime_state: RuntimeState):
-    da = make_minimal_deep_agent(prompt="overall")
+    da = make_minimal_pydantask(prompt="overall")
     recorder = DummyRecorder()
     da._checkpoint_recorder = recorder
 
@@ -622,7 +620,7 @@ async def test_mark_final_task_sets_flag_and_emits_event(runtime_state: RuntimeS
 
 @pytest.mark.asyncio
 async def test_run_overrides_completion_when_no_final_task(runtime_state: RuntimeState):
-    da = make_minimal_deep_agent(prompt="overall")
+    da = make_minimal_pydantask(prompt="overall")
     da._initialize_runtime_state = MagicMock(return_value=runtime_state)
     da._format_supervisor_input_prompt = MagicMock(return_value="prompt")
 
@@ -650,7 +648,7 @@ async def test_run_overrides_completion_when_no_final_task(runtime_state: Runtim
 async def test_scheduler_marks_callable_task_errored_when_missing_parameters(
     runtime_state: RuntimeState,
 ):
-    da = make_minimal_deep_agent(prompt="overall")
+    da = make_minimal_pydantask(prompt="overall")
 
     async def write_something_to_file(content: str, filename: str) -> str:
         return f"wrote {filename}"
@@ -687,7 +685,7 @@ async def test_scheduler_marks_callable_task_errored_when_missing_parameters(
 async def test_coerce_output_ingests_existing_file_as_artifact(
     tmp_path, runtime_state: RuntimeState
 ):
-    da = make_minimal_deep_agent(prompt="overall")
+    da = make_minimal_pydantask(prompt="overall")
 
     # Create a fake checkpoint recorder so artifacts go under tmp_path.
     cp_dir = tmp_path / "cp"
@@ -727,3 +725,153 @@ async def test_coerce_output_ingests_existing_file_as_artifact(
     assert tr.artifacts[0].uri.startswith("artifacts/")
     assert "file outputs ingested as artifacts" in tr.detailed_output.lower()
     assert "stars drift" in tr.detailed_output
+
+
+# ---------------------------------------------------------------------------
+# Test 1: Context overflow recovery
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_retries_on_context_overflow():
+    """When an agent call raises a context-limit error, execute should
+    retry with a resume prompt (up to max_resume_attempts + 1 = 3 total tries).
+    """
+    runtime_state = RuntimeState(objective="obj", capability_registry={}, next_task_id=1)
+    da = make_minimal_pydantask()
+
+    sub_agent = MagicMock(name="sub_agent")
+    sub_agent.run = AsyncMock(name="run")
+
+    # First call raises a context-limit error, second call succeeds.
+    ctx_err = RuntimeError("context length exceeded")
+    sub_agent.run.side_effect = [
+        ctx_err,
+        SimpleNamespace(output=TaskResult(task_id=1, summary="done")),
+    ]
+
+    step = TaskItem(
+        task_id=1,
+        overall_objective="obj",
+        sub_task_objective="do",
+        capability="worker_agent",
+        status=TaskStatus.READY,
+    )
+
+    result = await da.execute(sub_agent, step, runtime_state)
+
+    assert result.status == TaskStatus.NEEDS_REVIEW
+    assert result.result.summary == "done"
+    assert sub_agent.run.call_count == 2
+    assert "context_overflow" in result.metadata
+
+
+# ---------------------------------------------------------------------------
+# Test 2: Cascade cancellations
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cascade_cancellations_propagates_to_downstream():
+    """When an upstream task is CANCELLED, all downstream PENDING/READY
+    tasks depending on it must also be CANCELLED.
+    """
+    runtime_state = RuntimeState(
+        objective="obj", capability_registry={}, next_task_id=4
+    )
+    da = make_minimal_pydantask()
+    da._checkpoint_recorder = DummyRecorder()
+
+    # Task 1 is cancelled, task 2 depends on 1, task 3 depends on 2
+    runtime_state.plan[1] = TaskItem(
+        task_id=1,
+        overall_objective="obj",
+        sub_task_objective="cancelled",
+        capability="worker_agent",
+        status=TaskStatus.CANCELLED,
+    )
+    runtime_state.plan[2] = TaskItem(
+        task_id=2,
+        overall_objective="obj",
+        sub_task_objective="blocked by 1",
+        capability="worker_agent",
+        status=TaskStatus.READY,
+        sub_task_dependencies=[1],
+    )
+    runtime_state.plan[3] = TaskItem(
+        task_id=3,
+        overall_objective="obj",
+        sub_task_objective="blocked by 2",
+        capability="worker_agent",
+        status=TaskStatus.PENDING,
+        sub_task_dependencies=[2],
+    )
+
+    await da._cascade_cancellations(runtime_state)
+
+    assert runtime_state.plan[2].status == TaskStatus.CANCELLED
+    assert runtime_state.plan[3].status == TaskStatus.CANCELLED
+    assert (
+        "Upstream dependency Task 1 was cancelled" in runtime_state.plan[2].error_msg
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 3: _select_final_result priority ordering
+# ---------------------------------------------------------------------------
+
+
+def test_select_final_result_priority_ordering(runtime_state: RuntimeState):
+    """_select_final_result should prefer in this order:
+    1) is_final=True task
+    2) task with detailed_output
+    3) producer_agent task
+    4) newest completed task
+    """
+    da = make_minimal_pydantask()
+
+    # Producer with no detail
+    producer = TaskItem(
+        task_id=1,
+        overall_objective="obj",
+        sub_task_objective="synthesize",
+        capability="producer_agent",
+        status=TaskStatus.COMPLETED,
+        result=TaskResult(task_id=1, summary="producer output"),
+    )
+
+    # Task with detailed_output (higher ID)
+    detailed = TaskItem(
+        task_id=2,
+        overall_objective="obj",
+        sub_task_objective="detail",
+        capability="worker_agent",
+        status=TaskStatus.COMPLETED,
+        result=TaskResult(
+            task_id=2, summary="detail", detailed_output="substantive content here"
+        ),
+    )
+
+    runtime_state.plan = {1: producer, 2: detailed}
+
+    selected = da._select_final_result(runtime_state)
+    assert selected is detailed.result  # detailed_output beats producer
+
+    # Now add an is_final task (should win over detailed_output)
+    final = TaskItem(
+        task_id=3,
+        overall_objective="obj",
+        sub_task_objective="final",
+        capability="worker_agent",
+        status=TaskStatus.COMPLETED,
+        is_final=True,
+        result=TaskResult(task_id=3, summary="final"),
+    )
+    runtime_state.plan[3] = final
+
+    selected = da._select_final_result(runtime_state)
+    assert selected is final.result  # is_final beats detailed_output
+
+    # No completed tasks
+    runtime_state.plan = {}
+    assert da._select_final_result(runtime_state) is None

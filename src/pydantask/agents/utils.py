@@ -81,7 +81,7 @@ async def import_yaml_workflow(
     """Load a pre-defined workflow (task DAG) from a YAML file and validate it.
 
     Returns:
-        Plan: A validated `Plan` suitable to pass as `seed_plan=...` to `DeepAgent`.
+        Plan: A validated `Plan` suitable to pass as `seed_plan=...` to `PydanTask`.
 
     Notes:
         - This is intended for user-provided *seed plans* (pre-defined DAGs).
@@ -105,7 +105,7 @@ async def import_yaml_workflow(
 
     _ensure_dag_is_valid(plan)
 
-    # Enforce/assist with the 'final task' invariant expected by DeepAgent's completion guardrail.
+    # Enforce/assist with the 'final task' invariant expected by PydanTask's completion guardrail.
     final_tasks = [t for t in plan.tasks if getattr(t, "is_final", False)]
     if len(final_tasks) > 1:
         raise ValueError(

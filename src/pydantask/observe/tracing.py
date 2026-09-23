@@ -7,7 +7,6 @@ from contextvars import ContextVar
 from typing import Any, Callable, TypeVar, Literal, ParamSpec, Coroutine, cast
 
 from loguru import logger
-from langfuse import get_client
 
 from pydantask.models import TracingBackend
 
@@ -26,6 +25,8 @@ def flush_tracing() -> None:
         backend = get_active_tracing_backend()
 
         if backend == TracingBackend.LANGFUSE:
+            from langfuse import get_client
+
             # Langfuse SDK buffers events; flush ensures they're sent before exit.
             get_client().flush()
             return
@@ -81,6 +82,8 @@ def init_langfuse_tracing() -> None:
         return
 
     try:
+        from langfuse import get_client
+
         lf = get_client()
         logger.info("Attempting to enable Langfuse tracing...")
         if not lf.auth_check():
@@ -216,7 +219,7 @@ def traced(
     """
 
     def _decorator(fn: AsyncFn) -> AsyncFn:
-        span_name = name or fn.__qualname__  # e.g. "DeepAgent.run"
+        span_name = name or fn.__qualname__  # e.g. "PydanTask.run"
 
         @functools.wraps(fn)
         async def _wrapped(*args: P.args, **kwargs: P.kwargs) -> R:

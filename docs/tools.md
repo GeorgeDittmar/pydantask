@@ -41,7 +41,7 @@ It returns a simple confirmation string and does not modify state.
 These tools work within a workspace directory (`pydantask/tools/tmp_files`) and also update `RuntimeState.document_store` so agents can find files by logical name.
 
 Important:
-- These filesystem tools **exist**, but they are **not enabled by default** in the built-in agents created by `DeepAgent` (the harness is intentionally in-memory-first).
+- These filesystem tools **exist**, but they are **not enabled by default** in the built-in agents created by `PydanTask` (the harness is intentionally in-memory-first).
 - You can still wire them into your own custom capabilities/agents if you want file persistence inside the agent workspace.
 
 #### `write_to_file_system`
@@ -179,9 +179,9 @@ from pydantask.tools.default_tools import ask_user
 
 ---
 
-## DeepAgent tool wiring (default agents)
+## PydanTask tool wiring (default agents)
 
-Built‑in agents are constructed inside `DeepAgent` with specific tool lists (see
+Built‑in agents are constructed inside `PydanTask` with specific tool lists (see
 `pydantask/agents/agent.py`). As implemented today:
 
 ### Cross-agent consult tool (important)
@@ -215,7 +215,7 @@ This lets a sub-agent ask *another* capability a narrow question **without** inv
   - `get_current_datetime`
   - `consult_capability`
 
-- The **supervisor agent** (top-level orchestrator) can call DeepAgent methods as tools:
+- The **supervisor agent** (top-level orchestrator) can call PydanTask methods as tools:
   - always available:
     - `update_task_status`
     - `cancel_task`
@@ -229,5 +229,5 @@ This lets a sub-agent ask *another* capability a narrow question **without** inv
 
 Additional capabilities can be registered by creating `CapabilityDescription`
 instances and passing them via the `sub_agents` parameter to
-`DeepAgent.__init__`. Those capabilities then become available to the
+`PydanTask.__init__`. Those capabilities then become available to the
 supervisor (as choices for `TaskItem.capability`) via `RuntimeState.capability_registry`.

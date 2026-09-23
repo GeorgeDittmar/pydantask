@@ -31,7 +31,6 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.providers.anthropic import AnthropicProvider
-from pydantic_ai.common_tools.tavily import tavily_search_tool
 from pydantic_ai.common_tools.duckduckgo import duckduckgo_search_tool
 from pydantic_ai.usage import UsageLimits
 
@@ -46,8 +45,7 @@ from pydantask.prompts.prompts_v2 import (
     RESEARCH_AGENT_SYS_PROMPT,
     SUPERVISOR_INPUT_PROMPT,
     WORKER_AGENT_SYS_PROMPT,
-    DYNAMIC_SUPERVISOR_SYS_PROMPT,
-    BOOTSTRAP_INSTURCT,
+    BOOTSTRAP_INSTRUCT,
     ORCHESTRATION_INSTRUCT,
     COMPRESSED_RESEARCH_SYS_PROMPT,
     COMPRESSED_SUPER_PROMPT,
@@ -75,6 +73,7 @@ from pydantask.models import (
 # Filesystem tools still exist in `pydantask.tools.default_tools` but are not enabled by default.
 from pydantask.tools.default_tools import (
     append_scratch_note,
+    fetch_url_content,
     get_current_datetime,
     get_task_result,
     list_completed_tasks,
@@ -121,8 +120,8 @@ CheckpointEventType = Literal[
 ]
 
 
-class DeepAgent:
-    """Pydantic AI based DeepAgent that manages sub-agents to achieve complex goals."""
+class PydanTask:
+    """Dynamic DAG orchestrator for Pydantic AI."""
 
     def __init__(
         self,
@@ -131,9 +130,10 @@ class DeepAgent:
         # seed_plan: Plan | None = None,
         # planning_mode: Literal["llm", "fixed", "hybrid"] = "llm",
         default_capabilities_enabled: bool = False,
-        custom_supervisor: Agent = None,
+        custom_supervisor: Agent | None = None,
         max_steps: int = 20,
         max_steps_no_progress: int = 5,
+        max_concurrent_tasks: int = 4,
         set_token_budget: Union[int, None] = None,
         capabilities: Union[None, list[CapabilityDescription]] = None,
         # default output type for the producer agent, can be set to a default type or custom pydantic model for better structure and validation of final output
@@ -145,32 +145,31 @@ class DeepAgent:
         resume_from_checkpoint: bool = False,
         verbose_logging: bool = False,
     ):
-        """Initialize a DeepAgent instance.
+        """Initialize a PydanTask instance.
 
         Args:
-            objective: The overall objective / task the deep agent is working on.
+            objective: The overall objective the orchestrator should accomplish.
             model: Model identifier or ``pydantic_ai.models.Model`` instance to use
                 for all sub-agents. Defaults to ``"gpt-5.2"``.
-            critic_agent: Optional pre-configured critic ``Agent``. If omitted, a
-                default critic agent is created.
-            supervisor_agent: Optional supervisor ``Agent`` used to manage the task
-                DAG. If omitted, a default dynamic supervisor is created.
-            researcher_agent: Optional research ``Agent``. If omitted, a default
-                web/doc research agent is created.
-            producer_agent: Optional producer ``Agent``. If omitted, a default
-                agent is created.
-            max_steps: Maximum number of DeepAgent control-loop iterations to run
+            default_capabilities_enabled: If ``True``, register built-in capabilities
+                (research, worker, producer) by default.
+            max_steps: Maximum number of PydanTask control-loop iterations to run
                 before forcing termination.
-            set_token_budget: Optional global token budget for the run. Currently
-                stored but not strictly enforced.
+            max_steps_no_progress: Number of consecutive cycles with no executed tasks
+                before aborting with a deadlock report.
+            max_concurrent_tasks: Maximum number of tasks to run concurrently in each
+                control-loop iteration. Tasks exceeding this limit are batched and
+                executed sequentially in chunks. Defaults to ``4``.
+            set_token_budget: Optional global token budget for the run.
             capabilities: Additional ``CapabilityDescription`` objects to register as
-                callable sub-agents alongside the built-ins.
-            output_type: Pydantic model type used as the default output structure
-                for the producer agent.
+                callable task nodes alongside the built-ins.
             trace: If ``True``, auto-configure tracing via the configured backend.
-            checkpoint: If ``True``, enable event-sourced checkpoint logging for recovery.
+            checkpoint: If ``True``, enable event-sourced checkpoint logging for
+                recovery.
             checkpoint_dir: Optional directory to reuse for checkpoints when resuming a run.
                 If omitted, a unique directory under ``_checkpoint/`` is created.
+            resume_from_checkpoint: If ``True``, attempt to replay from an existing
+                checkpoint when starting the orchestrator.
             verbose_logging: If ``True``, log richer debugging information during
                 execution.
         """
@@ -187,7 +186,7 @@ class DeepAgent:
         )
 
         if objective is None:
-            raise TypeError("DeepAgent requires 'objective' to be provided")
+            raise TypeError("PydanTask requires 'objective' to be provided")
 
         # if planning_mode in {"fixed", "hybrid"} and seed_plan is None:
         #     raise ValueError(
@@ -196,6 +195,7 @@ class DeepAgent:
 
         self.objective: str = objective
         self._max_steps: int = max_steps  # Max steps to prevent infinite loops
+        self.max_concurrent_tasks: int = max_concurrent_tasks
         self.token_budget: Union[int, None] = set_token_budget
         self.verbose = verbose_logging
         # self.output_type = output_type
@@ -287,7 +287,7 @@ class DeepAgent:
         """Coerce arbitrary capability outputs into the canonical TaskResult.
 
         Design goal: capability authors can return "anything" (str/dict/Pydantic model),
-        and DeepAgent will normalize it for downstream evaluation/synthesis.
+        and PydanTask will normalize it for downstream evaluation/synthesis.
 
         Enterprise/ops goal: if the output references on-disk files, ingest them into
         the run's artifact store so the critic/producer can retrieve contents via
@@ -565,16 +565,23 @@ class DeepAgent:
             )
             _default_research_tool_set.append(duckduckgo_search_tool())
         else:
+            from pydantic_ai.common_tools.tavily import tavily_search_tool
             _default_research_tool_set.append(tavily_search_tool(tavily_api_key))
 
         self._researcher_agent = Agent(
-            model=self._retry_model,
-            name="_default_Research_Agent",
-            system_prompt=COMPRESSED_RESEARCH_SYS_PROMPT,
-            tools=_default_research_tool_set,
-            deps_type=TaskRunDeps,
-            output_type=TaskResult,
-        )
+                model=self._retry_model,
+                name="_default_Research_Agent",
+                system_prompt=COMPRESSED_RESEARCH_SYS_PROMPT,
+                tools=_default_research_tool_set,
+                deps_type=TaskRunDeps,
+                output_type=TaskResult,
+                model_settings={
+                        "extra_params": {
+                            "cache_prompt": True,
+                            "slot_id": -1  # Strongly recommended to auto-match any available server slot
+                        }
+                }
+            )
 
         general_worker_agent = Agent(
             model=self._retry_model,
@@ -647,7 +654,7 @@ class DeepAgent:
         return capabilities_list
 
     async def aclose(self) -> None:
-        """Close underlying resources used by this ``DeepAgent`` instance.
+        """Close underlying resources used by this ``PydanTask`` instance.
 
         This is primarily responsible for flushing any tracing backends and
         closing the shared async HTTP client used by the model providers.
@@ -660,10 +667,10 @@ class DeepAgent:
             if getattr(self, "_retry_client", None) is not None:
                 await self._retry_client.aclose()
 
-    async def __aenter__(self) -> "DeepAgent":
-        """Enter the async context manager and return this ``DeepAgent``.
+    async def __aenter__(self) -> "PydanTask":
+        """Enter the async context manager and return this ``PydanTask``.
 
-        Allows ``async with DeepAgent(...) as agent: ...`` usage.
+        Allows ``async with PydanTask(...) as orchestrator: ...`` usage.
         """
         return self
 
@@ -730,7 +737,7 @@ class DeepAgent:
             # NOTE: "openrouter" here assumes OpenAI-compatible API. If you want true
             # OpenRouter defaults (headers/routing), we may want OpenRouterProvider. Dunno
             return OpenAIChatModel(
-                model_name, provider=OpenAIProvider(http_client=self._retry_client)
+                model_name, provider=OpenAIProvider(http_client=self._retry_client), 
             )
 
         if provider_name == "anthropic":
@@ -809,13 +816,13 @@ class DeepAgent:
         return _capability_registry
 
     def _initialize_runtime_state(self, objective: str, registry: dict) -> RuntimeState:
-        """Create the initial :class:`RuntimeState` for a new DeepAgent run.
+        """Create the initial :class:`RuntimeState` for a new PydanTask run.
 
         This initializes an empty plan. If ``seed_plan`` was provided when the
-        DeepAgent was constructed, it is applied at the start of :meth:`run`.
+        PydanTask was constructed, it is applied at the start of :meth:`run`.
 
         Args:
-            objective: Top-level objective for this DeepAgent execution.
+            objective: Top-level objective for this PydanTask execution.
             registry: Mapping of capability names to ``CapabilityDescription``
                 instances.
 
@@ -1332,7 +1339,7 @@ Error that triggered recovery (for debugging only):
     def _remaining_token_budget(self, runtime_state: RuntimeState) -> int | None:
         """Return remaining global token budget (best-effort), or None if unlimited.
 
-        Note: Some unit tests construct `DeepAgent` without calling `__init__`.
+        Note: Some unit tests construct `PydanTask` without calling `__init__`.
         Use `getattr` to avoid AttributeError in those scenarios.
         """
         budget = getattr(self, "token_budget", None)
@@ -1756,19 +1763,33 @@ Instructions:
         return status in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED}
 
     async def _scheduler_pass(self, ctx: RuntimeState) -> str:
-        """Deterministic scheduler pass.
+        """Deterministic scheduler pass — non-LLM state normalization.
 
-        This pass performs small, non-LLM state normalization to improve autonomy:
+        Runs each control-loop cycle to keep the task DAG in a consistent state.
+        Performs four categories of work:
 
-        - Promote PENDING -> READY when all dependencies are COMPLETED.
-        - Demote READY -> PENDING if dependencies are not satisfied (keeps the
-          status board honest).
-        - Mark tasks with unknown capability as ERRORED (unless terminal).
+        1. **Unknown capability detection** — marks tasks with unrecognized
+           ``capability`` names as ERRORED (unless already in a terminal state).
+        2. **Callable parameter self-heal** — for callable capabilities, verifies
+           that all required function parameters are present in
+           ``TaskItem.parameters``. If a task was previously errored for missing
+           params and the supervisor has since patched them, promotes it back to
+           READY (if deps are satisfied).
+        3. **Missing parameter erroring** — if required parameters are still
+           missing, transitions PENDING/READY/RERUN tasks to ERRORED with a
+           message telling the supervisor what to patch.
+        4. **Dependency-based readiness** — promotes PENDING → READY when all
+           dependencies are COMPLETED; demotes READY → PENDING if deps are no
+           longer satisfied.
 
-        Returns a human-readable report injected into the next supervisor prompt.
+        Args:
+            ctx: The current ``RuntimeState`` containing the task plan.
+
+        Returns:
+            A human-readable report string describing all status changes.
+            Returns ``"No scheduler changes this cycle."`` if nothing changed.
         """
         changes: list[str] = []
-        warnings: list[str] = []
 
         async with self._plan_lock:
             for task_id, task in sorted(ctx.plan.items(), key=lambda kv: kv[0]):
@@ -1891,29 +1912,36 @@ Instructions:
                         reason="dependencies_not_met",
                     )
 
-        if not changes and not warnings:
+        if not changes:
             return "No scheduler changes this cycle."
 
         out: list[str] = []
         if changes:
             out.append("Status normalization:")
             out.extend(changes)
-        if warnings:
-            out.append("Warnings:")
-            out.extend(warnings)
         return "\n".join(out)
 
     def _select_final_result(self, runtime_state: RuntimeState) -> TaskResult | None:
         """Select the run's final output deterministically.
 
-        Priority:
-        1) A COMPLETED task with `is_final=True`.
-        2) A COMPLETED task with non-empty `result.detailed_output`.
-        3) A COMPLETED `producer_agent` task.
-        4) Otherwise the newest COMPLETED task with any result.
+        Used by ``run()`` to choose the ``TaskResult`` that becomes the
+        ``PydanTaskRunResult.final_result``. Applies a fixed priority chain so
+        that checkpoint resume always returns a stable deliverable even if the
+        supervisor declares completion before a producer finishes.
 
-        This ensures checkpoint resume returns a stable final deliverable even
-        if the supervisor immediately declares completion.
+        Priority (highest first):
+
+        1. A COMPLETED task with ``is_final=True`` set by the supervisor.
+        2. A COMPLETED task with non-empty ``result.detailed_output``.
+        3. A COMPLETED ``producer_agent`` task.
+        4. The newest COMPLETED task (highest ``task_id``) with any result.
+
+        Args:
+            runtime_state: The current ``RuntimeState`` containing the plan.
+
+        Returns:
+            The selected ``TaskResult``, or ``None`` if no COMPLETED tasks
+            with results exist.
         """
         completed: list[TaskItem] = [
             t
@@ -2005,7 +2033,7 @@ Instructions:
 
     @traced()
     async def run(self) -> PydanTaskRunResult:
-        """Run the full DeepAgent control loop until completion or max steps.
+        """Run the full PydanTask control loop until completion or max steps.
 
         If a ``seed_plan`` was supplied at construction time, it is loaded into the
         runtime state before the supervisor loop begins.
@@ -2013,12 +2041,12 @@ Instructions:
         This method repeatedly:
 
         * Invokes the supervisor to decide which tasks to execute next.
-        * Executes ready tasks in parallel via their associated sub-agents.
+        * Executes ready tasks in parallel via their associated task nodes.
         * Sends results to the critic for QA and status updates.
         * Optionally checkpoints state between iterations.
 
         Returns:
-            A ``DeepAgentRunResult`` containing the final output, the full plan,
+            A ``PydanTaskRunResult`` containing the final output, the full plan,
             and the final ``RuntimeState``.
         """
         runtime_state = self._initialize_runtime_state(
@@ -2043,7 +2071,7 @@ Instructions:
                 logger.info("======= Planning Phase =======\n")
 
             # Best-effort global token budget enforcement.
-            # Use getattr() so unit tests can construct DeepAgent without __init__.
+            # Use getattr() so unit tests can construct PydanTask without __init__.
             token_budget = getattr(self, "token_budget", None)
             if token_budget is not None and runtime_state.tokens_used >= token_budget:
                 msg = (
@@ -2059,7 +2087,7 @@ Instructions:
             self._last_scheduler_report = await self._scheduler_pass(runtime_state)
 
             current_instruction = (
-                BOOTSTRAP_INSTURCT
+                BOOTSTRAP_INSTRUCT
                 if len(runtime_state.plan) == 0
                 else ORCHESTRATION_INSTRUCT
             )
@@ -2278,8 +2306,20 @@ Instructions:
         return True
 
     async def _cascade_cancellations(self, ctx: RuntimeState):
-        """Transitively marks downstream tasks as CANCELLED if they rely
-        on an upstream task that has been cancelled.
+        """Transitively cancel downstream tasks whose upstream dependencies are CANCELLED.
+
+        Iterates over all PENDING and READY tasks, checks whether any of their
+        ``sub_task_dependencies`` reference a task with ``status == CANCELLED``,
+        and transitions them to CANCELLED with an explanatory error message.
+        Repeats until no further changes occur (handles chains of depth > 1).
+
+        Side effects:
+            - Mutates ``task.status`` to ``CANCELLED`` for affected tasks.
+            - Sets ``task.error_msg`` with the upstream failure reason.
+            - Emits a ``task_status_updated`` checkpoint event for each change.
+
+        Args:
+            ctx: The current ``RuntimeState`` containing the task plan.
         """
         async with self._plan_lock:
             changed = True
@@ -2401,14 +2441,19 @@ Instructions:
                     error_msg=step.error_msg,
                 )
 
-        # 4. Execute tasks and return exceptions to notify the supervisor
+        # 4. Execute tasks in chunks to respect the concurrency limit
         logger.info("--- Executing Ready Tasks ---")
-        task_results = []
-        async with TaskGroup() as tg:
-            for task in ready_tasks:
-                task_results.append(tg.create_task(task))
+        task_results: list[TaskItem] = []
+        chunk_size = self.max_concurrent_tasks
+        for i in range(0, len(ready_tasks), chunk_size):
+            chunk = ready_tasks[i : i + chunk_size]
+            chunk_results: list[asyncio.Task[TaskItem]] = []
+            async with TaskGroup() as tg:
+                for task in chunk:
+                    chunk_results.append(tg.create_task(task))
+            results = [t.result() for t in chunk_results]
+            task_results.extend(results)
 
-        results = [t.result() for t in task_results]
         logger.info("--- All Ready Tasks Completed ---")
         return results
 
@@ -2611,6 +2656,11 @@ Context-budget note:
             task_id: Identifier of the task to update.
             status: New :class:`TaskStatus` value for the task.
         """
+
+        # TODO: This is a bit of a hack. Should probably just have tools scoped to READY and COMPLETED
+        if status not in [TaskStatus.READY, TaskStatus.COMPLETED]:
+            raise ValueError(f"Not allouwed action: Only allowed to set a task to READY state or COMPLETED sate. Was give {status}")
+
         async with self._plan_lock:
             if task_id in ctx.deps.plan:
                 task = ctx.deps.plan.get(task_id)
@@ -2621,7 +2671,26 @@ Context-budget note:
             return f"Error: No task with {task_id} found in plan. Be sure task_id actually exists."
 
     async def handle_critic_result(self, task: TaskItem, review: TaskQAResult):
-        """Apply the critic's QA result to a task and emit checkpoint events."""
+        """Apply the critic's QA result to a task and emit checkpoint events.
+
+        Handles three outcomes:
+
+        - ``review.passed``: Marks the task ``COMPLETED``, clears error.
+        - Max attempts exceeded: Marks the task ``FAILED`` with an error message.
+        - Failed but retries remaining: Marks ``RERUN``, appends the critic's
+          reasoning as feedback to the task's ``sub_task_objective`` so the
+          next attempt can self-correct.
+
+        Side effects:
+            - Increments ``task.attempt_count``.
+            - Sets ``task.task_feedback`` to the full ``TaskQAResult``.
+            - Writes ``critic_feedback`` and (on rerun) ``task_patched`` events.
+            - Updates ``task.status`` and emits a ``task_status_updated`` event.
+
+        Args:
+            task: The task item whose QA result is being applied.
+            review: The critic's evaluation output.
+        """
         task.attempt_count += 1
         task.task_feedback = review
 
