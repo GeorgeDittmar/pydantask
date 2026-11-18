@@ -290,6 +290,12 @@ class PydanTask:
             deps_type=RuntimeState,
             tools=self._default_supervisor_tools(),
             end_strategy="exhaustive",
+            model_settings={
+                "extra_params": {
+                    "cache_prompt": True,
+                    "slot_id": -1  # Strongly recommended to auto-match any available server slot
+                }
+            },
         )
 
         _default_capabiliites = []
@@ -340,6 +346,12 @@ class PydanTask:
                 get_artifact,
             ],
             # end_strategy="exhaustive",
+            model_settings={
+                "extra_params": {
+                    "cache_prompt": True,
+                    "slot_id": -1  # Strongly recommended to auto-match any available server slot
+                }
+            }
         )
         # Scheduler/system notes injected into the next supervisor prompt.
         self._last_scheduler_report: str = ""
@@ -768,6 +780,12 @@ class PydanTask:
                 read_scratch_notes,
                 get_current_datetime,
             ],
+            model_settings={
+                "extra_params": {
+                    "cache_prompt": True,
+                    "slot_id": -1  # Strongly recommended to auto-match any available server slot
+                }
+            }
         )
 
         producer_agent = Agent(
