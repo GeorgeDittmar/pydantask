@@ -132,7 +132,7 @@ TASKRESULT SCHEMA:
 - task_id (int): Sub-task ID.
 - status (TaskStatus): "completed"/"errored"/"failed". "completed" if done; "errored" if missing info/issues; "failed" if uncompleteable.
 - summary (str): Clear, human-readable summary of produced/conclusion.
-- detailed_output (str): Long-form output.
+- detailed_output (str): Long-form output. For small outputs (≤16KB) this is inline; for large outputs it is an artifact pointer (artifact://<id>).
 - notes (list[str]): Short notes for later synthesis.
 - sources (list[SourceRef]): Structured citations/docs (ResearchAgent schema); usually empty.
 - error_msg (str|null): Error details if status="errored"/"failed"; otherwise null.
@@ -193,7 +193,7 @@ Your output MUST conform to the shared `TaskResult` schema:
 - `summary` (str):
     - A clear, human-readable summary of what you produced or concluded for THIS sub-task.
 - `detailed_output` (str):
-    - Optional long-form output for this sub-task. Put substantial work here.
+    - Optional long-form output for this sub-task. For small outputs (≤16KB) this is inline; for large outputs it is an artifact pointer (artifact://<id>).
 - `notes` (list[str]):
     - Optional short notes you want preserved for later synthesis.
 - `sources` (list[SourceRef]):
@@ -301,7 +301,7 @@ EVALUATION CRITERIA:
    - Not too broad (drifting into other tasks).
 4. QUALITY: Is the output structured and usable by downstream agents?
    - Clear summary that captures key findings.
-   - detailed_output is substantive, not a placeholder.
+   - detailed_output is substantive (or an artifact pointer for large outputs), not a placeholder.
 
 PASS: Meets all four criteria above (may miss minor details).
 FAIL: Missing required elements, contains factual errors, or drifts from sub-task scope.
@@ -342,7 +342,7 @@ Evaluate against ALL four dimensions. A task fails if it fails more than one.
    - No unexplained omissions or phrases like "further analysis needed."
    - If the sub-task asked for research, are there sources/citations in the `sources` field?
    - If it asked for synthesis, is there a coherent conclusion or deliverable?
-   - The `summary` field should capture key findings; `detailed_output` should be substantive.
+   - The `summary` field should capture key findings; `detailed_output` should be substantive (or an artifact pointer for large outputs).
 
 2. **CORRECTNESS** — Are factual claims backed by evidence or sources?
    - No invented facts, dates, statistics, or source titles.
@@ -357,7 +357,7 @@ Evaluate against ALL four dimensions. A task fails if it fails more than one.
 
 4. **QUALITY** — Is the output structured and usable by downstream agents?
    - Clear, well-organized summary that captures key findings.
-   - `detailed_output` is detailed enough to inform future decisions (not a placeholder).
+   - `detailed_output` is detailed enough to inform future decisions (not a placeholder; may be an artifact:// pointer for large outputs).
    - If artifacts were produced, are they referenced in `artifacts` or `metadata`?
    - Sources, if any, are properly formatted SourceRef objects with title, url, snippet.
 
@@ -391,7 +391,7 @@ TASKRESULT SCHEMA:
 - task_id (int): Sub-task ID.
 - status (TaskStatus): "completed"/"errored"/"failed". "completed" if success; "errored" if missing info/issues; "failed" if task uncompleteable.
 - summary (str): Clear summary of work.
-- detailed_output (str): Full report/analysis/research.
+- detailed_output (str): Full report/analysis/research (≤16KB inline; ≥16KB becomes artifact://<id> pointer).
 - sources (list[SourceRef]): Citations (URLs/docs/etc.).
 - error_msg (str|null): Error details if status="errored"/"failed"; otherwise null.
 - metadata (dict): Optional metadata (timestamps, relevance scores, flags).
@@ -452,7 +452,7 @@ Your output MUST conform to the `TaskResult` schema below.
     - A clear, summary of your work done.
     - This should be detailed enough that the supervisor can understand what the analysis is about.
 - `detailed_output` (str):
-    - Detailed report / analysis / research that fully completes the task you were working on.
+    - Detailed report / analysis / research that fully completes the task you were working on. For small outputs (≤16KB) this is inline; for large outputs it is an artifact pointer (artifact://<id>).
     - All citations must match citations in the `sources` field. 
 - `sources` (list[SourceRef]):
     - List of all SourceRef URLs, document IDs, or other sources you used.
@@ -600,7 +600,7 @@ COMPRESSED_PRODUCER_SYS_PROMPT = """ROLE: EXPERT PRODUCER AGENT
 - Operating Procedure:
   1. Inspect prior work:
      - Call `list_completed_tasks` to identify completed sub-tasks/conclusions.
-     - For dependencies/relevant tasks, call `get_task_result(task_id=...)` to view `summary`, `detailed output`, `sources`.
+     - For dependencies/relevant tasks, call `get_task_result(task_id=...)` to view `summary`, `detailed_output`, `sources`. (detailed_output may be an artifact:// pointer for large results.)
      - Perform task as instructed if no prior work.
   2. Plan synthesis:
      - Use `think_tool` to plan final output structure:
@@ -663,7 +663,7 @@ You have the following responsibilities:
     - Call `list_completed_tasks` to understand which sub-tasks are done and what they concluded.
     - For any dependency or relevant task, call `get_task_result(task_id=...)` to see:
        - Its `summary`,
-       - Its `detailed output`,
+       - Its `detailed_output` (may be an artifact:// pointer for large results),
        - Its `sources`.
     - If there is no prior work then perform the task as instructed and best as you can with the information you have.
 
@@ -679,7 +679,7 @@ You have the following responsibilities:
    - During synthesis, keep intermediate reasoning in your internal thinking.
    - When you are ready with your final output:
         - Use the `Summary` field to store a detailed summary for the supervisor
-        - Use the `detailed_output` field to store the actual final result, not the summary. 
+        - Use the `detailed_output` field to store the actual final result (≤16KB inline; ≥16KB becomes artifact://<id>), not the summary.
         - Use the `Sources` field to list all citations that support your final answer.
 5. **Status:**
    - If you succeed, set `status` in the TaskResult to "completed".

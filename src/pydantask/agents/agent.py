@@ -1,7 +1,8 @@
 # from asyncio import tasks
+import asyncio
+import hashlib
 import json
 import os
-import asyncio
 import re
 from httpx import AsyncClient, HTTPStatusError
 from tenacity import (
@@ -78,12 +79,18 @@ from pydantask.tools.default_tools import (
     think_tool,
 )
 from pydantask.tools.artifact_tools import (
+    ARTIFACT_DIRNAME,
+    _artifact_root,
+    _ext_for_mime,
     put_artifact,
     get_artifact,
     list_artifacts,
     attach_artifact_to_result,
     store_file_as_artifact,
 )
+
+# Size threshold: outputs below this stay inline, above this go to artifact store
+ARTIFACT_INLINE_THRESHOLD = 16_000
 
 from pydantask.manager.checkpointer import CheckpointEvent, CheckpointRecorder
 from pydantask.observe.tracing import (
@@ -93,12 +100,6 @@ from pydantask.observe.tracing import (
     flush_tracing,
 )
 from pydantic_ai.retries import AsyncTenacityTransport, RetryConfig, wait_retry_after
-
-EVENT_RESULT_DETAIL_TRUNCATION = 4_000
-# When a task result is too large to keep inline in the event log, we persist
-# the full JSON payload under the checkpoint directory and store only a pointer
-# (plus a truncated preview) in events.jsonl.
-TASK_RESULT_ARTIFACT_DIRNAME = "task_results"
 
 # Consult runs are intended to be quick and cheap.
 CONSULT_TOTAL_TOKENS_LIMIT = 1_200
@@ -114,6 +115,27 @@ CheckpointEventType = Literal[
     "critic_feedback",
     "final_task_set",
 ]
+
+
+def _inject_context(base_prompt: str, context: str | None) -> str:
+    """Prepend domain context to a base system prompt if provided.
+
+    Args:
+        base_prompt: The original system prompt (e.g. ``COMPRESSED_SUPER_PROMPT``).
+        context: User-supplied domain context or rules.
+
+    Returns:
+        The combined prompt with a separator, or the original prompt if
+        *context* is ``None`` or empty.
+    """
+    if not context or not context.strip():
+        return base_prompt
+
+    return (
+        f"{base_prompt}\n\n"
+        "## DOMAIN CONTEXT (user-injected)\n"
+        f"{context.strip()}"
+    )
 
 
 class PydanTask:
@@ -140,6 +162,8 @@ class PydanTask:
         checkpoint_dir: Path | str | None = None,
         resume_from_checkpoint: bool = False,
         verbose_logging: bool = False,
+        supervisor_context: str | None = None,
+        critic_context: str | None = None,
     ):
         """Initialize a PydanTask instance.
 
@@ -168,6 +192,14 @@ class PydanTask:
                 checkpoint when starting the orchestrator.
             verbose_logging: If ``True``, log richer debugging information during
                 execution.
+            supervisor_context: Additional domain context or rules injected into the
+                supervisor agent's system prompt. Use to provide background knowledge,
+                evaluation criteria, or constraints that shape how the supervisor plans
+                and evaluates tasks.
+            critic_context: Additional domain context or rules injected into the critic
+                agent's system prompt. Use to specify evaluation criteria, quality
+                thresholds, or domain-specific checks the critic should apply when
+                reviewing task results.
         """
 
         if trace:
@@ -228,6 +260,10 @@ class PydanTask:
             self.checkpoint_path.mkdir(parents=True, exist_ok=True)
             self._checkpoint_recorder = CheckpointRecorder(self.checkpoint_path)
 
+        # Domain context injected into sub-agent system prompts.
+        self.supervisor_context: str | None = supervisor_context
+        self.critic_context: str | None = critic_context
+
         # Supervisor tools (extracted from this class for testability).
         self._supervisor_tools = SupervisorTools(
             context_resolver=lambda ctx: ctx.deps,
@@ -249,7 +285,7 @@ class PydanTask:
         self._supervisor_agent = custom_supervisor or Agent(
             model=self._retry_model,
             name="_dynamic_Supervisor_Agent",
-            system_prompt=COMPRESSED_SUPER_PROMPT,
+            system_prompt=self._build_supervisor_system_prompt(),
             output_type=SupervisorDecision,
             deps_type=RuntimeState,
             tools=self._default_supervisor_tools(),
@@ -292,7 +328,7 @@ class PydanTask:
         self._critic_agent = Agent(
             model=self._retry_model,
             name="_default_Critic_Agent",
-            system_prompt=COMPRESSED_CRITIC_SYS_PROMPT,
+            system_prompt=self._build_critic_system_prompt(),
             output_type=TaskQAResult,
             deps_type=RuntimeState,
             tools=[
@@ -308,6 +344,24 @@ class PydanTask:
         # Scheduler/system notes injected into the next supervisor prompt.
         self._last_scheduler_report: str = ""
 
+    def _build_supervisor_system_prompt(self) -> str:
+        """Build the supervisor system prompt, optionally injecting domain context.
+
+        Returns:
+            The base ``COMPRESSED_SUPER_PROMPT`` with user-supplied context
+            prepended (if any).
+        """
+        return _inject_context(COMPRESSED_SUPER_PROMPT, self.supervisor_context)
+
+    def _build_critic_system_prompt(self) -> str:
+        """Build the critic system prompt, optionally injecting domain context.
+
+        Returns:
+            The base ``COMPRESSED_CRITIC_SYS_PROMPT`` with user-supplied context
+            prepended (if any).
+        """
+        return _inject_context(COMPRESSED_CRITIC_SYS_PROMPT, self.critic_context)
+
     async def _coerce_output_to_task_result(
         self,
         step: TaskItem,
@@ -319,6 +373,10 @@ class PydanTask:
 
         Design goal: capability authors can return "anything" (str/dict/Pydantic model),
         and PydanTask will normalize it for downstream evaluation/synthesis.
+
+        Size-based decision: outputs <16KB stay inline in ``detailed_output``;
+        outputs >=16KB are persisted to the artifact store and
+        ``detailed_output`` becomes an ``artifact://`` pointer.
 
         Enterprise/ops goal: if the output references on-disk files, ingest them into
         the run's artifact store so the critic/producer can retrieve contents via
@@ -424,6 +482,28 @@ class PydanTask:
                 out.append(c)
             return out
 
+        def _build_result(
+            task_id: int,
+            summary: str,
+            detail: str,
+            data: dict[str, Any],
+            artifact_refs: list[ArtifactRef],
+            meta: dict[str, Any],
+            file_records: list[dict[str, Any]],
+        ) -> TaskResult:
+            """Helper to construct the final TaskResult, handling size-based branching."""
+            tr = TaskResult(
+                task_id=task_id,
+                status=TaskStatus.COMPLETED,
+                summary=summary,
+                detailed_output=detail,
+                data=data,
+                metadata=meta,
+            )
+            if artifact_refs:
+                tr.artifacts.extend(artifact_refs)
+            return tr
+
         if isinstance(output, TaskResult):
             if output.task_id != step.task_id:
                 output.task_id = step.task_id
@@ -444,6 +524,7 @@ class PydanTask:
                 metadata=meta,
             )
 
+        # --- Path C: Pydantic BaseModel ---
         if isinstance(output, BaseModel):
             try:
                 dumped = output.model_dump(mode="json")
@@ -452,38 +533,68 @@ class PydanTask:
                 dumped = {}
                 text = str(output)
 
-            return TaskResult(
+            artifact_refs: list[ArtifactRef] = []
+            if runtime_state is not None and len(text) >= ARTIFACT_INLINE_THRESHOLD:
+                ref = await self._store_content_as_artifact(
+                    runtime_state,
+                    content=text.encode("utf-8"),
+                    task_id=step.task_id,
+                    name=f"task_{step.task_id}_output",
+                )
+                artifact_refs.append(ref)
+                detail = f"artifact://{ref.artifact_id}"
+                data_payload = {}
+            else:
+                detail = text
+                data_payload = dumped if isinstance(dumped, dict) else {}
+
+            return _build_result(
                 task_id=step.task_id,
-                status=TaskStatus.COMPLETED,
                 summary=f"Capability returned {type(output).__name__}.",
-                detailed_output=text,
-                data=dumped if isinstance(dumped, dict) else {},
-                metadata=meta,
+                detail=detail,
+                data=data_payload,
+                artifact_refs=artifact_refs,
+                meta=meta,
+                file_records=[],
             )
 
+        # --- Path D: dict / list ---
         if isinstance(output, (dict, list)):
             try:
                 text = json.dumps(output, ensure_ascii=False, indent=2)
             except Exception:
                 text = str(output)
 
-            data_payload: dict[str, Any] = {}
-            if isinstance(output, dict):
-                if len(text) <= 16_000:
-                    data_payload = output
-                else:
-                    meta["data_omitted_reason"] = "too_large"
+            artifact_refs: list[ArtifactRef] = []
+            if runtime_state is not None and len(text) >= ARTIFACT_INLINE_THRESHOLD:
+                ref = await self._store_content_as_artifact(
+                    runtime_state,
+                    content=text.encode("utf-8"),
+                    task_id=step.task_id,
+                    name=f"task_{step.task_id}_output",
+                )
+                artifact_refs.append(ref)
+                detail = f"artifact://{ref.artifact_id}"
+                data_payload: dict[str, Any] = {}
+                meta["data_omitted_reason"] = "too_large"
+            elif isinstance(output, dict) and len(text) <= ARTIFACT_INLINE_THRESHOLD:
+                detail = text
+                data_payload = output
+            else:
+                detail = text
+                data_payload = {}
 
-            return TaskResult(
+            return _build_result(
                 task_id=step.task_id,
-                status=TaskStatus.COMPLETED,
                 summary="Capability returned structured data.",
-                detailed_output=text,
+                detail=detail,
                 data=data_payload,
-                metadata=meta,
+                artifact_refs=artifact_refs,
+                meta=meta,
+                file_records=[],
             )
 
-        # Normalize to string and attempt file-ingestion.
+        # --- Normalize to string and attempt file-ingestion ---
         text = str(output)
         files: list[Path] = []
         if isinstance(output, Path):
@@ -500,9 +611,17 @@ class PydanTask:
                     if item.exists() and item.is_file():
                         files.append(item)
                 else:
-                    files.extend(_existing_files_from_text(str(item)))
+                    try:
+                        files.extend(_existing_files_from_text(str(item)))
+                    except OSError:
+                        # Skip file extraction for unreasonably long tokens.
+                        pass
         elif isinstance(output, str):
-            files = _existing_files_from_text(output)
+            try:
+                files = _existing_files_from_text(output)
+            except OSError:
+                # Skip file extraction for unreasonably long strings (e.g. 20KB+).
+                files = []
 
         artifact_refs: list[ArtifactRef] = []
         file_records: list[dict[str, Any]] = []
@@ -552,20 +671,34 @@ class PydanTask:
                         "  preview:\n" + self._truncate_text(r.preview, 1500)
                     )
 
-        tr = TaskResult(
+        combined = "\n".join(detail_parts).strip()
+
+        # --- Size-based branching for string/file outputs ---
+        if runtime_state is not None and len(combined) >= ARTIFACT_INLINE_THRESHOLD:
+            ref = await self._store_content_as_artifact(
+                runtime_state,
+                content=combined.encode("utf-8"),
+                task_id=step.task_id,
+                name=f"task_{step.task_id}_output",
+            )
+            artifact_refs.append(ref)
+            detail = f"artifact://{ref.artifact_id}"
+        else:
+            detail = combined
+
+        return _build_result(
             task_id=step.task_id,
-            status=TaskStatus.COMPLETED,
             summary=(
                 f"Produced {len(artifact_refs)} artifact file(s)."
                 if artifact_refs
                 else (summary or "Capability returned text output.")
             ),
-            detailed_output="\n".join(detail_parts).strip(),
-            metadata=meta,
+            detail=detail,
+            data={},
+            artifact_refs=artifact_refs,
+            meta=meta,
+            file_records=file_records,
         )
-        if artifact_refs:
-            tr.artifacts.extend(artifact_refs)
-        return tr
 
     def _setup_default_capabilities(self) -> List[CapabilityDescription]:
 
@@ -865,6 +998,7 @@ class PydanTask:
             objective=objective, capability_registry=registry, next_task_id=1
         )
         runtime_state.checkpoint_recorder = self._checkpoint_recorder
+        runtime_state.plan_lock = self._plan_lock
         return runtime_state
 
     async def _checkpoint_state(self, runtime: RuntimeState):
@@ -981,13 +1115,8 @@ class PydanTask:
             ):
                 return
 
-            # If the event references a sidecar file, prefer that full payload.
-            full_path = payload.get("full_result_path")
-            if isinstance(full_path, str) and full_path:
-                loaded = self._load_full_task_result_payload(full_path)
-                if loaded is not None:
-                    result_payload = loaded
-
+            # Results are stored as-is: small results are inline, large ones
+            # already have artifact:// pointers in detailed_output.
             runtime_state.plan[task_id].result = TaskResult(**result_payload)
             return
 
@@ -1055,70 +1184,21 @@ class PydanTask:
             payload["error_msg"] = error_msg
         await self._record_event("task_status_updated", payload)
 
-    def _persist_full_task_result_payload(
-        self, task_id: int, result_payload: Dict[str, Any]
-    ) -> str | None:
-        """Persist the full TaskResult payload under the checkpoint directory.
-
-        Returns a *relative* path (from checkpoint root) that can be stored in
-        the event log, or ``None`` if persistence is unavailable.
-        """
-        if self.checkpoint_path is None:
-            return None
-
-        artifacts_dir = self.checkpoint_path / TASK_RESULT_ARTIFACT_DIRNAME
-        artifacts_dir.mkdir(parents=True, exist_ok=True)
-
-        relpath = f"{TASK_RESULT_ARTIFACT_DIRNAME}/task_{task_id}.json"
-        path = self.checkpoint_path / relpath
-        with path.open("w", encoding="utf-8") as fh:
-            json.dump(result_payload, fh, ensure_ascii=False)
-
-        return relpath
-
-    def _load_full_task_result_payload(self, relpath: str) -> Dict[str, Any] | None:
-        """Load a full TaskResult payload previously persisted by this agent."""
-        if self.checkpoint_path is None:
-            return None
-
-        path = self.checkpoint_path / relpath
-        if not path.exists():
-            return None
-
-        try:
-            with path.open("r", encoding="utf-8") as fh:
-                data = json.load(fh)
-            if isinstance(data, dict):
-                return data
-        except Exception:
-            return None
-
-        return None
-
     async def _record_task_result(self, task: TaskItem) -> None:
+        """Checkpoint the task result.
+
+        Large results are already stored as artifacts (with artifact:// pointers
+        in detailed_output), so the checkpoint simply stores the TaskResult JSON
+        as-is. Small results are fully replayable from the JSONL; large results
+        have artifact refs pointing to durable content.
+        """
         if not self._checkpoint_recorder or not task.result:
             return
 
         # Use JSON mode so datetimes (e.g. SourceRef.accessed_at) are serializable.
         result_payload: Dict[str, Any] = task.result.model_dump(mode="json")
 
-        full_result_path: str | None = None
-        detailed_output = result_payload.get("detailed_output") or ""
-        if detailed_output and len(detailed_output) > EVENT_RESULT_DETAIL_TRUNCATION:
-            # Persist the full payload to a sidecar file so replay can restore it.
-            full_result_path = await asyncio.to_thread(
-                self._persist_full_task_result_payload, task.task_id, result_payload
-            )
-
-            truncation_notice = f"\n\n...[TRUNCATED {len(detailed_output) - EVENT_RESULT_DETAIL_TRUNCATION} chars]..."
-            result_payload["detailed_output"] = (
-                detailed_output[:EVENT_RESULT_DETAIL_TRUNCATION] + truncation_notice
-            )
-
         payload: Dict[str, Any] = {"task_id": task.task_id, "result": result_payload}
-        if full_result_path:
-            payload["full_result_path"] = full_result_path
-
         await self._record_event("task_result", payload)
 
     async def _record_metadata_append(self, task_id: int, key: str, value: Any) -> None:
@@ -1280,6 +1360,92 @@ Return a TaskQAResult.
         """Delegate to :class:`TaskExecutor.build_resume_prompt`."""
         return self._executor.build_resume_prompt(step, error)
 
+    async def _store_content_as_artifact(
+        self,
+        runtime: RuntimeState,
+        *,
+        content: bytes,
+        task_id: int,
+        name: str | None = None,
+        mime_type: str = "application/json",
+    ) -> ArtifactRef:
+        """Persist in-memory content into the artifact store.
+
+        Unlike store_file_as_artifact, this accepts bytes directly rather
+        than reading from a file path. Returns an ArtifactRef for the stored content.
+        """
+        from datetime import datetime
+
+        sha256 = hashlib.sha256(content).hexdigest()
+        artifact_id = f"sha256:{sha256}"
+
+        root = _artifact_root(runtime)
+        ext = _ext_for_mime(mime_type)
+        filename = sha256 + ext
+        rel_uri = f"{ARTIFACT_DIRNAME}/{filename}"
+        path = root / filename
+        meta_path = root / (sha256 + ".meta.json")
+
+        safe_label = name or artifact_id[:12]
+
+        def _write() -> None:
+            if not path.exists():
+                tmp = path.with_suffix(path.suffix + ".tmp." + uuid.uuid4().hex)
+                tmp.write_bytes(content)
+                os.replace(tmp, path)
+
+            meta = {
+                "artifact_id": artifact_id,
+                "uri": rel_uri,
+                "name": safe_label,
+                "mime_type": mime_type,
+                "size_bytes": len(content),
+                "sha256": sha256,
+                "created_at": datetime.now().isoformat(),
+                "task_id": task_id,
+            }
+            tmpm = meta_path.with_suffix(meta_path.suffix + ".tmp." + uuid.uuid4().hex)
+            tmpm.write_text(
+                json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            os.replace(tmpm, meta_path)
+
+        await asyncio.to_thread(_write)
+
+        ref_payload: dict[str, Any] = {
+            "artifact_id": artifact_id,
+            "uri": rel_uri,
+            "name": safe_label,
+            "mime_type": mime_type,
+            "size_bytes": len(content),
+            "sha256": sha256,
+        }
+
+        # Attach to task metadata for discoverability.
+        task = runtime.plan.get(task_id) if runtime.plan else None
+        if task is not None:
+            task.metadata.setdefault("artifacts", [])
+            if isinstance(task.metadata.get("artifacts"), list):
+                task.metadata["artifacts"].append({**ref_payload, "task_id": task_id})
+            else:
+                task.metadata["artifacts"] = [{**ref_payload, "task_id": task_id}]
+
+            recorder = getattr(runtime, "checkpoint_recorder", None)
+            if recorder is not None:
+                try:
+                    await recorder.record(
+                        "task_metadata_appended",
+                        {
+                            "task_id": task_id,
+                            "key": "artifacts",
+                            "value": {**ref_payload, "task_id": task_id},
+                        },
+                    )
+                except Exception:
+                    pass
+
+        return ArtifactRef.model_validate(ref_payload)
+
     def _truncate_text(self, text: str, max_chars: int | None) -> str:
         """Delegate to :class:`TaskExecutor.truncate_text`."""
         return self._executor.truncate_text(text, max_chars)
@@ -1353,7 +1519,13 @@ Return a TaskQAResult.
             if t is None or t.result is None:
                 continue
             summary = (t.result.summary or "").strip()
-            detail = (t.result.detailed_output or "").strip()
+            raw_detail = (t.result.detailed_output or "").strip()
+            # For large results, detailed_output is an artifact pointer;
+            # fall back to the summary instead of showing the raw ref string.
+            if raw_detail.startswith("artifact://"):
+                detail = summary
+            else:
+                detail = raw_detail
             if len(detail) > 1_200:
                 detail = detail[:1_200] + "\n...[detail truncated]..."
 
@@ -1434,9 +1606,11 @@ Instructions:
         # Normalize to text.
         answer_text: str
         if isinstance(output, TaskResult):
-            answer_text = (output.detailed_output or "").strip() or (
-                output.summary or ""
-            ).strip()
+            raw_detail = (output.detailed_output or "").strip()
+            if raw_detail.startswith("artifact://"):
+                answer_text = (output.summary or "").strip()
+            else:
+                answer_text = raw_detail or (output.summary or "").strip()
         elif isinstance(output, BaseModel):
             answer_text = output.model_dump_json(indent=2)
         else:

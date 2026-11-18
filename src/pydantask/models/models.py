@@ -228,8 +228,10 @@ class TaskResult(BaseModel):
     detailed_output: str = Field(
         default="",
         description=(
-            "Optional detailed output for the task. Keep reasonably small; "
-            "for large payloads, store content as artifacts and include refs in `artifacts`."
+            "Inline content for the task result. For small outputs (≤16KB), "
+            "this contains the full payload as a JSON string. For large outputs (≥16KB), "
+            "this contains an artifact pointer (artifact://<id>) — the full content "
+            "is stored as an artifact and accessible via get_artifact()."
         ),
     )
 

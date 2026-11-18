@@ -33,7 +33,7 @@ da = PydanTask(
     # Create a haiku about autumn leaves, save it, then translate to French.
     # "Calculate the sum of all prime numbers less than 100. Write the list of those primes to primes.txt. Then add up the squares of each of those primes and write that total sum to prime_squares_total.txt.",
     "I need a report on the new JEV System One model fronm TypeSafe AI that just dropped. I want to know how it works at a high level, how its trained using RLCD (reinforcement learning for calibrated decisions), and any way to emulate using current LLMs. Write teh document and sources to a markdown format.",
-    model="gpt-5.4",
+    model="local",
     trace=True,
     max_steps=10,
     default_capabilities_enabled=True,

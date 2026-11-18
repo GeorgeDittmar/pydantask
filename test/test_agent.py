@@ -23,6 +23,7 @@ from pydantask.models import (
     SupervisorDecision,
     TaskRunDeps,
 )
+from pydantic import BaseModel
 
 
 class DummyAsyncLock:
@@ -779,6 +780,260 @@ async def test_coerce_output_ingests_existing_file_as_artifact(
 
 
 # ---------------------------------------------------------------------------
+# Size-based coercion tests
+# ---------------------------------------------------------------------------
+
+
+def _make_coerce_runtime(tmp_path: Path) -> tuple[RuntimeState, Path]:
+    """Helper: create a RuntimeState with a checkpoint recorder under tmp_path."""
+    cp_dir = tmp_path / "cp"
+    cp_dir.mkdir(parents=True, exist_ok=True)
+
+    class _Recorder:
+        def __init__(self, directory):
+            self.directory = directory
+
+        async def record(self, event_type, payload):
+            return None
+
+    runtime_state = RuntimeState(
+        objective="obj",
+        capability_registry={},
+        next_task_id=1,
+        plan_lock=DummyAsyncLock(),
+    )
+    runtime_state.checkpoint_recorder = _Recorder(cp_dir)
+    runtime_state.plan[1] = TaskItem(
+        task_id=1,
+        overall_objective="obj",
+        sub_task_objective="test",
+        capability="worker",
+        status=TaskStatus.RUNNING,
+    )
+    return runtime_state, cp_dir
+
+
+class _SmallModel(BaseModel):
+    name: str = "small"
+    value: int = 42
+
+
+class _LargeModel(BaseModel):
+    """A model that serializes to >16KB."""
+    name: str = "large"
+    data: str = "x" * 20_000  # ensures JSON output exceeds threshold
+
+
+@pytest.mark.asyncio
+async def test_coerce_small_string_inline(tmp_path, runtime_state: RuntimeState):
+    """Small string output should stay inline."""
+    da = make_minimal_pydantask()
+    runtime_state, _ = _make_coerce_runtime(tmp_path)
+    step = TaskItem(
+        task_id=1,
+        overall_objective="obj",
+        sub_task_objective="test",
+        capability="worker",
+        status=TaskStatus.RUNNING,
+    )
+    runtime_state.plan[1] = step
+
+    tr = await da._coerce_output_to_task_result(step, "hello world", runtime_state=runtime_state)
+
+    assert tr.status == TaskStatus.COMPLETED
+    assert tr.detailed_output == "hello world"
+    assert not tr.artifacts
+
+
+@pytest.mark.asyncio
+async def test_coerce_large_string_becomes_artifact(tmp_path, runtime_state: RuntimeState):
+    """Large string output (≥16KB) should be stored as artifact with pointer in detailed_output."""
+    da = make_minimal_pydantask()
+    runtime_state, cp_dir = _make_coerce_runtime(tmp_path)
+    step = TaskItem(
+        task_id=1,
+        overall_objective="obj",
+        sub_task_objective="test",
+        capability="worker",
+        status=TaskStatus.RUNNING,
+    )
+    runtime_state.plan[1] = step
+
+    large_text = "A" * 20_000  # exceeds ARTIFACT_INLINE_THRESHOLD
+    tr = await da._coerce_output_to_task_result(step, large_text, runtime_state=runtime_state)
+
+    assert tr.status == TaskStatus.COMPLETED
+    assert tr.detailed_output.startswith("artifact://")
+    assert len(tr.artifacts) == 1
+    assert tr.artifacts[0].artifact_id.startswith("sha256:")
+    # The artifact file should exist and contain the full content
+    artifact_file = cp_dir / "artifacts" / tr.artifacts[0].uri.split("/")[-1]
+    assert artifact_file.exists()
+    assert artifact_file.read_text("utf-8") == large_text
+
+
+@pytest.mark.asyncio
+async def test_coerce_small_base_model_inline(tmp_path, runtime_state: RuntimeState):
+    """Small Pydantic model output should stay inline."""
+    da = make_minimal_pydantask()
+    runtime_state, _ = _make_coerce_runtime(tmp_path)
+    step = TaskItem(
+        task_id=1,
+        overall_objective="obj",
+        sub_task_objective="test",
+        capability="worker",
+        status=TaskStatus.RUNNING,
+    )
+    runtime_state.plan[1] = step
+
+    tr = await da._coerce_output_to_task_result(
+        step, _SmallModel(name="test", value=99), runtime_state=runtime_state
+    )
+
+    assert tr.status == TaskStatus.COMPLETED
+    assert '"name": "test"' in tr.detailed_output
+    assert '"value": 99' in tr.detailed_output
+    assert not tr.artifacts
+
+
+@pytest.mark.asyncio
+async def test_coerce_large_base_model_becomes_artifact(tmp_path, runtime_state: RuntimeState):
+    """Large Pydantic model output (≥16KB) should be stored as artifact."""
+    da = make_minimal_pydantask()
+    runtime_state, cp_dir = _make_coerce_runtime(tmp_path)
+    step = TaskItem(
+        task_id=1,
+        overall_objective="obj",
+        sub_task_objective="test",
+        capability="worker",
+        status=TaskStatus.RUNNING,
+    )
+    runtime_state.plan[1] = step
+
+    tr = await da._coerce_output_to_task_result(
+        step, _LargeModel(), runtime_state=runtime_state
+    )
+
+    assert tr.status == TaskStatus.COMPLETED
+    assert tr.detailed_output.startswith("artifact://")
+    assert len(tr.artifacts) == 1
+    # The data field should be empty (omitted due to size)
+    assert tr.data == {}
+
+
+@pytest.mark.asyncio
+async def test_coerce_small_dict_inline(tmp_path, runtime_state: RuntimeState):
+    """Small dict output should stay inline with data populated."""
+    da = make_minimal_pydantask()
+    runtime_state, _ = _make_coerce_runtime(tmp_path)
+    step = TaskItem(
+        task_id=1,
+        overall_objective="obj",
+        sub_task_objective="test",
+        capability="worker",
+        status=TaskStatus.RUNNING,
+    )
+    runtime_state.plan[1] = step
+
+    small_dict = {"key": "value", "count": 1}
+    tr = await da._coerce_output_to_task_result(step, small_dict, runtime_state=runtime_state)
+
+    assert tr.status == TaskStatus.COMPLETED
+    assert '"key": "value"' in tr.detailed_output
+    assert tr.data == small_dict
+
+
+@pytest.mark.asyncio
+async def test_coerce_large_dict_becomes_artifact(tmp_path, runtime_state: RuntimeState):
+    """Large dict output (≥16KB) should be stored as artifact."""
+    da = make_minimal_pydantask()
+    runtime_state, cp_dir = _make_coerce_runtime(tmp_path)
+    step = TaskItem(
+        task_id=1,
+        overall_objective="obj",
+        sub_task_objective="test",
+        capability="worker",
+        status=TaskStatus.RUNNING,
+    )
+    runtime_state.plan[1] = step
+
+    large_dict = {"data": "x" * 20_000}
+    tr = await da._coerce_output_to_task_result(step, large_dict, runtime_state=runtime_state)
+
+    assert tr.status == TaskStatus.COMPLETED
+    assert tr.detailed_output.startswith("artifact://")
+    assert len(tr.artifacts) == 1
+    assert tr.data == {}
+    assert "too_large" in tr.metadata.get("data_omitted_reason", "")
+
+
+@pytest.mark.asyncio
+async def test_coerce_none_returns_errored(runtime_state: RuntimeState):
+    """None output should produce an errored TaskResult."""
+    da = make_minimal_pydantask()
+    step = TaskItem(
+        task_id=1,
+        overall_objective="obj",
+        sub_task_objective="test",
+        capability="worker",
+        status=TaskStatus.RUNNING,
+    )
+
+    tr = await da._coerce_output_to_task_result(step, None, runtime_state=runtime_state)
+
+    assert tr.status == TaskStatus.ERRORED
+    assert tr.error_msg == "Capability returned None"
+    assert tr.detailed_output == ""
+
+
+@pytest.mark.asyncio
+async def test_coerce_task_result_passthrough(runtime_state: RuntimeState):
+    """TaskResult returned as-is should be passed through unchanged."""
+    da = make_minimal_pydantask()
+    original = TaskResult(
+        task_id=99,
+        summary="already formatted",
+        detailed_output="pre-formatted detail",
+    )
+    step = TaskItem(
+        task_id=1,
+        overall_objective="obj",
+        sub_task_objective="test",
+        capability="worker",
+        status=TaskStatus.RUNNING,
+    )
+
+    tr = await da._coerce_output_to_task_result(step, original, runtime_state=runtime_state)
+
+    assert tr is original
+    assert tr.task_id == 1  # task_id is corrected to step.task_id
+    assert tr.summary == "already formatted"
+    assert tr.detailed_output == "pre-formatted detail"
+
+
+@pytest.mark.asyncio
+async def test_coerce_list_becomes_artifact_when_large(tmp_path, runtime_state: RuntimeState):
+    """Large list output (≥16KB) should be stored as artifact."""
+    da = make_minimal_pydantask()
+    runtime_state, _ = _make_coerce_runtime(tmp_path)
+    step = TaskItem(
+        task_id=1,
+        overall_objective="obj",
+        sub_task_objective="test",
+        capability="worker",
+        status=TaskStatus.RUNNING,
+    )
+    runtime_state.plan[1] = step
+
+    large_list = ["item_" + "x" * 500 for _ in range(40)]  # ~22KB JSON
+    tr = await da._coerce_output_to_task_result(step, large_list, runtime_state=runtime_state)
+
+    assert tr.status == TaskStatus.COMPLETED
+    assert tr.detailed_output.startswith("artifact://")
+    assert len(tr.artifacts) == 1
+
+
+# ---------------------------------------------------------------------------
 # Test 1: Context overflow recovery
 # ---------------------------------------------------------------------------
 
@@ -828,7 +1083,10 @@ async def test_cascade_cancellations_propagates_to_downstream():
     tasks depending on it must also be CANCELLED.
     """
     runtime_state = RuntimeState(
-        objective="obj", capability_registry={}, next_task_id=4
+        objective="obj",
+        capability_registry={},
+        next_task_id=4,
+        plan_lock=DummyAsyncLock(),
     )
     da = make_minimal_pydantask()
     da._checkpoint_recorder = DummyRecorder()
